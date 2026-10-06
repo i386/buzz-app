@@ -190,7 +190,8 @@ const items = (menu: HTMLElement) =>
     .map((item) => item.textContent);
 /** Session contract requests to the broker. The rail verifies the roster
  * against the relay authority its session already holds, so it makes none;
- * icon discovery is separate. */
+ * icon discovery is separate, and the native-only access check does not run
+ * against the broker (see `CommunityRail.native.test.tsx`). */
 const sessionRequests = (fetch: ReturnType<typeof vi.fn>) =>
   fetch.mock.calls
     .map(([url]) => String(url))
@@ -978,6 +979,60 @@ it("leaving the selected community lands on Personal space, and the last one lea
     `/api/relay/${encodeURIComponent(primary)}/leave`,
     `/api/relay/${encodeURIComponent(secondary)}/leave`,
   ]);
+});
+
+it("says that the community list is not synced while uploads wait, and why", async () => {
+  const user = userEvent.setup();
+  const h = harness();
+  const op = {
+    operationId: "0f3d6b1e-6d2a-4f5b-9c1e-2a7d8e9f0a1b",
+    url: "wss://primary.example",
+    expectedRevision: 0,
+    removed: false,
+  };
+  h.update({ sync: { known: {}, outbox: [op] } });
+  render(<CommunityRail communities={h.communities} />);
+  // No sync owner has reported: signing in is what would drain the queue.
+  const status = screen.getByRole("status");
+  expect(status).toHaveTextContent(
+    "Community list not synced. Sign in to Builderlab to sync your community list.",
+  );
+  await user.hover(status);
+  expect(await screen.findByRole("tooltip")).toHaveTextContent(
+    "Sign in to Builderlab to sync your community list.",
+  );
+  for (const [syncStatus, reason] of [
+    [{ phase: "syncing", pending: 1 }, "Syncing your community list…"],
+    [
+      { phase: "pending", pending: 1 },
+      "Changes to your community list are waiting to sync.",
+    ],
+    [
+      {
+        phase: "error",
+        pending: 1,
+        error: "Builderlab can’t save more communities for this account.",
+      },
+      "Builderlab can’t save more communities for this account.",
+    ],
+  ] as const) {
+    h.update({ syncStatus });
+    expect(screen.getByRole("status")).toHaveTextContent(reason);
+  }
+  // The acknowledged upload leaves nothing to say.
+  h.update({
+    sync: { known: { [op.url]: { revision: 1, removed: false } }, outbox: [] },
+    syncStatus: { phase: "synced", pending: 0 },
+  });
+  expect(screen.queryByRole("status")).toBeNull();
+  // An account bound to another key cannot take this list even with an empty queue.
+  h.update({ syncStatus: { phase: "needs-binding", pending: 0 } });
+  expect(screen.getByRole("status")).toHaveTextContent(
+    "Link this device’s identity to your Builderlab account in Hosted communities",
+  );
+  expect(
+    screen.getByRole("navigation", { name: "Communities" }),
+  ).toContainElement(screen.getByRole("status"));
 });
 
 it("does not discover saved community icons without a relay host", async () => {

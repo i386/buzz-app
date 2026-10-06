@@ -27,6 +27,19 @@ export type SyncChanges = { add?: string[]; remove?: string[] };
 /** How a conflicting server record contradicts the local membership, once no
  * local intent for that destination remains to resolve it. */
 export type Divergence = "removed-elsewhere" | "added-elsewhere" | null;
+/** What the one sync owner reports while it runs, for the rail's indicator.
+ * `pending` counts queued operations, including ones parked after a refusal. */
+export type SyncStatus = {
+  phase:
+    | "signed-out"
+    | "needs-binding"
+    | "syncing"
+    | "synced"
+    | "pending"
+    | "error";
+  pending: number;
+  error?: string;
+};
 
 export const emptySync = (): SyncState => ({ known: {}, outbox: [] });
 

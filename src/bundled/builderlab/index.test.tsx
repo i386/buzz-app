@@ -12,6 +12,7 @@ import {
   within,
 } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import type { KnownCommunities } from "../../features/communities/service";
 import { HostService, type HostResponse } from "../../features/host/service";
 import { SettingsCardsService } from "../../features/settings/service";
 import {
@@ -31,6 +32,28 @@ import { stubAvatarBrowserApis } from "../../features/agents/avatar-testing";
 const native = vi.hoisted(() => ({ isTauri: () => true, invoke: vi.fn() }));
 vi.mock("@tauri-apps/api/core", () => native);
 stubAvatarBrowserApis();
+/** The device's identity, which the account must be bound to before its
+ * community list follows the sign-in. */
+const viewer = "cd".repeat(32);
+function provideKnownCommunities(root: Context) {
+  const knownCommunities: KnownCommunities = {
+    snapshot: () => ({
+      status: "ready",
+      relayAvailable: true,
+      profile: { name: "", picture: "" },
+      sync: { known: {}, outbox: [] },
+      viewer,
+      selected: null,
+      memberships: [],
+    }),
+    subscribe: () => () => {},
+    pending: () => [],
+    apply: vi.fn(async () => {}),
+    status: vi.fn(),
+  };
+  root.provide("knownCommunities", knownCommunities);
+  return knownCommunities;
+}
 beforeEach(() => {
   vi.stubEnv("VITE_BUZZ_BUILDERLAB_URL", "https://builderlab.example");
   vi.stubGlobal("navigator", {
@@ -88,6 +111,7 @@ it.each([undefined, "", "http://builderlab.example"])(
     const root = new Context();
     const runtime = new PluginRuntime(root, async () => builderlab);
     new HostService(root);
+    provideKnownCommunities(root);
     const cards = new SettingsCardsService(root);
     const community = communityFixture(null);
     const agents = provideAgents(root, community);
@@ -131,7 +155,7 @@ it.each([undefined, "", "http://builderlab.example"])(
   },
 );
 
-it("shares plugin login with Settings and hosted Agents, replays failed setup writes, and clears login on re-enable", async () => {
+it("shares plugin login with Settings, hosted Agents and community sync, replays failed setup writes, and clears login on re-enable", async () => {
   const user = userEvent.setup();
   const hostedKey = "de".repeat(32);
   const browserKey = "09".repeat(32);
@@ -203,6 +227,10 @@ it("shares plugin login with Settings and hosted Agents, replays failed setup wr
       result = { status: 1 };
     } else if (url.endsWith("/delete-agent")) {
       result = { status: 1 };
+    } else if (url.endsWith("/nostr-identities/current")) {
+      result = { identity: { pubkey_hex: viewer } };
+    } else if (url.endsWith("/known-communities/list")) {
+      result = { communities: [] };
     } else {
       throw new Error(`Unexpected Builderlab request ${url}`);
     }
@@ -211,6 +239,7 @@ it("shares plugin login with Settings and hosted Agents, replays failed setup wr
   const root = new Context();
   const runtime = new PluginRuntime(root, async () => builderlab);
   new HostService(root);
+  const knownCommunities = provideKnownCommunities(root);
   const cards = new SettingsCardsService(root);
   const community = communityFixture();
   const agents = provideAgents(root, community);
@@ -281,8 +310,20 @@ it("shares plugin login with Settings and hosted Agents, replays failed setup wr
     expect(native.invoke).toHaveBeenCalledWith("oauth_callback_wait", {
       id: "native-attempt-id",
     });
+    // The signed-in account's community list follows through the same wiring:
+    // the binding is checked, then the complete list is read.
+    await waitFor(() =>
+      expect(knownCommunities.status).toHaveBeenLastCalledWith({
+        phase: "synced",
+        pending: 0,
+      }),
+    );
     const requests = hostRequests();
-    expect(requests).toHaveLength(3);
+    const [account, sync] = [
+      requests.filter((input) => !input.request.url.includes("/v1/buzz/")),
+      requests.filter((input) => input.request.url.includes("/v1/buzz/")),
+    ];
+    expect(account).toHaveLength(3);
     expect(
       requests.every(
         (input) =>
@@ -290,9 +331,20 @@ it("shares plugin login with Settings and hosted Agents, replays failed setup wr
       ),
     ).toBe(true);
     // Prove the account login supplies this consumer's credential through the real plugin wiring.
-    expect(requests.at(-1).request.headers["X-BB-Session-Credential"]).toBe(
+    expect(account.at(-1).request.headers["X-BB-Session-Credential"]).toBe(
       "private-token",
     );
+    expect(sync.map((input) => input.request.url)).toEqual([
+      "https://builderlab.example/api/goose/v1/buzz/nostr-identities/current",
+      "https://builderlab.example/api/goose/v1/buzz/known-communities/list",
+    ]);
+    expect(
+      sync.every(
+        (input) =>
+          input.request.headers["X-BB-Session-Credential"] === "private-token",
+      ),
+    ).toBe(true);
+    expect(sync[1].request.body).toBe(JSON.stringify({ pubkey_hex: viewer }));
     // Both writes happen after Beekeeper has returned the identity. Neither
     // failure may turn a retry into a second backend creation.
     for (const failedKey of [
@@ -380,6 +432,8 @@ it("shares plugin login with Settings and hosted Agents, replays failed setup wr
     expect(
       screen.getByRole("button", { name: "Sign in with Builderlab" }),
     ).toBeEnabled();
+    // The disabled plugin's sync owner withdraws its report with it.
+    expect(knownCommunities.status).toHaveBeenLastCalledWith(undefined);
     mounted.unmount();
     runtime.reconcile([plugin]);
     await waitFor(() => expect(cards.snapshot()).toHaveLength(1));

@@ -45,6 +45,12 @@ agents are not migrated into this type.
   name. Retry the same name after an uncertain failure within the server's
   seven-day replay window. Instructions are limited to 20,000 characters,
   affect newly accepted tasks and are never published to the relay.
+- `known-communities/` keeps the account's community list in step with this
+  device through the `knownCommunities` capability while signed in: it checks
+  that the account is bound to this device's key (never binding it), merges the
+  service's complete list, uploads queued joins and leaves one at a time with
+  retries under the same operation ID, and reports its state for the rail's
+  not-synced indicator. See [communities](../../../docs/communities.md#known-communities).
 
 The plugin uses the `BUZZ_BUILDERLAB_URL` [build input](../../../docs/configuration.md#builderlab-url-build-input)
 as its server address and appends `/api/goose`.

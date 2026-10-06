@@ -48,10 +48,28 @@ export type SelectedSession = {
 
 const noSubscription = () => () => {};
 
+/** What one signed read of the community's relay found. Neither trouble
+ * removes the community: a refusal can be lifted and a relay can come back. */
+export type CommunityAccess = "ok" | "denied" | "unavailable";
+const TROUBLE: Record<
+  Exclude<CommunityAccess, "ok">,
+  { short: string; note: string }
+> = {
+  denied: {
+    short: "Access refused",
+    note: "This community’s relay refused your identity.",
+  },
+  unavailable: {
+    short: "Unreachable",
+    note: "Can’t reach this community right now.",
+  },
+};
+
 /** One rail button and its context menu. Selection stays with the rail. */
 export function CommunityRailItem({
   membership,
   icon,
+  access,
   selected,
   viewer,
   session,
@@ -65,6 +83,8 @@ export function CommunityRailItem({
 }: {
   membership: Membership;
   icon: string | undefined;
+  /** Absent until the rail's access check has answered for this community. */
+  access: CommunityAccess | undefined;
   selected: boolean;
   viewer: string | undefined;
   /** The selected community's session once it is ready; never another community's. */
@@ -108,6 +128,7 @@ export function CommunityRailItem({
   };
   const notify = useToastNotification();
   const { name } = membership;
+  const trouble = access && access !== "ok" ? TROUBLE[access] : undefined;
   const origin = communityDestination(membership.id).url;
   const scope = viewer ? { viewer, communityOrigin: origin } : undefined;
   /** Both entry points open here, so the roster refresh runs for each. */
@@ -150,7 +171,10 @@ export function CommunityRailItem({
         onKeyDown={openFromKeyboard}
         onPointerDown={rememberInterrupted}
       >
-        <Tooltip content={name} side="right">
+        <Tooltip
+          content={trouble ? `${name} · ${trouble.short}` : name}
+          side="right"
+        >
           <IconButton
             ref={(node) => {
               button.current = node;
@@ -196,6 +220,7 @@ export function CommunityRailItem({
           return field?.isConnected ? field : true;
         }}
       >
+        {trouble && <MenuNote>{trouble.note}</MenuNote>}
         <MarkAllReadItem
           name={name}
           selected={selected}

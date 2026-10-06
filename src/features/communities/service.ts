@@ -19,6 +19,7 @@ import {
   type PendingOp,
   type SyncChanges,
   type SyncState,
+  type SyncStatus,
 } from "./known-communities";
 
 export const PROFILE_ABOUT_MAX_LENGTH = 500;
@@ -37,6 +38,8 @@ export type ClientSnapshot = Saved & {
   relayAvailable: boolean;
   viewer?: string;
   error?: string;
+  /** The sync owner's report while one runs; absent otherwise. Never saved. */
+  syncStatus?: SyncStatus | undefined;
 };
 /** Read-only membership inventory; does not acquire or select relay sessions. */
 export type CommunityReader = {
@@ -49,6 +52,7 @@ export type CommunityReader = {
 export type KnownCommunities = CommunityReader & {
   pending(): PendingOp[];
   apply(next: SyncState, changes?: SyncChanges): Promise<void>;
+  status(next: SyncStatus | undefined): void;
 };
 declare module "@deepseek-ai/cordis" {
   interface Context {
@@ -416,6 +420,10 @@ export function createCommunities(
       return failures;
     },
     pendingSync: () => state.sync.outbox,
+    /** The sync owner's report for the rail: in the snapshot, never the record. */
+    setSyncStatus(syncStatus: SyncStatus | undefined) {
+      update({ syncStatus }, false);
+    },
     /** Writes the sync owner's settled state and, in the same device record,
      * the memberships a server list implies: destinations saved on another
      * device appear here under their host name without a session, and ones

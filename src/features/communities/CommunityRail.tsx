@@ -2,19 +2,30 @@ import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { AlertDialog } from "../../shared/design-system/ui/AlertDialog";
 import { Button } from "../../shared/design-system/ui/Button";
 import { IconButton } from "../../shared/design-system/ui/IconButton";
-import { GlobeIcon, PlusIcon } from "../../shared/design-system/icons/index";
+import {
+  CircleDashedIcon,
+  GlobeIcon,
+  PlusIcon,
+} from "../../shared/design-system/icons/index";
 import { useToastNotification } from "../../shared/design-system/ui/Toast";
+import { nativeIdentityEnabled } from "../identity/service";
 import type { SettingsCards } from "../settings/service";
 import type { OpenTarget } from "../navigation/targets";
+import { readErrorKind } from "../relay/errors";
 import { communityFromScope } from "../relay/gifs";
 import { useRelayConnection } from "../relay/react";
-import { requestLeave, type LeaveOutcome } from "./api";
+import { inspectProfile, requestLeave, type LeaveOutcome } from "./api";
 import type { Communities, Membership } from "./service";
 import { CommunityDialog } from "./CommunityDialog";
 import type { InviteLink } from "./invite-link";
-import { CommunityRailItem, MEMBERSHIP_SECTION } from "./CommunityRailItem";
+import {
+  CommunityRailItem,
+  MEMBERSHIP_SECTION,
+  type CommunityAccess,
+} from "./CommunityRailItem";
 import { communityDestination } from "./destination";
 import type { PurgeFailure } from "./device-state";
+import type { SyncStatus } from "./known-communities";
 import { Tooltip } from "../../shared/design-system/ui/Tooltip";
 import styles from "./Communities.module.css";
 import { fetchCommunityIcon } from "./community-icon";
@@ -97,15 +108,42 @@ export function CommunityRail({
   const invites = !!onOpenTarget && membershipAvailable;
   const role = useCommunityRole(invites ? session : undefined, client.viewer);
   const [icons, setIcons] = useState<Record<string, string>>({});
+  const [access, setAccess] = useState<Record<string, CommunityAccess>>({});
+  // The access check runs in the native app, whose host reads relays over
+  // HTTP. The development broker holds lazy, scoped relay connections and has
+  // no lighter route, so there the answer stays unknown, as the account sync
+  // the check serves is native-only too.
+  const probing = nativeIdentityEnabled();
+  // Each pass reads every saved community once; coming back online or to the
+  // window starts another, so a relay that was down is checked again.
+  const [pass, setPass] = useState(0);
+  const checked = useRef(new Map<string, number>());
+  useEffect(() => {
+    if (!probing) return;
+    const online = () => setPass((count) => count + 1);
+    const visible = () => {
+      if (document.visibilityState === "visible") setPass((count) => count + 1);
+    };
+    window.addEventListener("online", online);
+    document.addEventListener("visibilitychange", visible);
+    return () => {
+      window.removeEventListener("online", online);
+      document.removeEventListener("visibilitychange", visible);
+    };
+  }, [probing]);
   const membershipIds = client.memberships
     .map((membership) => membership.id)
     .join("\n");
   useEffect(() => {
     if (client.status !== "ready" || !client.relayAvailable) return;
     const controller = new AbortController();
-    // Icon discovery is optional. Reserve browser connections for foreground work
-    // even when saved relays hold their NIP-11 responses indefinitely.
-    const ids = membershipIds.split("\n").filter(Boolean);
+    // Icon discovery and the access check are optional and never open a
+    // session. Reserve browser connections for foreground work even when saved
+    // relays hold their NIP-11 responses indefinitely, and skip communities
+    // this pass has read, so a leave or a synced addition rereads no others.
+    const ids = membershipIds
+      .split("\n")
+      .filter((id) => id && checked.current.get(id) !== pass);
     let next = 0;
     const workers = Array.from(
       { length: Math.min(2, ids.length) },
@@ -120,12 +158,35 @@ export function CommunityRail({
           } catch {
             // Unreachable relay: retain saved icon or initials.
           }
+          if (controller.signal.aborted) return;
+          if (probing) {
+            // One signed read proves this identity can still read the relay.
+            // Its answer is shown on the item, never acted on: a community
+            // restored from the account stays saved whether the relay refuses
+            // the viewer or cannot be reached.
+            let state: CommunityAccess = "ok";
+            try {
+              await inspectProfile(id);
+            } catch (error) {
+              state =
+                readErrorKind(error) === "denied" ? "denied" : "unavailable";
+            }
+            if (controller.signal.aborted) return;
+            setAccess((previous) => ({ ...previous, [id]: state }));
+          }
+          checked.current.set(id, pass);
         }
       },
     );
     void Promise.all(workers);
     return () => controller.abort();
-  }, [client.status, client.relayAvailable, membershipIds]);
+  }, [client.status, client.relayAvailable, membershipIds, pass, probing]);
+  // Queued uploads count whether or not a sync owner is running; the owner's
+  // report only names why they wait.
+  const unsynced =
+    client.sync.outbox.length > 0 ||
+    client.syncStatus?.phase === "needs-binding";
+  const reason = unsynced ? syncReason(client.syncStatus) : "";
   const select = (id: string | null) => {
     if (onSelect) onSelect(id);
     else communities.select(id);
@@ -208,6 +269,7 @@ export function CommunityRail({
               key={membership.id}
               membership={membership}
               icon={icons[membership.id] ?? membership.icon}
+              access={access[membership.id]}
               selected={selected}
               viewer={client.viewer}
               session={selected ? session : undefined}
@@ -239,6 +301,18 @@ export function CommunityRail({
             onClick={() => setJoining(true)}
           />
         </Tooltip>
+        {unsynced && (
+          <Tooltip content={reason} side="right">
+            <span role="status" className={styles.syncState}>
+              {/* The quietest status glyph the system already uses; the
+                  final icon is the designer's call. */}
+              <CircleDashedIcon size={14} aria-hidden="true" />
+              <span className="sr-only">
+                Community list not synced. {reason}
+              </span>
+            </span>
+          </Tooltip>
+        )}
       </nav>
       {(joining || invite) && (
         <CommunityDialog
@@ -282,6 +356,26 @@ export function CommunityRail({
       )}
     </>
   );
+}
+
+/** Why the account's community list and this device's differ right now. With
+ * no sync owner reporting, or one that is signed out, signing in is the step. */
+function syncReason(status: SyncStatus | undefined) {
+  switch (status?.phase) {
+    case "needs-binding":
+      return "Link this device’s identity to your Builderlab account in Hosted communities to sync your community list.";
+    case "syncing":
+      return "Syncing your community list…";
+    case "pending":
+      return "Changes to your community list are waiting to sync.";
+    case "error":
+      return (
+        status.error ??
+        "Couldn’t sync your community list. Check your connection and try again."
+      );
+    default:
+      return "Sign in to Builderlab to sync your community list.";
+  }
 }
 
 /** What the relay settled, plus whether any saved data outlived the purge. The

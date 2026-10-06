@@ -9,10 +9,12 @@ import { createOAuthSession } from "./oauth/session";
 import { createAgentClient } from "./agents/client";
 import { RemoteAgents } from "./agents/RemoteAgents";
 import { builderlabType } from "./adapter-type";
+import { createKnownCommunitiesClient } from "./known-communities/client";
+import { startKnownCommunitiesSync } from "./known-communities/sync";
 import type { AgentProviderSnapshot } from "../../features/agents/service";
 import { InlineHeader } from "../../shared/design-system/ui/Header";
 
-export const inject = ["host", "settingsCards", "agents"];
+export const inject = ["host", "settingsCards", "agents", "knownCommunities"];
 export const apply: PluginModule["apply"] = (ctx) => {
   let unavailable = "";
   try {
@@ -29,6 +31,14 @@ export const apply: PluginModule["apply"] = (ctx) => {
     return browserCredential(ctx.host, signal);
   });
   ctx.effect(() => () => session.dispose());
+  // The account's community list follows this sign-in; see docs/communities.md.
+  ctx.effect(() =>
+    startKnownCommunitiesSync({
+      client: createKnownCommunitiesClient(ctx.host, session),
+      session,
+      knownCommunities: ctx.knownCommunities,
+    }),
+  );
   const agents = createAgentClient(ctx.host, session);
   const loginAvailable = browserLoginAvailable() && !unavailable;
   if (!unavailable) {

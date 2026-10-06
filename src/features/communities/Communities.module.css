@@ -39,3 +39,9 @@
 .item {
   display: flex;
 }
+/* The not-synced indicator keeps to the rail's column, quiet until hovered. */
+.syncState {
+  display: flex;
+  flex: 0 0 auto;
+  color: var(--text-subtle);
+}
