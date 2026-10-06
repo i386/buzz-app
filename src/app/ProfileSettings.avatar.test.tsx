@@ -53,6 +53,7 @@ function setup(
     status: "ready",
     relayAvailable: true,
     viewer: "a".repeat(64),
+    sync: { known: {}, outbox: [] },
     selected,
     memberships: [
       { id: a, name: "Alpha" },

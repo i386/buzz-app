@@ -6,8 +6,20 @@ import { createPresenceActivity } from "../presence/activity";
 import { Context } from "@deepseek-ai/cordis";
 import { provideRelay, type RelayData } from "../relay/service";
 import { connectBrokerTransport, type ReadTransport } from "../relay/transport";
-import { communityDestination, isCommunityAlias } from "./destination";
+import {
+  communityDestination,
+  isCommunityAlias,
+  relayAddress,
+} from "./destination";
 import { purgeCommunityDeviceState, type PurgeFailure } from "./device-state";
+import {
+  emptySync,
+  enqueue,
+  parseSync,
+  type PendingOp,
+  type SyncChanges,
+  type SyncState,
+} from "./known-communities";
 
 export const PROFILE_ABOUT_MAX_LENGTH = 500;
 export type PersonalProfile = { name: string; picture: string; about?: string };
@@ -16,6 +28,8 @@ type Saved = {
   profile: PersonalProfile;
   memberships: Membership[];
   selected: string | null;
+  // Written with the memberships so a change and its upload intent cannot split.
+  sync: SyncState;
 };
 export type ClientSnapshot = Saved & {
   status: "loading" | "ready" | "unavailable";
@@ -29,15 +43,24 @@ export type CommunityReader = {
   snapshot(): ClientSnapshot;
   subscribe(listener: () => void): () => void;
 };
+/** Known-community sync for its one upload owner: read the record and the
+ * outbox, write back what the server settled and the membership changes a
+ * server list implies. Never joins, selects or contacts a relay. */
+export type KnownCommunities = CommunityReader & {
+  pending(): PendingOp[];
+  apply(next: SyncState, changes?: SyncChanges): Promise<void>;
+};
 declare module "@deepseek-ai/cordis" {
   interface Context {
     communityReader: CommunityReader;
+    knownCommunities: KnownCommunities;
   }
 }
 const empty = (): Saved => ({
   profile: { name: "", picture: "", about: "" },
   memberships: [],
   selected: null,
+  sync: emptySync(),
 });
 export function createCommunities(
   ctx: Context,
@@ -107,6 +130,7 @@ export function createCommunities(
             profile: next.profile,
             memberships: [...next.memberships, ...unresolvedMemberships],
             selected: next.selected ?? selection,
+            sync: next.sync,
           }),
         );
     } catch (error) {
@@ -145,6 +169,30 @@ export function createCommunities(
       });
     }
     return session;
+  };
+  /** Disposes a forgotten community's retained session. Reported, never
+   * thrown: the membership is already gone, so only a report can reach the
+   * viewer, and it is named for what it is, a session that would not shut
+   * down, not a store that would not clear. */
+  const release = async (id: string): Promise<PurgeFailure[]> => {
+    const scope = sessionScopes.get(id);
+    sessions.delete(id);
+    sessionScopes.delete(id);
+    if (!scope) return [];
+    // Every session scope comes from `newScope()`, so this always finds
+    // it; guarding keeps a miss from splicing another community's scope.
+    const index = scopes.indexOf(scope);
+    if (index !== -1) scopes.splice(index, 1);
+    try {
+      await scope.fiber.dispose();
+      return [];
+    } catch (error) {
+      console.warn(
+        `Couldn't dispose the session for ${communityDestination(id).url} after forgetting it`,
+        error,
+      );
+      return [{ store: "session", error }];
+    }
   };
   // Compatibility reader for bundled plugins; captured commands remain bound to their concrete session.
   const relay: RelayData = {
@@ -238,6 +286,7 @@ export function createCommunities(
                     )
                 : [],
               selected: null,
+              sync: parseSync(raw.sync),
             };
           else if (openRelay && stored === null) {
             // Development opt-in for a viewer with no saved record on this origin.
@@ -318,6 +367,7 @@ export function createCommunities(
           ],
           profile: state.profile.name ? state.profile : profile,
           selected: membership.id,
+          sync: enqueue(state.sync, relayAddress(membership.id), false),
         },
         true,
         !!nativeConnect && !live,
@@ -353,37 +403,53 @@ export function createCommunities(
         {
           memberships: state.memberships.filter((m) => m.id !== id),
           ...(state.selected === id ? { selected: null } : {}),
+          sync: enqueue(state.sync, relayAddress(id), true),
         },
         true,
         !!nativeConnect && !live,
       );
-      const failures: PurgeFailure[] = [];
-      const scope = sessionScopes.get(id);
-      sessions.delete(id);
-      sessionScopes.delete(id);
-      if (scope) {
-        // Every session scope comes from `newScope()`, so this always finds
-        // it; guarding keeps a miss from splicing another community's scope.
-        const index = scopes.indexOf(scope);
-        if (index !== -1) scopes.splice(index, 1);
-        try {
-          await scope.fiber.dispose();
-        } catch (error) {
-          // Reported alongside the purge failures, since only a report can
-          // reach the viewer now, but named for what it is: a session that
-          // would not shut down, not a store that would not clear.
-          console.warn(
-            `Couldn't dispose the session for ${origin} after leaving it`,
-            error,
-          );
-          failures.push({ store: "session", error });
-        }
-      }
+      const failures = await release(id);
       // The session is gone (or at least detached), so nothing below can
       // refill the purged stores.
       if (purge && viewer)
         failures.push(...(await purgeCommunityDeviceState(origin, viewer)));
       return failures;
+    },
+    pendingSync: () => state.sync.outbox,
+    /** Writes the sync owner's settled state and, in the same device record,
+     * the memberships a server list implies: destinations saved on another
+     * device appear here under their host name without a session, and ones
+     * removed elsewhere are forgotten like the banned answer to a leave, with
+     * no relay request and the device state kept, falling back to Personal
+     * space when one was selected. Persistence follows `joined`, and that save
+     * is the only step that throws, before anything has changed. */
+    async applySync(
+      next: SyncState,
+      { add = [], remove = [] }: SyncChanges = {},
+    ) {
+      const removing = state.memberships.filter((m) =>
+        remove.includes(relayAddress(m.id)),
+      );
+      const memberships = state.memberships.filter(
+        (m) => !removing.includes(m),
+      );
+      for (const url of add) {
+        const { id, name } = communityDestination(url);
+        if (!memberships.some((m) => m.id === id))
+          memberships.push({ id, name });
+      }
+      update(
+        {
+          memberships,
+          ...(removing.some((m) => m.id === state.selected)
+            ? { selected: null }
+            : {}),
+          sync: next,
+        },
+        true,
+        !!nativeConnect && !live,
+      );
+      for (const { id } of removing) await release(id);
     },
   };
 }

@@ -1,9 +1,31 @@
 import { expect, it } from "vitest";
 import {
   communityDestination,
+  relayAddress,
   relayOrigin,
   parseCommunityAliases,
 } from "./destination";
+
+it.each([
+  ["primary", "wss://primary.example"],
+  [" WSS://PRIMARY.EXAMPLE:443/ ", "wss://primary.example"],
+  ["https://example.com:8443", "wss://example.com:8443"],
+  ["https://[2001:db8::1]:8443/", "wss://[2001:db8::1]:8443"],
+  ["WSS://bücher.example/", "wss://xn--bcher-kva.example"],
+])(
+  "addresses %s for the account service as its canonical wss origin",
+  (input, expected) => {
+    expect(relayAddress(input)).toBe(expected);
+    expect(communityDestination(expected).url).toBe(
+      communityDestination(input).url,
+    );
+  },
+);
+
+it("does not address what is not a destination", () => {
+  expect(() => relayAddress("unconfigured-old")).toThrow(/relay URL/);
+  expect(() => relayAddress("https://relay.example/path")).toThrow(/relay URL/);
+});
 
 it.each([
   [" wss://EXAMPLE.com:443/ ", "https://example.com"],

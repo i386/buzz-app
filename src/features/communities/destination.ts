@@ -71,3 +71,10 @@ export function communityDestination(
   const id = Object.keys(aliases).find((key) => aliases[key] === url) ?? url;
   return { id, url, name: new URL(url).host };
 }
+
+/** The account service's spelling of a destination: `wss://host[:port]` with a
+ * lowercase host, no default port and no trailing slash. Aliases resolve to
+ * their origin first, so a device-local ID never leaves the device. */
+export function relayAddress(value: string) {
+  return `wss://${new URL(communityDestination(value).url).host}`;
+}

@@ -3,7 +3,8 @@
 The app opens into Personal space with no joined community. The shell, local
 profile editor, Home, Settings and plugin management do not wait for a relay.
 `features/communities/service.ts` owns the local identity's default profile,
-saved memberships and optional selection. `features/relay/session.ts` still owns
+saved memberships, optional selection and the [known-community sync
+state](#known-communities). `features/relay/session.ts` still owns
 each community's queries, live subscriptions, projections and durable outbox.
 
 ## Try it
@@ -110,6 +111,39 @@ Messages shows an intentional
 empty state there. Try drafting in A, switching to B, then returning to A.
 Selected channels, drafts and reading offsets are partitioned by the canonical
 community origin and viewer; channel IDs alone are not sufficient keys.
+
+## Known communities
+
+The device record also carries what the account service last reported for each
+saved destination and the uploads still owed to it, in the same single write as
+the memberships, so a join or leave and its upload intent cannot be split by a
+failed or interrupted save. Destinations are addressed the way the service
+spells them, `wss://host[:port]` with a lowercase host, no default port and no
+trailing slash; a configured alias resolves to its origin first and never
+leaves the device. Records from before this field existed, or a field this
+reader cannot understand, read as empty, and a malformed entry is dropped on
+its own.
+
+Each destination has at most one queued operation. Joining queues an add and
+leaving a removal; a newer intent for the same destination replaces the queued
+one under a fresh operation ID and keeps its revision fence, so removing a
+destination that never reached the service still uploads revision 0, and
+adding one again after it was removed elsewhere carries that removal's
+revision. An acknowledged upload stores the service's record and drops the
+operation; an intent queued behind it is dropped when the record already
+satisfies it and otherwise moves onto the record's revision. When the service
+refuses an upload because another device's change won, the service wins: its
+record is adopted, the refused intent is dropped rather than re-sent under a
+newer revision, and the contradiction (removed or added elsewhere) is reported
+for the memberships to follow. A complete list from the service adds
+destinations saved on another device under their host name without opening a
+session, forgets ones removed elsewhere like the banned answer to a leave (no
+relay request, device state kept, Personal space when one was selected), and
+queues an upload for saved memberships the service has never seen, which is how
+a device list from before sync existed reaches the account. Joining and leaving
+never wait for sync. Nothing in the app drains the queue yet; the
+`knownCommunities` capability exposes the record, the queue and these writes to
+the one owner that will.
 
 ## Session lifetime
 
@@ -231,7 +265,17 @@ leaving (membership removal, Personal space fallback, session disposal, purged
 device state, a leave that keeps device state for the banned answer, the last
 community, a purge that leaves named failures, and a native device record that
 will not save, which throws before the snapshot, session, record or device state
-change). `CommunityRail.test.tsx` covers the leave flow end to end against the
+change), that join and leave each write the membership change and its queued
+upload in one record write which a restart restores, applying a server list
+(additions under the host name, forgetting without a purge or relay request,
+one record write) and a native sync write that will not save.
+`known-communities.test.ts` covers the queue rules on their own: replacement
+under a fresh operation ID with the inherited fence, the revision 0 removal
+fence and tombstone re-add revision, acknowledgements merged into a newer
+intent (dropped or rebased), conflicts with and without a record and their
+divergences, every list-merge branch including the pre-sync migration upload
+and deference to queued intents, and the tolerant reader of saved state.
+`CommunityRail.test.tsx` covers the leave flow end to end against the
 broker route: confirm, publish, then remove; cancel; refusals and timeouts that
 keep the membership; the not-a-member answers (purging) and the banned answer
 (keeping device state); a device record that will not save after the relay
@@ -243,8 +287,8 @@ per-store failure report. The broker and native adapter tests sign the exact
 leave shape and pass through only the relay's known refusals.
 `broker.test.ts` runs real localhost HTTP with signed fixture events to verify
 multi-community routing, profile publication, invite claims, and a captured send
-after opening another community. `destination.test.ts` checks normalization and
-rejection; `broker-url.test.ts` exercises the real middleware with isolated signing
+after opening another community. `destination.test.ts` checks normalization,
+rejection and the account service's `wss://` address; `broker-url.test.ts` exercises the real middleware with isolated signing
 keys and upstream fixtures, including registration, cross-origin guards, all route
 sinks and captured sends. Service tests cover arbitrary membership persistence,
 selected-only restore, retry registration and equivalent-URL selection. Existing relay tests cover connection generations,
@@ -253,7 +297,8 @@ late responses, delivery and revocation.
 `native-join.test.tsx` mounts the real dialog, community service and native adapter
 with fixture IPC to cover claim/profile response loss, acknowledged but superseded
 or missing profiles, read and persistence failures, interrupted setup, alias
-recovery and selected-only restart. `join-journal.test.ts` covers alias addition,
+recovery, selected-only restart and the completed join's queued upload in its
+device record. `join-journal.test.ts` covers alias addition,
 removal and unresolved legacy records across restarts. `native-api.test.ts`
 and `relay/native.test.ts` cover routing, verification, live auth, capacity,
 receipt correlation and expired-event readback. `app/services.test.ts` exercises

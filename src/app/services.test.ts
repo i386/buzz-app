@@ -262,6 +262,7 @@ it("seeds and persists the configured relay through the real app composition", a
     profile: { name: "", picture: "", about: "" },
     memberships: [membership],
     selected: membership.id,
+    sync: { known: {}, outbox: [] },
   });
 });
 

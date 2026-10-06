@@ -9,6 +9,8 @@ import { recordReaction } from "../messages/quick-reactions";
 import { readView, writeView } from "../../shared/view-state";
 
 const viewer = "a".repeat(64);
+const uuid =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 const roots: Context[] = [];
 const requests: string[] = [];
 function setup(saved?: unknown, savedViewer = viewer, openRelay = "") {
@@ -363,6 +365,7 @@ it("preserves unresolved saved aliases across profile saves and reloads without 
   expect(persisted).toEqual({
     ...saved,
     profile: { name: "After", picture: "" },
+    sync: { known: {}, outbox: [] },
   });
   const reloaded = setup(persisted);
   await flush();
@@ -478,6 +481,7 @@ it("opens the configured relay for an identity without a saved record and rememb
     profile: { name: "", picture: "", about: "" },
     memberships: [membership],
     selected: membership.id,
+    sync: { known: {}, outbox: [] },
   });
   // A configured alias for the relay origin is honored like any other join.
   const aliased = setup(undefined, "c".repeat(64), "wss://primary.example");
@@ -797,7 +801,167 @@ it("leaving the last community lands on Personal space with an empty saved recor
     profile: { name: "Local", picture: "", about: "" },
     memberships: [],
     selected: null,
+    sync: {
+      known: {},
+      outbox: [
+        {
+          operationId: expect.stringMatching(uuid),
+          url: "wss://primary.example",
+          expectedRevision: 0,
+          removed: true,
+        },
+      ],
+    },
   });
+});
+
+it("join and leave each save the membership change and its upload intent in one record write", async () => {
+  const client = setup();
+  await flush();
+  const writes = vi.spyOn(localStorage, "setItem");
+  const records = () =>
+    writes.mock.calls
+      .filter(([key]) => key === `buzz-client.v1:${viewer}`)
+      .map(([, value]) => JSON.parse(value));
+  client.joined(
+    { id: "wss://THIRD.example:443/", name: "Third" },
+    { name: "Local", picture: "" },
+  );
+  await flush();
+  expect(records()).toHaveLength(1);
+  const joined = records()[0];
+  expect(joined).toMatchObject({
+    memberships: [{ id: "https://third.example", name: "Third" }],
+    selected: "https://third.example",
+    sync: {
+      known: {},
+      outbox: [
+        {
+          operationId: expect.stringMatching(uuid),
+          url: "wss://third.example",
+          expectedRevision: 0,
+          removed: false,
+        },
+      ],
+    },
+  });
+  writes.mockClear();
+  expect(await client.leave("https://third.example")).toEqual([]);
+  expect(records()).toHaveLength(1);
+  const left = records()[0];
+  expect(left).toMatchObject({ memberships: [], selected: null });
+  // The removal replaces the queued add under a new operation and the same fence.
+  expect(left.sync.outbox).toEqual([
+    {
+      operationId: expect.stringMatching(uuid),
+      url: "wss://third.example",
+      expectedRevision: 0,
+      removed: true,
+    },
+  ]);
+  expect(left.sync.outbox[0].operationId).not.toBe(
+    joined.sync.outbox[0].operationId,
+  );
+  // Joining never waits for an upload: the queued intent survives a restart as saved.
+  const restored = setup(left);
+  await flush();
+  expect(restored.snapshot().sync).toEqual(left.sync);
+  expect(restored.pendingSync()).toEqual(left.sync.outbox);
+});
+
+it("applies a server list in one record write: adds under the host name, forgets removed ones without purging, keeps unrelated state", async () => {
+  const client = setup({
+    profile: { name: "Local", picture: "" },
+    memberships: [
+      { id: "primary", name: "Primary" },
+      { id: "https://gone.example", name: "Gone" },
+    ],
+    selected: "https://gone.example",
+  });
+  await flush();
+  await flush();
+  expect(client.relay.snapshot().status).toBe("ready");
+  const scope = `https://gone.example:${viewer}`;
+  writeView(scope, "draft:general", "unsent");
+  const next = {
+    known: {
+      "wss://primary.example": { revision: 1, removed: false },
+      "wss://gone.example": { revision: 2, removed: true },
+      "wss://new.example:8443": { revision: 1, removed: false },
+    },
+    outbox: [],
+  };
+  const writes = vi.spyOn(localStorage, "setItem");
+  await client.applySync(next, {
+    add: ["wss://new.example:8443", "wss://primary.example"],
+    remove: ["wss://gone.example", "wss://unknown.example"],
+  });
+  expect(
+    writes.mock.calls.filter(([key]) => key === `buzz-client.v1:${viewer}`),
+  ).toHaveLength(1);
+  expect(client.snapshot()).toMatchObject({
+    memberships: [
+      { id: "primary", name: "Primary" },
+      { id: "https://new.example:8443", name: "new.example:8443" },
+    ],
+    selected: null,
+    sync: next,
+  });
+  // Forgotten like the banned answer: session disposed, device state kept,
+  // and no relay was asked to release anything.
+  expect(client.relay.snapshot().status).toBe("disconnected");
+  expect(readView(scope, "draft:general", "")).toBe("unsent");
+  expect(requests.some((url) => url.endsWith("/leave"))).toBe(false);
+  // The added community has no session until it is selected.
+  expect(requests.filter((url) => url.endsWith("/session"))).toEqual([
+    "/api/relay/https%3A%2F%2Fgone.example/session",
+  ]);
+  client.select("https://new.example:8443");
+  await flush();
+  expect(requests.filter((url) => url.endsWith("/session"))).toHaveLength(2);
+});
+
+it("a native sync write that will not save throws before anything changes", async () => {
+  const nativeViewer = "c".repeat(64);
+  const storage = new Map([
+    [
+      `buzz-client.v1:${nativeViewer}`,
+      JSON.stringify({
+        profile: { name: "Native", picture: "", about: "" },
+        memberships: [{ id: "https://native.example", name: "Native" }],
+        selected: null,
+      }),
+    ],
+  ]);
+  vi.stubGlobal("localStorage", {
+    getItem: (key: string) => storage.get(key) ?? null,
+    setItem: () => {
+      throw new Error("Full disk");
+    },
+  });
+  const ctx = new Context();
+  roots.push(ctx);
+  const client = createCommunities(
+    ctx,
+    false,
+    undefined,
+    "",
+    undefined,
+    Promise.resolve(nativeViewer),
+    vi.fn(),
+  );
+  await flush();
+  const snapshot = client.snapshot();
+  await expect(
+    client.applySync(
+      {
+        known: { "wss://native.example": { revision: 1, removed: true } },
+        outbox: [],
+      },
+      { remove: ["wss://native.example"] },
+    ),
+  ).rejects.toThrow("Could not save this community on this device");
+  expect(client.snapshot()).toBe(snapshot);
 });
 
 it("hydrates presence intent before acquiring a retained session and keeps it across communities", async () => {
