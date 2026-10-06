@@ -6,11 +6,16 @@ import type { Host, HostResponse } from "../../../features/host/service";
 import { oauthTarget, type Credential } from "../oauth/browser";
 import type { OAuthSession } from "../oauth/session";
 
-/** The service's named refusals. None is retried as sent: a mismatch waits
- * for the account's binding, the rest for a fresh sign-in. */
-export type Refusal = {
-  kind: "identity_mismatch" | "invalid_request" | "forbidden" | "limit_reached";
-};
+/** The service's refusals. None is retried as sent: a mismatch waits for the
+ * account's binding, the rest for a fresh sign-in. A client error the service
+ * did not name is `rejected` with its status: the request as sent will not be
+ * accepted, unlike a timeout, a rate limit or a server error. */
+export type Refusal =
+  | { kind: "identity_mismatch" }
+  | { kind: "invalid_request" }
+  | { kind: "forbidden" }
+  | { kind: "limit_reached" }
+  | { kind: "rejected"; status: number };
 export type IdentityResult = { kind: "identity"; pubkey?: string } | Refusal;
 export type ListResult =
   | { kind: "listed"; communities: ListedCommunity[] }
@@ -27,18 +32,28 @@ const BY_STATUS: Record<number, Refusal["kind"]> = {
   403: "forbidden",
   422: "limit_reached",
 };
-const REFUSALS: ReadonlySet<string> = new Set<Refusal["kind"]>([
+type Named = Exclude<Refusal, { kind: "rejected" }>["kind"];
+const REFUSALS: ReadonlySet<string> = new Set<Named>([
   "identity_mismatch",
   "invalid_request",
   "forbidden",
   "limit_reached",
 ]);
-const isRefusal = (code: unknown): code is Refusal["kind"] =>
+const isRefusal = (code: unknown): code is Named =>
   typeof code === "string" && REFUSALS.has(code);
-const failure = (status: number) =>
-  Object.assign(new Error(`Builderlab request failed (HTTP ${status}).`), {
-    status,
-  });
+/** A status outside the route's contract: another client error is a refusal
+ * of the request as sent, while a timeout, a rate limit or a server error is
+ * a failure to retry. (A 401 ends the session before reaching here.) */
+function unexpected(status: number): Refusal {
+  if (status >= 400 && status < 500 && status !== 408 && status !== 429)
+    return { kind: "rejected", status };
+  throw Object.assign(
+    new Error(`Builderlab request failed (HTTP ${status}).`),
+    {
+      status,
+    },
+  );
+}
 const invalid = () => new Error("Builderlab returned an invalid response.");
 
 /** One destination as the service holds it. The proto's int64 revision is
@@ -130,7 +145,7 @@ export function createKnownCommunitiesClient(
       );
       // This route names its refusals as objects; only the status is shared.
       if (status === 403) return { kind: "forbidden" };
-      if (status !== 200) throw failure(status);
+      if (status !== 200) return unexpected(status);
       const identity = value.identity;
       if (identity === undefined || identity === null)
         return { kind: "identity" };
@@ -161,7 +176,7 @@ export function createKnownCommunitiesClient(
       }
       const refusal = code(status, value);
       if (isRefusal(refusal)) return { kind: refusal };
-      throw failure(status);
+      return unexpected(status);
     },
     /** Sends one queued operation exactly as queued, so a retry replays the
      * same operation ID with the same payload. */
@@ -199,7 +214,7 @@ export function createKnownCommunitiesClient(
           : { kind: "revision_conflict" };
       }
       if (isRefusal(refusal)) return { kind: refusal };
-      throw failure(status);
+      return unexpected(status);
     },
   };
 }

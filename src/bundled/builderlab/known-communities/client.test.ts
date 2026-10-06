@@ -254,14 +254,26 @@ it.each([
   },
 );
 
-it.each([415, 500, 502])(
-  "surfaces an unexpected HTTP %i as a failure that keeps the operation",
+it.each([408, 429, 500, 502])(
+  "surfaces HTTP %i as a failure to retry that keeps the operation",
   async (status) => {
-    const h = await fixture(response("Unsupported", status));
+    const h = await fixture(response("Unavailable", status));
     await expect(h.client.update(pubkey, op, h.signal)).rejects.toMatchObject({
       message: `Builderlab request failed (HTTP ${status}).`,
       status,
     });
+    expect(h.session.snapshot().status).toBe("signed-in");
+  },
+);
+
+it.each([404, 405, 409, 415])(
+  "returns an unnamed HTTP %i as a rejection of the request as sent, on every route",
+  async (status) => {
+    const h = await fixture(response("Refused", status));
+    const rejected = { kind: "rejected", status };
+    expect(await h.client.update(pubkey, op, h.signal)).toEqual(rejected);
+    expect(await h.client.list(pubkey, h.signal)).toEqual(rejected);
+    expect(await h.client.identity(h.signal)).toEqual(rejected);
     expect(h.session.snapshot().status).toBe("signed-in");
   },
 );

@@ -8,9 +8,11 @@ import { relayAddress } from "./destination";
 /** The server's last known record for a destination. Tombstones are kept for
  * their revision and never shown as memberships. */
 export type KnownRecord = { revision: number; removed: boolean };
-/** One intent awaiting upload. At most one per destination: a newer intent
- * replaces it under a fresh operation ID and inherits its expected revision,
- * so a retry never carries a stale fence past a newer edit. */
+/** One intent awaiting upload. A destination has at most two, in outbox order:
+ * a head, which may already have been sent and so is never replaced, and is
+ * the only one the drain dispatches; and one intent queued behind it, which is
+ * not sent until the head settles and is replaced by any newer intent
+ * meanwhile. A queued intent's fence is provisional until then. */
 export type PendingOp = {
   operationId: string;
   url: string;
@@ -47,13 +49,39 @@ const isRevision = (value: unknown): value is number =>
   Number.isInteger(value) && (value as number) >= 0;
 const isAddress = (value: unknown): value is string =>
   typeof value === "string" && value.startsWith("wss://");
+const forUrl = (outbox: PendingOp[], url: string) =>
+  outbox.filter((op) => op.url === url);
 
 /** Reads the saved `sync` field. Records from before this field existed, or
  * ones this reader cannot understand, read as empty; malformed entries are
- * dropped individually. */
+ * dropped individually, and a destination keeps only its first and last
+ * operation (the possibly sent head and the newest intent). */
 export function parseSync(raw: unknown): SyncState {
   if (!raw || typeof raw !== "object") return emptySync();
   const { known, outbox } = raw as Record<string, unknown>;
+  const ops = Array.isArray(outbox)
+    ? outbox.flatMap((op): PendingOp[] =>
+        op &&
+        typeof op === "object" &&
+        "operationId" in op &&
+        typeof op.operationId === "string" &&
+        "url" in op &&
+        isAddress(op.url) &&
+        "expectedRevision" in op &&
+        isRevision(op.expectedRevision) &&
+        "removed" in op &&
+        typeof op.removed === "boolean"
+          ? [
+              {
+                operationId: op.operationId,
+                url: op.url,
+                expectedRevision: op.expectedRevision,
+                removed: op.removed,
+              },
+            ]
+          : [],
+      )
+    : [];
   return {
     known: Object.fromEntries(
       known && typeof known === "object"
@@ -70,64 +98,55 @@ export function parseSync(raw: unknown): SyncState {
           )
         : [],
     ),
-    outbox: Array.isArray(outbox)
-      ? outbox.flatMap((op): PendingOp[] =>
-          op &&
-          typeof op === "object" &&
-          "operationId" in op &&
-          typeof op.operationId === "string" &&
-          "url" in op &&
-          isAddress(op.url) &&
-          "expectedRevision" in op &&
-          isRevision(op.expectedRevision) &&
-          "removed" in op &&
-          typeof op.removed === "boolean"
-            ? [
-                {
-                  operationId: op.operationId,
-                  url: op.url,
-                  expectedRevision: op.expectedRevision,
-                  removed: op.removed,
-                },
-              ]
-            : [],
-        )
-      : [],
+    outbox: ops.filter((op) => {
+      const same = forUrl(ops, op.url);
+      return same[0] === op || same.at(-1) === op;
+    }),
   };
 }
 
-const without = (outbox: PendingOp[], url: string) =>
-  outbox.filter((op) => op.url !== url);
+/** The operation per destination that may be sent: each head. A queued intent
+ * waits behind its head and must never go out while the head is in flight,
+ * parked or awaiting a retry. */
+export const heads = (outbox: PendingOp[]) =>
+  outbox.filter(
+    (op, index) => outbox.findIndex((entry) => entry.url === op.url) === index,
+  );
 
-/** Records a new intent for a destination. A fresh intent fences on the last
- * known revision, so removing a never-synced destination uploads revision 0
- * (fencing a delayed first add) and re-adding after a tombstone carries the
- * tombstone's revision. */
+/** Records a new intent for a destination. Nothing is queued when the latest
+ * word on it already says so: the intent behind the head, the head, or the
+ * known record. A fresh head fences on the last known revision, so removing a
+ * never-synced destination uploads revision 0 (fencing a delayed first add)
+ * and re-adding after a tombstone carries the tombstone's revision. Behind a
+ * head the intent waits, replacing one already waiting, with the revision the
+ * head would produce as its provisional fence. */
 export function enqueue(
   state: SyncState,
   url: string,
   removed: boolean,
 ): SyncState {
-  const pending = state.outbox.find((op) => op.url === url);
+  const [head, queued] = forUrl(state.outbox, url);
+  if ((queued ?? head ?? state.known[url])?.removed === removed) return state;
   return {
     known: state.known,
     outbox: [
-      ...without(state.outbox, url),
+      ...state.outbox.filter((op) => op !== queued),
       {
         operationId: crypto.randomUUID(),
         url,
-        expectedRevision:
-          pending?.expectedRevision ?? state.known[url]?.revision ?? 0,
+        expectedRevision: head
+          ? head.expectedRevision + 1
+          : (state.known[url]?.revision ?? 0),
         removed,
       },
     ],
   };
 }
 
-/** Settles an upload against the record the server now holds. The settled
- * operation leaves the outbox; an intent queued behind it leaves too when the
- * record already satisfies it, and otherwise moves onto the record's revision
- * so it is sent as a fresh edit rather than a stale one. */
+/** Settles the head against the record the server now holds. Everything for
+ * the destination leaves the outbox except the intent queued behind the head,
+ * which stays as the new head when the record does not satisfy it, moved onto
+ * the record's revision so it is sent as a fresh edit rather than a stale one. */
 function settle(
   state: SyncState,
   op: PendingOp,
@@ -138,16 +157,18 @@ function settle(
     : Object.fromEntries(
         Object.entries(state.known).filter(([url]) => url !== op.url),
       );
-  const pending = state.outbox.find((entry) => entry.url === op.url);
-  const satisfied = !!record && pending?.removed === record.removed;
-  if (!pending || pending.operationId === op.operationId || satisfied)
-    return { known, outbox: without(state.outbox, op.url) };
+  const queued = forUrl(state.outbox, op.url)
+    .filter((entry) => entry.operationId !== op.operationId)
+    .at(-1);
+  const satisfied = !!record && queued?.removed === record.removed;
   return {
     known,
-    outbox: state.outbox.map((entry) =>
-      entry === pending
-        ? { ...entry, expectedRevision: record?.revision ?? 0 }
-        : entry,
+    outbox: state.outbox.flatMap((entry) =>
+      entry.url !== op.url
+        ? [entry]
+        : entry === queued && !satisfied
+          ? [{ ...entry, expectedRevision: record?.revision ?? 0 }]
+          : [],
     ),
   };
 }
@@ -164,23 +185,25 @@ export function acknowledge(
 /** The server refused `op` because another operation won. The server's record
  * wins: it is adopted and the refused intent is dropped, never re-sent under
  * a newer revision, since that could resurrect a destination removed
- * elsewhere. No record means the server never held this destination; it is
- * forgotten here too, and the next list merge may enqueue it afresh. */
+ * elsewhere. An intent queued behind it resolves the destination itself, sent
+ * afresh or already satisfied, so no divergence is reported then. No record
+ * means the server never held this destination; it is forgotten here too, and
+ * the next list merge may enqueue it afresh. */
 export function conflict(
   state: SyncState,
   op: PendingOp,
   record?: KnownRecord,
 ): { state: SyncState; divergence: Divergence } {
-  const next = settle(state, op, record);
+  const queued = forUrl(state.outbox, op.url).some(
+    (entry) => entry.operationId !== op.operationId,
+  );
   const divergence: Divergence =
-    !record ||
-    record.removed === op.removed ||
-    next.outbox.some((entry) => entry.url === op.url)
+    !record || queued || record.removed === op.removed
       ? null
       : record.removed
         ? "removed-elsewhere"
         : "added-elsewhere";
-  return { state: next, divergence };
+  return { state: settle(state, op, record), divergence };
 }
 
 /** Reconciles the complete server list with the device's memberships. The
@@ -188,7 +211,8 @@ export function conflict(
  * lacks is added unless its removal is still queued; a tombstone for a saved
  * membership removes it unless its re-add is still queued; a saved membership
  * the server has never seen is queued for upload, which is how a device list
- * from before sync existed reaches the account. */
+ * from before sync existed reaches the account. The newest intent for a
+ * destination speaks for it. */
 export function mergeList(
   state: SyncState,
   memberships: ReadonlyArray<{ id: string }>,
@@ -198,6 +222,7 @@ export function mergeList(
     list.map(({ url, revision, removed }) => [url, { revision, removed }]),
   );
   const local = new Set(memberships.map((m) => relayAddress(m.id)));
+  // Outbox order puts the queued intent after its head, so the last entry wins.
   const pending = new Map(state.outbox.map((op) => [op.url, op]));
   const add: string[] = [];
   const remove: string[] = [];

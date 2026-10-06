@@ -850,16 +850,18 @@ it("join and leave each save the membership change and its upload intent in one 
   expect(records()).toHaveLength(1);
   const left = records()[0];
   expect(left).toMatchObject({ memberships: [], selected: null });
-  // The removal replaces the queued add under a new operation and the same fence.
+  // The add may already be in flight, so the removal waits behind it under
+  // its own operation.
   expect(left.sync.outbox).toEqual([
+    joined.sync.outbox[0],
     {
       operationId: expect.stringMatching(uuid),
       url: "wss://third.example",
-      expectedRevision: 0,
+      expectedRevision: 1,
       removed: true,
     },
   ]);
-  expect(left.sync.outbox[0].operationId).not.toBe(
+  expect(left.sync.outbox[1].operationId).not.toBe(
     joined.sync.outbox[0].operationId,
   );
   // Joining never waits for an upload: the queued intent survives a restart as saved.
@@ -867,6 +869,39 @@ it("join and leave each save the membership change and its upload intent in one 
   await flush();
   expect(restored.snapshot().sync).toEqual(left.sync);
   expect(restored.pendingSync()).toEqual(left.sync.outbox);
+});
+
+it("re-running a join the service already holds queues nothing; a join after a tombstone queues on its revision", async () => {
+  const client = setup({
+    profile: { name: "Local", picture: "" },
+    memberships: [{ id: "primary", name: "Primary" }],
+    selected: null,
+    sync: {
+      known: {
+        "wss://primary.example": { revision: 2, removed: false },
+        "wss://gone.example": { revision: 3, removed: true },
+      },
+      outbox: [],
+    },
+  });
+  await flush();
+  // The dialog reaches joined() for an already_member claim too: no new
+  // revision for other devices' pending operations to trip over.
+  client.joined({ id: "primary", name: "Primary" }, { name: "", picture: "" });
+  expect(client.snapshot().selected).toBe("primary");
+  expect(client.pendingSync()).toEqual([]);
+  client.joined(
+    { id: "https://gone.example", name: "Gone" },
+    { name: "", picture: "" },
+  );
+  expect(client.pendingSync()).toEqual([
+    {
+      operationId: expect.stringMatching(uuid),
+      url: "wss://gone.example",
+      expectedRevision: 3,
+      removed: false,
+    },
+  ]);
 });
 
 it("applies a server list in one record write: adds under the host name, forgets removed ones without purging, keeps unrelated state", async () => {

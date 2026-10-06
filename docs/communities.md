@@ -104,10 +104,11 @@ in the rail and says so, naming the storage error so a store that never saves
 is not the same promise every attempt, and leaving it again finishes through
 the not-a-member answer; a store that will not clear is logged by name and the
 success notice says some saved data remains. A left community that was selected
-lands on Personal space through the host's selection path, exactly as clicking
-Personal space would; a host callback that fails there is logged as the host's
-own error, and the leave still reports success because the device did finish.
-Messages shows an intentional
+falls back to Personal space in the service, and the app lands that dropped
+selection exactly as clicking Personal space would (Channels, unless ingress
+recovery owns the next destination); a community removed from the account on
+another device lands the same way, since both go through the one reaction to
+the snapshot rather than a callback from the rail. Messages shows an intentional
 empty state there. Try drafting in A, switching to B, then returning to A.
 Selected channels, drafts and reading offsets are partitioned by the canonical
 community origin and viewer; channel IDs alone are not sufficient keys.
@@ -122,58 +123,77 @@ spells them, `wss://host[:port]` with a lowercase host, no default port and no
 trailing slash; a configured alias resolves to its origin first and never
 leaves the device. Records from before this field existed, or a field this
 reader cannot understand, read as empty, and a malformed entry is dropped on
-its own.
+its own, as is anything between a destination's first and last operations.
 
-Each destination has at most one queued operation. Joining queues an add and
-leaving a removal; a newer intent for the same destination replaces the queued
-one under a fresh operation ID and keeps its revision fence, so removing a
-destination that never reached the service still uploads revision 0, and
-adding one again after it was removed elsewhere carries that removal's
-revision. An acknowledged upload stores the service's record and drops the
-operation; an intent queued behind it is dropped when the record already
-satisfies it and otherwise moves onto the record's revision. When the service
-refuses an upload because another device's change won, the service wins: its
-record is adopted, the refused intent is dropped rather than re-sent under a
-newer revision, and the contradiction (removed or added elsewhere) is reported
-for the memberships to follow. A complete list from the service adds
+Each destination has at most two queued operations: a head, which may already
+have been sent and is therefore never replaced or re-fenced, and one intent
+waiting behind it, which is not sent until the head settles and is replaced by
+any newer intent meanwhile. Joining queues an add and leaving a removal; an
+intent the latest word on the destination already satisfies (the waiting
+intent, the head, or the service's record) queues nothing, so re-running a
+join the service already holds bumps no revision. A fresh head fences on the
+last known revision, so removing a destination that never reached the service
+still uploads revision 0, and adding one again after it was removed elsewhere
+carries that removal's revision. An acknowledged upload stores the service's
+record and drops the head; the intent waiting behind it is dropped when the
+record already satisfies it and otherwise becomes the head on the record's
+revision, sent as a fresh edit under its own operation ID. This is what makes
+a lost answer safe: the head is replayed as sent, the service answers for what
+it wrote, and the newer intent follows, so joining then leaving (or leaving
+then rejoining) across a lost acknowledgement converges on the latest intent.
+When the service refuses a head because another device's change won, the
+service wins: its record is adopted and the refused intent is dropped rather
+than re-sent under a newer revision. The contradiction (removed or added
+elsewhere) is reported for the memberships to follow only when nothing waits
+behind the head; a waiting intent resolves the destination itself. A complete
+list from the service adds
 destinations saved on another device under their host name without opening a
 session, forgets ones removed elsewhere like the banned answer to a leave (no
 relay request, device state kept, Personal space when one was selected), and
 queues an upload for saved memberships the service has never seen, which is how
-a device list from before sync existed reaches the account. Joining and leaving
-never wait for sync. The `knownCommunities` capability exposes the record, the
-queue and these writes to one owner, the bundled Builderlab plugin, and carries
-that owner's report back for the rail.
+a device list from before sync existed reaches the account; the newest intent
+for a destination speaks for it in that merge. Joining and leaving never wait
+for sync. The `knownCommunities` capability exposes the record, the queue and
+these writes to one owner, the bundled Builderlab plugin, and carries that
+owner's report back for the rail.
 
-The plugin syncs only while signed in to Builderlab, in the native app. Each
-sign-in first reads the key the account is bound to: an account bound to
+The plugin starts a sync owner only where signing in is possible: the native
+app with a configured Builderlab service. The owner syncs only while signed in.
+Each sign-in first reads the key the account is bound to: an account bound to
 another key, or to none, stops everything until the next sign-in, and the app
 never binds the key itself; that is Hosted communities' job. A matching
-binding reads the complete list, merges it as above, then uploads queued
-operations one at a time, so a destination never has two in flight. A newly
-queued operation, the window coming online or becoming visible runs the drain
-again at once. A failed request retries the identical operation, under the
-same operation ID, at 1, 2, 4… seconds, capped at a minute, so the service can
-replay its answer. The service's refusals are never retried as sent: an
-address it refuses or an account that is full parks that one operation until
-the next sign-in while the rest continue, an account that cannot sync stops
-until then, and a session the service has ended signs the plugin out. Signing
-out or disabling the plugin abandons the request in flight and leaves the
-queue intact.
+binding reads the complete list, merges it as above, then uploads heads one at
+a time, so a destination never has two in flight and an intent waiting behind
+a head is never sent in its place, whether the head is in flight, awaiting a
+retry or parked. A newly queued operation, the window coming online or
+becoming visible runs the drain again at once. A failed request, or a device
+record that would not take the answer, retries the identical operation, under
+the same operation ID, at 1, 2, 4… seconds, capped at a minute, so the service
+can replay its answer; a timeout, a rate limit and a server error are such
+failures. The service's refusals are never retried as sent: an address it
+refuses, an account that is full or any other client error (named with its
+HTTP status) parks that one operation until the next sign-in while the rest
+continue, an account that cannot sync stops until then, and a session the
+service has ended signs the plugin out. Signing out or disabling the plugin
+abandons the request in flight and leaves the queue intact.
 
 In the native app, the rail checks each saved community with one signed read
 after it mounts, for communities it has not yet read when the list changes,
-and again when the window comes online or becomes visible. The development
-broker holds lazy, scoped relay connections and has no lighter route, so the
-check does not run there. The answer is shown, never acted on:
+and again for every one when the window comes online. Coming back to the
+window re-checks only communities whose last answer was a refusal or an
+unreachable relay, so switching apps is not a round trip per community. The
+development broker holds lazy, scoped relay connections and has no lighter
+route, so the check does not run there. The answer is shown, never acted on:
 a relay that refuses this identity or cannot be reached keeps its place, its
 hint says so (**Access refused** or **Unreachable**) and its menu explains, so
 a community restored from the account whose relay has since removed the viewer
 is not silently dropped. Beside **Add a community**, a quiet indicator reads
 **Community list not synced** while an upload is queued or the account needs
-binding; its hint names the reason: signing in, the binding, a refusal, or the
-retry under way. The indicator and the hints promise nothing about how long a
-refusal lasts.
+binding, but only while a sync owner is reporting; without the Builderlab
+plugin, a configured service or the native app there is no sync to promise, so
+nothing is shown. Its hint names the reason: signing in, the binding, a
+refusal, or the retry under way. The indicator and the hints promise nothing
+about how long a refusal lasts.
 
 ## Session lifetime
 
@@ -299,38 +319,52 @@ change), that join and leave each write the membership change and its queued
 upload in one record write which a restart restores, applying a server list
 (additions under the host name, forgetting without a purge or relay request,
 one record write) and a native sync write that will not save.
-`known-communities.test.ts` covers the queue rules on their own: replacement
-under a fresh operation ID with the inherited fence, the revision 0 removal
-fence and tombstone re-add revision, acknowledgements merged into a newer
-intent (dropped or rebased), conflicts with and without a record and their
-divergences, every list-merge branch including the pre-sync migration upload
-and deference to queued intents, and the tolerant reader of saved state.
+It also covers that re-running a join the service already holds queues nothing
+while a join after a tombstone queues on its revision.
+`known-communities.test.ts` covers the queue rules on their own: the head kept
+and a newer intent queued behind it, replacement of only the queued intent,
+nothing queued when the latest word already agrees, the revision 0 removal
+fence and tombstone re-add revision, the head settled with its queued intent
+(dropped or rebased), both lost-acknowledgement orders converging on the latest
+intent, conflicts with and without a record and their divergences (none while
+an intent waits), duplicates settled by destination, every list-merge branch
+including the pre-sync migration upload and deference to the newest intent, and
+the tolerant reader of saved state including its head-and-last normalisation.
 `src/bundled/builderlab/known-communities/client.test.ts` covers the account
 service's routes against the native host transport: the exact request shapes,
 int64 strings and omitted repeated fields, every named refusal in JSON and in
-the framework's plain text, conflicts with and without a record, malformed
-records, a 401 that ends the session and an unreachable service. `sync.test.ts`
-covers the owner under a controlled clock: sign-in and a loading record,
-the binding check that stops without binding, the complete list merged once per
-sign-in, one upload in flight at a time in queue order, identical retries at
-each backoff boundary and the reset after a success, the `online` and
-`visibilitychange` triggers, parked and halting refusals, the conflict rule's
-three outcomes, an abandoned upload on sign-out that keeps the queue, a session
-ended by the service and disposal. `index.test.tsx` runs the real plugin wiring
-through to the binding and list requests under the signed-in credential.
+the framework's plain text, unnamed client errors returned as rejections on
+every route while timeouts, rate limits and server errors remain failures,
+conflicts with and without a record, malformed records, a 401 that ends the
+session and an unreachable service. `sync.test.ts` covers the owner under a
+controlled clock: sign-in and a loading record, the binding check that stops
+without binding, the complete list merged once per sign-in and an intent queued
+while it is in flight, one upload in flight at a time in queue order, identical
+retries at each backoff boundary and the reset after a success, a device record
+that will not take an answer backing off and replaying, the `online` and
+`visibilitychange` triggers, parked and halting refusals including rejections
+named by status and the intent that waits behind a parked head, both
+lost-acknowledgement orders against the service's own replay rules, the
+conflict rule's three outcomes, an abandoned upload on sign-out that keeps the
+queue, a session ended by the service and disposal. `index.test.tsx` runs the
+real plugin wiring through to the binding and list requests under the
+signed-in credential, and that an unconfigured build starts no owner.
 `CommunityRail.native.test.tsx` covers the access check (refused and
 unreachable communities keep their items with their hints and notes, one read
-per saved community per pass, the `online` re-check), and
-`CommunityRail.test.tsx` the not-synced indicator with each reason, its
-clearing once the queue drains and its return for an unbound account, and that
-no check reaches the broker. It also covers the leave flow end to end against the
-broker route: confirm, publish, then remove; cancel; refusals and timeouts that
-keep the membership; the not-a-member answers (purging) and the banned answer
-(keeping device state); a device record that will not save after the relay
-answered, naming the storage error; a host selection callback that throws after
-a completed leave; residual saved data; the host selection of Personal space for
-a left selection; focus placement; the in-flight state; and that no inactive
-session is acquired. `device-state.test.ts` covers the per-origin purge and its
+per saved community per pass, the partial `visibilitychange` re-check and the
+full `online` one), and `CommunityRail.test.tsx` the not-synced indicator with
+each reason, its absence without an owner's report, its clearing once the queue
+drains and its return for an unbound account, and that no check reaches the
+broker. It also covers the leave flow end to end against the broker route:
+confirm, publish, then remove; cancel; refusals and timeouts that keep the
+membership; the not-a-member answers (purging) and the banned answer (keeping
+device state); a device record that will not save after the relay answered,
+naming the storage error; residual saved data; that the rail selects nothing
+itself after a left selection; focus placement; the in-flight state; and that
+no inactive session is acquired. `src/app/App.communities.test.tsx` runs the
+real app to show a selection dropped by a leave or by a synced removal landing
+on Channels while another community going leaves the page alone.
+`device-state.test.ts` covers the per-origin purge and its
 per-store failure report. The broker and native adapter tests sign the exact
 leave shape and pass through only the relay's known refusals.
 `broker.test.ts` runs real localhost HTTP with signed fixture events to verify

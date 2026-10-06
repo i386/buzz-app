@@ -1,6 +1,7 @@
 import {
   acknowledge,
   conflict,
+  heads,
   mergeList,
   type KnownRecord,
   type ListedCommunity,
@@ -11,11 +12,18 @@ import type { OAuthSession } from "../oauth/session";
 import type { KnownCommunitiesClient, Refusal } from "./client";
 
 /** Why the service refused, in the viewer's terms. */
-const REASONS: Record<Exclude<Refusal["kind"], "identity_mismatch">, string> = {
+const REASONS: Record<
+  Exclude<Refusal["kind"], "identity_mismatch" | "rejected">,
+  string
+> = {
   invalid_request: "Builderlab refused one of your community addresses.",
   forbidden: "This Builderlab account can’t sync communities.",
   limit_reached: "Builderlab can’t save more communities for this account.",
 };
+const reason = (refusal: Exclude<Refusal, { kind: "identity_mismatch" }>) =>
+  refusal.kind === "rejected"
+    ? `Builderlab refused this request (HTTP ${refusal.status}).`
+    : REASONS[refusal.kind];
 const backoff = (failures: number) => Math.min(60_000, 1000 * 2 ** failures);
 /** The record is kept under the destination's key; its own address stays out. */
 const known = ({ revision, removed }: ListedCommunity): KnownRecord => ({
@@ -30,11 +38,13 @@ const known = ({ revision, removed }: ListedCommunity): KnownRecord => ({
  * operations one at a time, so a destination never has two in flight and a
  * retry re-sends the identical request under the same operation ID. A newly
  * queued operation, the window coming online or becoming visible runs it
- * again at once; a failure retries at 1·2·4… s, capped at a minute. The
- * service's refusals are not retried: a mismatched binding stops everything
- * until the next sign-in, as does an account that cannot sync, while a
- * refused address or a full account parks that one operation. Signing out or
- * disposal abandons in-flight work and leaves the outbox intact. */
+ * again at once; a failure retries at 1·2·4… s, capped at a minute. Only a
+ * destination's head is sent; an intent queued behind it waits for the head
+ * to settle. The service's refusals are not retried: a mismatched binding
+ * stops everything until the next sign-in, as does an account that cannot
+ * sync, while a refused address, a full account or another client error parks
+ * that one operation. Signing out or disposal abandons in-flight work and
+ * leaves the outbox intact. */
 export function startKnownCommunitiesSync({
   client,
   session,
@@ -79,11 +89,11 @@ export function startKnownCommunitiesSync({
         : { phase, pending },
     );
   };
-  const refuse = (kind: Refusal["kind"]) => {
-    if (kind === "identity_mismatch") halted = "needs-binding";
+  const refuse = (refusal: Refusal) => {
+    if (refusal.kind === "identity_mismatch") halted = "needs-binding";
     else {
       halted = "error";
-      error = REASONS[kind];
+      error = reason(refusal);
     }
   };
   async function run() {
@@ -101,12 +111,13 @@ export function startKnownCommunitiesSync({
     try {
       if (!listed) {
         const bound = await client.identity(signal);
-        if (bound.kind !== "identity") return refuse(bound.kind);
+        if (bound.kind !== "identity") return refuse(bound);
         // Binding is Hosted communities' job; here a different or missing
         // key only means the list belongs to another identity.
-        if (bound.pubkey !== viewer) return refuse("identity_mismatch");
+        if (bound.pubkey !== viewer)
+          return refuse({ kind: "identity_mismatch" });
         const list = await client.list(viewer, signal);
-        if (list.kind !== "listed") return refuse(list.kind);
+        if (list.kind !== "listed") return refuse(list);
         signal.throwIfAborted();
         const current = knownCommunities.snapshot();
         const merged = mergeList(
@@ -121,9 +132,9 @@ export function startKnownCommunitiesSync({
         listed = true;
       }
       for (;;) {
-        const op = knownCommunities
-          .pending()
-          .find((entry) => !parked.has(entry.operationId));
+        const op = heads(knownCommunities.pending()).find(
+          (entry) => !parked.has(entry.operationId),
+        );
         if (!op) break;
         const result = await client.update(viewer, op, signal);
         signal.throwIfAborted();
@@ -152,10 +163,10 @@ export function startKnownCommunitiesSync({
           result.kind === "identity_mismatch" ||
           result.kind === "forbidden"
         )
-          return refuse(result.kind);
+          return refuse(result);
         else {
           parked.add(op.operationId);
-          error = REASONS[result.kind];
+          error = reason(result);
         }
       }
       failures = 0;

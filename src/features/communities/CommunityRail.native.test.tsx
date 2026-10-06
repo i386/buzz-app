@@ -259,7 +259,7 @@ it("shows which saved communities refuse this identity or cannot be reached, and
   expect(h.communities.select).not.toHaveBeenCalled();
 });
 
-it("checks access again when the window comes back online, and not otherwise", async () => {
+it("re-checks only refused or unreachable communities on returning to the window, and every one on coming back online", async () => {
   const user = userEvent.setup();
   let refuse = true;
   const inspect = vi
@@ -274,6 +274,7 @@ it("checks access again when the window comes back online, and not otherwise", a
   await waitFor(() =>
     expect(refused.tooltip).toHaveTextContent("Primary · Access refused"),
   );
+  await waitFor(() => expect(inspect).toHaveBeenCalledTimes(2));
   // A membership change reads only what this pass has not read yet.
   h.update({ memberships: [{ id: primary, name: "Primary" }] });
   h.update({
@@ -284,10 +285,28 @@ it("checks access again when the window comes back online, and not otherwise", a
   });
   await act(async () => {});
   expect(inspect).toHaveBeenCalledTimes(2);
+  // Back to the window: the one that read fine is not asked again, so a
+  // return from another app is not a round trip per saved community.
+  let visibility: DocumentVisibilityState = "hidden";
+  vi.spyOn(document, "visibilityState", "get").mockImplementation(
+    () => visibility,
+  );
+  fireEvent(document, new Event("visibilitychange"));
+  await act(async () => {});
+  expect(inspect).toHaveBeenCalledTimes(2);
+  visibility = "visible";
+  fireEvent(document, new Event("visibilitychange"));
+  await waitFor(() => expect(inspect).toHaveBeenCalledTimes(3));
+  expect(inspect.mock.calls.at(-1)?.[0]).toBe(primary);
+  await act(async () => {});
+  expect(inspect).toHaveBeenCalledTimes(3);
+  expect(refused.tooltip).toHaveTextContent("Primary · Access refused");
+  // Online again: every saved community is read, and the answer follows.
   refuse = false;
   fireEvent(window, new Event("online"));
   await waitFor(() => expect(refused.tooltip).toHaveTextContent(/^Primary$/));
   expect(inspect.mock.calls.map(([id]) => id).sort()).toEqual([
+    primary,
     primary,
     primary,
     secondary,

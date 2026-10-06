@@ -111,7 +111,7 @@ it.each([undefined, "", "http://builderlab.example"])(
     const root = new Context();
     const runtime = new PluginRuntime(root, async () => builderlab);
     new HostService(root);
-    provideKnownCommunities(root);
+    const knownCommunities = provideKnownCommunities(root);
     const cards = new SettingsCardsService(root);
     const community = communityFixture(null);
     const agents = provideAgents(root, community);
@@ -138,6 +138,8 @@ it.each([undefined, "", "http://builderlab.example"])(
       expect(screen.queryByRole("button")).not.toBeInTheDocument();
       expect(native.invoke).not.toHaveBeenCalled();
       expect(agents.types()).toHaveLength(0);
+      // No sign-in is possible, so no sync owner runs and the rail is told nothing.
+      expect(knownCommunities.status).not.toHaveBeenCalled();
       cleanup();
       render(<AgentsPage agents={agents} relay={community.relay} />);
       expect(

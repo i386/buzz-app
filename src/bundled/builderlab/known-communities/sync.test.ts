@@ -3,6 +3,7 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import {
   emptySync,
   enqueue,
+  type ListedCommunity,
   type PendingOp,
   type SyncChanges,
   type SyncState,
@@ -13,7 +14,11 @@ import type {
 } from "../../../features/communities/service";
 import { createOAuthSession } from "../oauth/session";
 import { deferred } from "../test-helpers";
-import type { KnownCommunitiesClient, UpdateResult } from "./client";
+import type {
+  KnownCommunitiesClient,
+  ListResult,
+  UpdateResult,
+} from "./client";
 import { startKnownCommunitiesSync } from "./sync";
 
 const viewer = "ab".repeat(32);
@@ -42,6 +47,42 @@ const accepted = (op: PendingOp): UpdateResult => ({
 });
 const queued = (...urls: string[]) =>
   urls.reduce((state, url) => enqueue(state, url, false), emptySync());
+/** The account service's rules for a destination, as its store applies them:
+ * the operation that wrote the row answers again for it, a stale fence
+ * conflicts with the current record, and otherwise the edit is the next
+ * revision. */
+function fakeService() {
+  const rows = new Map<
+    string,
+    { record: ListedCommunity; operationId: string }
+  >();
+  return {
+    rows,
+    list: (): ListResult => ({
+      kind: "listed",
+      communities: [...rows.values()].map((row) => row.record),
+    }),
+    update(op: PendingOp): UpdateResult {
+      const row = rows.get(op.url);
+      if (row?.operationId === op.operationId)
+        return row.record.revision === op.expectedRevision + 1 &&
+          row.record.removed === op.removed
+          ? { kind: "accepted", record: row.record }
+          : { kind: "revision_conflict", record: row.record };
+      if ((row?.record.revision ?? 0) !== op.expectedRevision)
+        return row
+          ? { kind: "revision_conflict", record: row.record }
+          : { kind: "revision_conflict" };
+      const record = {
+        url: op.url,
+        revision: op.expectedRevision + 1,
+        removed: op.removed,
+      };
+      rows.set(op.url, { record, operationId: op.operationId });
+      return { kind: "accepted", record };
+    },
+  };
+}
 
 /** The capability as the service provides it: the record, the queue, and the
  * writes back. `apply` keeps only the sync state; membership changes are the
@@ -260,6 +301,16 @@ it.each([
     },
   },
   {
+    name: "the list route rejects the request as sent",
+    arrange: (h: Awaited<ReturnType<typeof fixture>>) =>
+      h.client.list.mockResolvedValue({ kind: "rejected", status: 404 }),
+    status: {
+      phase: "error",
+      pending: 1,
+      error: "Builderlab refused this request (HTTP 404).",
+    },
+  },
+  {
     name: "an upload reports a mismatched binding",
     arrange: (h: Awaited<ReturnType<typeof fixture>>) =>
       h.client.update.mockResolvedValue({ kind: "identity_mismatch" }),
@@ -394,19 +445,23 @@ it("runs again at once when the window comes online or becomes visible, resettin
 
 it.each([
   {
-    kind: "invalid_request" as const,
+    refusal: { kind: "invalid_request" } as const,
     reason: "Builderlab refused one of your community addresses.",
   },
   {
-    kind: "limit_reached" as const,
+    refusal: { kind: "limit_reached" } as const,
     reason: "Builderlab can’t save more communities for this account.",
   },
+  {
+    refusal: { kind: "rejected", status: 415 } as const,
+    reason: "Builderlab refused this request (HTTP 415).",
+  },
 ])(
-  "parks an operation the service answers $kind until the next sign-in, and keeps sending others",
-  async ({ kind, reason }) => {
+  "parks an operation the service answers $refusal.kind until the next sign-in, with what waits behind it, and keeps sending others",
+  async ({ refusal, reason }) => {
     const h = await fixture({ snapshot: { sync: queued(primary, secondary) } });
     h.client.update.mockImplementation(async (_pubkey, op) =>
-      op.url === primary ? { kind } : accepted(op),
+      op.url === primary ? refusal : accepted(op),
     );
     await until(() =>
       expect(h.status).toHaveBeenLastCalledWith({
@@ -417,10 +472,18 @@ it.each([
     );
     expect(h.client.update).toHaveBeenCalledTimes(2);
     expect(h.outbox().map((op) => op.url)).toEqual([primary]);
-    // Triggers and time pass it over; a fresh intent still goes.
+    // Triggers and time pass it over, and an intent queued behind it waits
+    // with it rather than going out in its place.
     window.dispatchEvent(new Event("online"));
+    h.enqueue(primary, true);
     await vi.advanceTimersByTimeAsync(120_000);
     expect(h.client.update).toHaveBeenCalledTimes(2);
+    expect(h.status).toHaveBeenLastCalledWith({
+      phase: "error",
+      pending: 2,
+      error: reason,
+    });
+    // A fresh intent for another destination still goes.
     h.enqueue(secondary, true);
     await until(() => expect(h.client.update).toHaveBeenCalledTimes(3));
     expect(h.client.update.mock.calls[2]?.[1]).toMatchObject({
@@ -430,7 +493,7 @@ it.each([
     await until(() =>
       expect(h.status).toHaveBeenLastCalledWith({
         phase: "error",
-        pending: 1,
+        pending: 2,
         error: reason,
       }),
     );
@@ -438,11 +501,159 @@ it.each([
     h.client.update.mockImplementation(async (_pubkey, op) => accepted(op));
     await h.session.signIn();
     await until(() => expect(h.status).toHaveBeenLastCalledWith(synced()));
-    expect(h.client.update).toHaveBeenCalledTimes(4);
-    expect(h.client.update.mock.calls[3]?.[1]).toMatchObject({ url: primary });
+    // The parked head goes first as it was; the removal behind it follows on
+    // the revision the head produced.
+    expect(h.client.update).toHaveBeenCalledTimes(5);
+    expect(h.client.update.mock.calls[3]?.[1]).toEqual(
+      h.client.update.mock.calls[0]?.[1],
+    );
+    expect(h.client.update.mock.calls[4]?.[1]).toMatchObject({
+      url: primary,
+      removed: true,
+      expectedRevision: 1,
+    });
+    expect(h.outbox()).toEqual([]);
     h.dispose();
   },
 );
+
+it.each([
+  { name: "join, lost acknowledgement, leave", first: false },
+  { name: "leave, lost acknowledgement, rejoin", first: true },
+])(
+  "converges on the latest intent after $name: the head is replayed as sent, then the queued intent goes as a fresh edit",
+  async ({ first }) => {
+    const service = fakeService();
+    if (first)
+      service.rows.set(primary, {
+        record: { url: primary, revision: 1, removed: false },
+        operationId: "seeded-elsewhere",
+      });
+    const h = await fixture({
+      signedIn: false,
+      snapshot: {
+        memberships: first
+          ? [{ id: "https://primary.example", name: "Primary" }]
+          : [],
+      },
+    });
+    h.client.list.mockImplementation(async () => service.list());
+    let lost = true;
+    h.client.update.mockImplementation(async (_pubkey, op) => {
+      const result = service.update(op);
+      // The service applied it, but its answer never arrived.
+      if (lost) {
+        lost = false;
+        throw reachError();
+      }
+      return result;
+    });
+    await h.session.signIn();
+    await until(() => expect(h.status).toHaveBeenLastCalledWith(synced()));
+    h.enqueue(primary, first);
+    await until(() =>
+      expect(h.status).toHaveBeenLastCalledWith(
+        expect.objectContaining({ phase: "error" }),
+      ),
+    );
+    const [, sent] = h.client.update.mock.calls[0] as [
+      string,
+      PendingOp,
+      AbortSignal,
+    ];
+    const applied = {
+      url: primary,
+      revision: sent.expectedRevision + 1,
+      removed: first,
+    };
+    expect(service.rows.get(primary)?.record).toEqual(applied);
+    // The user changes their mind during the backoff. The head is still the
+    // one sent, so the replay answers for what it wrote, and the newer intent
+    // follows on that revision instead of carrying the head's stale fence.
+    h.enqueue(primary, !first);
+    await until(() => expect(h.status).toHaveBeenLastCalledWith(synced()));
+    const ops = h.client.update.mock.calls.map(([, op]) => op);
+    expect(ops).toHaveLength(3);
+    expect(ops[1]).toEqual(sent);
+    expect(ops[2]).toMatchObject({
+      url: primary,
+      removed: !first,
+      expectedRevision: applied.revision,
+    });
+    expect(ops[2]?.operationId).not.toBe(sent.operationId);
+    const final = { revision: applied.revision + 1, removed: !first };
+    expect(service.rows.get(primary)?.record).toEqual({
+      url: primary,
+      ...final,
+    });
+    expect(h.known()).toEqual({ [primary]: final });
+    expect(h.outbox()).toEqual([]);
+    // No divergence was ever reported against the user's own change of mind.
+    expect(
+      h.apply.mock.calls.flatMap(([, changes]) => [
+        ...(changes?.add ?? []),
+        ...(changes?.remove ?? []),
+      ]),
+    ).toEqual([]);
+    h.dispose();
+  },
+);
+
+it("backs off when the device record will not save, then replays the identical operation", async () => {
+  const h = await fixture();
+  await until(() => expect(h.status).toHaveBeenLastCalledWith(synced()));
+  const failure = new Error(
+    "Could not save this community on this device. Try again.",
+  );
+  h.apply.mockRejectedValueOnce(failure);
+  h.enqueue(primary);
+  await until(() =>
+    expect(h.status).toHaveBeenLastCalledWith({
+      phase: "error",
+      pending: 1,
+      error: failure.message,
+    }),
+  );
+  expect(h.client.update).toHaveBeenCalledTimes(1);
+  const [, sent] = h.client.update.mock.calls[0] as [
+    string,
+    PendingOp,
+    AbortSignal,
+  ];
+  // The service accepted it; only the record did not take the answer. The
+  // operation stays as sent, so the service can replay its answer.
+  expect(h.outbox()).toEqual([sent]);
+  await vi.advanceTimersByTimeAsync(999);
+  expect(h.client.update).toHaveBeenCalledTimes(1);
+  await vi.advanceTimersByTimeAsync(1);
+  expect(h.client.update).toHaveBeenCalledTimes(2);
+  expect(h.client.update.mock.calls[1]?.[1]).toEqual(sent);
+  await until(() => expect(h.status).toHaveBeenLastCalledWith(synced()));
+  expect(h.outbox()).toEqual([]);
+  expect(h.known()).toEqual({ [primary]: { revision: 1, removed: false } });
+  h.dispose();
+});
+
+it("keeps an intent queued while the list is in flight: the merge reads the record again", async () => {
+  const list = deferred<ListResult>();
+  const h = await fixture({ signedIn: false });
+  h.client.list.mockReturnValueOnce(list.promise);
+  await h.session.signIn();
+  await until(() => expect(h.client.list).toHaveBeenCalledTimes(1));
+  h.enqueue(primary);
+  const op = h.outbox()[0];
+  list.resolve({ kind: "listed", communities: [] });
+  await until(() => expect(h.status).toHaveBeenLastCalledWith(synced()));
+  expect(h.apply).toHaveBeenNthCalledWith(
+    1,
+    { known: {}, outbox: [op] },
+    { add: [], remove: [] },
+  );
+  expect(h.client.update).toHaveBeenCalledTimes(1);
+  expect(h.client.update.mock.calls[0]?.[1]).toEqual(op);
+  expect(h.outbox()).toEqual([]);
+  h.dispose();
+});
 
 it.each([
   {

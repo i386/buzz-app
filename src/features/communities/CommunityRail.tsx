@@ -114,15 +114,19 @@ export function CommunityRail({
   // no lighter route, so there the answer stays unknown, as the account sync
   // the check serves is native-only too.
   const probing = nativeIdentityEnabled();
-  // Each pass reads every saved community once; coming back online or to the
-  // window starts another, so a relay that was down is checked again.
-  const [pass, setPass] = useState(0);
+  // Each pass reads a saved community at most once. Coming back online starts
+  // a full pass; coming back to the window re-checks only what last refused
+  // or could not be reached, so alt-tabbing is not a round trip per community.
+  const [pass, setPass] = useState({ count: 0, full: true });
   const checked = useRef(new Map<string, number>());
+  const answers = useRef(new Map<string, CommunityAccess>());
   useEffect(() => {
     if (!probing) return;
-    const online = () => setPass((count) => count + 1);
+    const online = () =>
+      setPass(({ count }) => ({ count: count + 1, full: true }));
     const visible = () => {
-      if (document.visibilityState === "visible") setPass((count) => count + 1);
+      if (document.visibilityState === "visible")
+        setPass(({ count }) => ({ count: count + 1, full: false }));
     };
     window.addEventListener("online", online);
     document.addEventListener("visibilitychange", visible);
@@ -141,9 +145,12 @@ export function CommunityRail({
     // session. Reserve browser connections for foreground work even when saved
     // relays hold their NIP-11 responses indefinitely, and skip communities
     // this pass has read, so a leave or a synced addition rereads no others.
-    const ids = membershipIds
-      .split("\n")
-      .filter((id) => id && checked.current.get(id) !== pass);
+    const ids = membershipIds.split("\n").filter((id) => {
+      if (!id || checked.current.get(id) === pass.count) return false;
+      if (pass.full || answers.current.get(id) !== "ok") return true;
+      checked.current.set(id, pass.count);
+      return false;
+    });
     let next = 0;
     const workers = Array.from(
       { length: Math.min(2, ids.length) },
@@ -172,21 +179,24 @@ export function CommunityRail({
                 readErrorKind(error) === "denied" ? "denied" : "unavailable";
             }
             if (controller.signal.aborted) return;
+            answers.current.set(id, state);
             setAccess((previous) => ({ ...previous, [id]: state }));
           }
-          checked.current.set(id, pass);
+          checked.current.set(id, pass.count);
         }
       },
     );
     void Promise.all(workers);
     return () => controller.abort();
   }, [client.status, client.relayAvailable, membershipIds, pass, probing]);
-  // Queued uploads count whether or not a sync owner is running; the owner's
-  // report only names why they wait.
+  // Only a running sync owner can say why uploads wait. Where none runs (no
+  // Builderlab plugin, no configured service, a browser build) the queue is
+  // not a promise anyone will keep, so nothing is shown.
   const unsynced =
-    client.sync.outbox.length > 0 ||
-    client.syncStatus?.phase === "needs-binding";
-  const reason = unsynced ? syncReason(client.syncStatus) : "";
+    !!client.syncStatus &&
+    (client.sync.outbox.length > 0 ||
+      client.syncStatus.phase === "needs-binding");
+  const reason = client.syncStatus ? syncReason(client.syncStatus) : "";
   const select = (id: string | null) => {
     if (onSelect) onSelect(id);
     else communities.select(id);
@@ -209,7 +219,6 @@ export function CommunityRail({
     }
     // From here a retry cannot reach the relay's membership; only this device
     // can still fail, and its failures read differently from a lost connection.
-    const wasSelected = communities.snapshot().selected === membership.id;
     let residue: PurgeFailure[];
     try {
       // A banned viewer is still a member on the relay (bans can be timed or
@@ -227,21 +236,9 @@ export function CommunityRail({
       return;
     }
     // The community is gone from this device whatever happens next, so only
-    // the service call above may read as a cleanup failure.
-    if (wasSelected) {
-      // The service already fell back to Personal space. Telling the host too
-      // gives the leave the same navigation and ingress recovery as clicking
-      // Personal space, instead of leaving a page scoped to a gone community.
-      try {
-        onSelect?.(null);
-      } catch (error) {
-        // A host that cannot navigate is the host's failure, not the device's.
-        console.error(
-          `Couldn't select Personal space after leaving ${membership.name}`,
-          error,
-        );
-      }
-    }
+    // the service call above may read as a cleanup failure. A left selection
+    // already fell back to Personal space in the service; the host lands it
+    // from the snapshot, as it does a removal synced from another device.
     notify(
       leftText(membership.name, outcome, residue.length > 0),
       outcome === "left" ? "success" : "info",
@@ -359,9 +356,9 @@ export function CommunityRail({
 }
 
 /** Why the account's community list and this device's differ right now. With
- * no sync owner reporting, or one that is signed out, signing in is the step. */
-function syncReason(status: SyncStatus | undefined) {
-  switch (status?.phase) {
+ * the sync owner signed out, signing in is the step. */
+function syncReason(status: SyncStatus) {
+  switch (status.phase) {
     case "needs-binding":
       return "Link this device’s identity to your Builderlab account in Hosted communities to sync your community list.";
     case "syncing":

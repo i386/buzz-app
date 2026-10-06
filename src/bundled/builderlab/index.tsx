@@ -32,13 +32,16 @@ export const apply: PluginModule["apply"] = (ctx) => {
   });
   ctx.effect(() => () => session.dispose());
   // The account's community list follows this sign-in; see docs/communities.md.
-  ctx.effect(() =>
-    startKnownCommunitiesSync({
-      client: createKnownCommunitiesClient(ctx.host, session),
-      session,
-      knownCommunities: ctx.knownCommunities,
-    }),
-  );
+  // Where no sign-in is possible, no owner runs, so the rail has no sync to
+  // report on.
+  if (browserLoginAvailable() && !unavailable)
+    ctx.effect(() =>
+      startKnownCommunitiesSync({
+        client: createKnownCommunitiesClient(ctx.host, session),
+        session,
+        knownCommunities: ctx.knownCommunities,
+      }),
+    );
   const agents = createAgentClient(ctx.host, session);
   const loginAvailable = browserLoginAvailable() && !unavailable;
   if (!unavailable) {
