@@ -53,7 +53,7 @@ it.each([
       selected: null,
       profile: { name: "", picture: "" },
       memberships: [],
-      sync: { known: {}, outbox: [] },
+      sync: { known: [], outbox: [] },
     };
     render(
       <PairingSettings
@@ -96,7 +96,7 @@ it.each([true, false])(
       selected: null,
       profile: { name: "", picture: "" },
       memberships: [],
-      sync: { known: {}, outbox: [] },
+      sync: { known: [], outbox: [] },
     };
     let status: PairingStatus = { phase: "idle" };
     const native = {
@@ -177,7 +177,7 @@ it.each(["uncertain", "cancelled"] as const)(
       selected: "https://community.example",
       profile: { name: "", picture: "" },
       memberships: [],
-      sync: { known: {}, outbox: [] },
+      sync: { known: [], outbox: [] },
     };
     let status: PairingStatus = { phase: "idle" };
     const native = {
@@ -279,7 +279,7 @@ it("copies the pairing code shown in the current QR", async () => {
     selected: "https://community.example",
     profile: { name: "", picture: "" },
     memberships: [],
-    sync: { known: {}, outbox: [] },
+    sync: { known: [], outbox: [] },
   };
   let status: PairingStatus = {
     phase: "qr",
@@ -343,7 +343,7 @@ it("rejects a legacy mismatch and requires explicit retry", async () => {
     selected: "https://community.example",
     profile: { name: "", picture: "" },
     memberships: [],
-    sync: { known: {}, outbox: [] },
+    sync: { known: [], outbox: [] },
   };
   let status: PairingStatus = {
     phase: "code",
@@ -403,7 +403,7 @@ it("keeps rejection progress truthful until native denial finishes", async () =>
     selected: "https://community.example",
     profile: { name: "", picture: "" },
     memberships: [],
-    sync: { known: {}, outbox: [] },
+    sync: { known: [], outbox: [] },
   };
   let status: PairingStatus = {
     phase: "code",
@@ -475,7 +475,7 @@ it.each([
       selected: "https://community.example",
       profile: { name: "", picture: "" },
       memberships: [],
-      sync: { known: {}, outbox: [] },
+      sync: { known: [], outbox: [] },
     };
     const native = {
       account: vi.fn(async () => viewer),

@@ -3,7 +3,6 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import {
   emptySync,
   enqueue,
-  type ListedCommunity,
   type PendingOp,
   type SyncChanges,
   type SyncState,
@@ -25,6 +24,7 @@ const viewer = "ab".repeat(32);
 const primary = "wss://primary.example";
 const secondary = "wss://secondary.example";
 const reachError = () => new Error("Couldn’t reach Builderlab.");
+const accepted: UpdateResult = { kind: "accepted" };
 
 beforeEach(() => {
   vi.useFakeTimers();
@@ -37,49 +37,21 @@ afterEach(() => {
 /** Settles pending promise chains without moving the fake clock. */
 const until = (check: () => void) =>
   vi.waitFor(check, { interval: 0, timeout: 2000 });
-const accepted = (op: PendingOp): UpdateResult => ({
-  kind: "accepted",
-  record: {
-    url: op.url,
-    revision: op.expectedRevision + 1,
-    removed: op.removed,
-  },
-});
 const queued = (...urls: string[]) =>
   urls.reduce((state, url) => enqueue(state, url, false), emptySync());
-/** The account service's rules for a destination, as its store applies them:
- * the operation that wrote the row answers again for it, a stale fence
- * conflicts with the current record, and otherwise the edit is the next
- * revision. */
-function fakeService() {
-  const rows = new Map<
-    string,
-    { record: ListedCommunity; operationId: string }
-  >();
+/** The account service: a set of destinations with idempotent edits. */
+function fakeService(...held: string[]) {
+  const rows = new Set(held);
   return {
     rows,
-    list: (): ListResult => ({
-      kind: "listed",
-      communities: [...rows.values()].map((row) => row.record),
-    }),
-    update(op: PendingOp): UpdateResult {
-      const row = rows.get(op.url);
-      if (row?.operationId === op.operationId)
-        return row.record.revision === op.expectedRevision + 1 &&
-          row.record.removed === op.removed
-          ? { kind: "accepted", record: row.record }
-          : { kind: "revision_conflict", record: row.record };
-      if ((row?.record.revision ?? 0) !== op.expectedRevision)
-        return row
-          ? { kind: "revision_conflict", record: row.record }
-          : { kind: "revision_conflict" };
-      const record = {
-        url: op.url,
-        revision: op.expectedRevision + 1,
-        removed: op.removed,
-      };
-      rows.set(op.url, { record, operationId: op.operationId });
-      return { kind: "accepted", record };
+    list: (): ListResult => ({ kind: "listed", communities: [...rows] }),
+    add(url: string): UpdateResult {
+      rows.add(url);
+      return accepted;
+    },
+    remove(url: string): UpdateResult {
+      rows.delete(url);
+      return accepted;
     },
   };
 }
@@ -136,25 +108,24 @@ function store(initial: Partial<ClientSnapshot> = {}) {
 }
 function fakeClient() {
   return {
-    identity: vi.fn<KnownCommunitiesClient["identity"]>(async () => ({
-      kind: "identity",
-      pubkey: viewer,
-    })),
     list: vi.fn<KnownCommunitiesClient["list"]>(async () => ({
       kind: "listed",
       communities: [],
     })),
-    update: vi.fn<KnownCommunitiesClient["update"]>(async (_pubkey, op) =>
-      accepted(op),
-    ),
+    add: vi.fn<KnownCommunitiesClient["add"]>(async () => accepted),
+    remove: vi.fn<KnownCommunitiesClient["remove"]>(async () => accepted),
   };
 }
+/** `arrange` sets the service's answers before the sign-in starts the drain,
+ * which reaches the first upload without yielding to the test. */
 async function fixture({
   snapshot = {} as Partial<ClientSnapshot>,
   signedIn = true,
+  arrange = (_client: ReturnType<typeof fakeClient>) => {},
 } = {}) {
   const s = store(snapshot);
   const client = fakeClient();
+  arrange(client);
   const session = createOAuthSession(async () => ({
     value: "secret",
     account: { subject: "user", email: "a@example.com" },
@@ -165,7 +136,26 @@ async function fixture({
     knownCommunities: s.knownCommunities,
   });
   if (signedIn) await session.signIn();
-  return { ...s, client, session, dispose };
+  /** Every edit sent, in order, as the intent it carried. */
+  const sent = () =>
+    [
+      ...client.add.mock.invocationCallOrder,
+      ...client.remove.mock.invocationCallOrder,
+    ]
+      .sort((x, y) => x - y)
+      .map((order): PendingOp => {
+        const added = client.add.mock.invocationCallOrder.indexOf(order);
+        return added >= 0
+          ? { url: client.add.mock.calls[added]?.[0] ?? "", removed: false }
+          : {
+              url:
+                client.remove.mock.calls[
+                  client.remove.mock.invocationCallOrder.indexOf(order)
+                ]?.[0] ?? "",
+              removed: true,
+            };
+      });
+  return { ...s, client, session, dispose, sent };
 }
 const synced = (pending = 0) => ({ phase: "synced", pending });
 
@@ -185,34 +175,27 @@ it("waits for sign-in and a ready identity, then lists, merges and drains", asyn
   await h.session.signIn();
   // Signed in, but the device record is still loading: nothing to send yet.
   expect(h.status).toHaveBeenLastCalledWith({ phase: "pending", pending: 1 });
-  expect(h.client.identity).not.toHaveBeenCalled();
+  expect(h.client.list).not.toHaveBeenCalled();
   h.client.list.mockResolvedValueOnce({
     kind: "listed",
-    communities: [{ url: secondary, revision: 3, removed: false }],
+    communities: [secondary],
   });
   const op = h.outbox()[0];
   h.set({ status: "ready" });
   await until(() => expect(h.status).toHaveBeenLastCalledWith(synced()));
-  expect(h.client.identity).toHaveBeenCalledTimes(1);
-  expect(h.client.list).toHaveBeenCalledWith(viewer, expect.any(AbortSignal));
+  expect(h.client.list).toHaveBeenCalledWith(expect.any(AbortSignal));
   // The complete list replaces what is known; the destination saved elsewhere
   // is handed to the service to add, and the queued add keeps its place.
   expect(h.apply).toHaveBeenNthCalledWith(
     1,
-    { known: { [secondary]: { revision: 3, removed: false } }, outbox: [op] },
+    { known: [secondary], outbox: [op] },
     { add: [secondary], remove: [] },
   );
-  expect(h.client.update).toHaveBeenCalledTimes(1);
-  expect(h.client.update).toHaveBeenCalledWith(
-    viewer,
-    op,
-    expect.any(AbortSignal),
-  );
+  expect(h.client.add).toHaveBeenCalledTimes(1);
+  expect(h.client.add).toHaveBeenCalledWith(primary, expect.any(AbortSignal));
+  expect(h.client.remove).not.toHaveBeenCalled();
   expect(h.apply).toHaveBeenLastCalledWith({
-    known: {
-      [secondary]: { revision: 3, removed: false },
-      [primary]: { revision: 1, removed: false },
-    },
+    known: [secondary, primary],
     outbox: [],
   });
   expect(h.status.mock.calls.map(([s]) => s?.phase)).toContain("syncing");
@@ -223,73 +206,20 @@ it("merges nothing more than once per sign-in, and sends a newly queued intent a
   const h = await fixture();
   await until(() => expect(h.status).toHaveBeenLastCalledWith(synced()));
   h.enqueue(primary);
-  await until(() => expect(h.client.update).toHaveBeenCalledTimes(1));
-  expect(h.client.update.mock.calls[0]?.[1]).toMatchObject({
-    url: primary,
-    removed: false,
-  });
+  await until(() => expect(h.client.add).toHaveBeenCalledTimes(1));
+  expect(h.client.add.mock.calls[0]?.[0]).toBe(primary);
   await until(() => expect(h.status).toHaveBeenLastCalledWith(synced()));
   expect(h.outbox()).toEqual([]);
-  expect(h.known()).toEqual({ [primary]: { revision: 1, removed: false } });
-  expect(h.client.identity).toHaveBeenCalledTimes(1);
+  expect(h.known()).toEqual([primary]);
+  h.enqueue(primary, true);
+  await until(() => expect(h.client.remove).toHaveBeenCalledTimes(1));
+  await until(() => expect(h.status).toHaveBeenLastCalledWith(synced()));
+  expect(h.known()).toEqual([]);
   expect(h.client.list).toHaveBeenCalledTimes(1);
   h.dispose();
 });
 
 it.each([
-  { name: "another key", identity: { pubkey: "cd".repeat(32) } },
-  { name: "no key", identity: {} },
-])(
-  "stops before listing while the account is bound to $name, without binding it",
-  async ({ identity }) => {
-    const h = await fixture({
-      signedIn: false,
-      snapshot: { sync: queued(primary) },
-    });
-    h.client.identity.mockResolvedValue({ kind: "identity", ...identity });
-    await h.session.signIn();
-    await until(() =>
-      expect(h.status).toHaveBeenLastCalledWith({
-        phase: "needs-binding",
-        pending: 1,
-      }),
-    );
-    expect(h.client.list).not.toHaveBeenCalled();
-    expect(h.client.update).not.toHaveBeenCalled();
-    // Neither a trigger nor time changes that until the next sign-in.
-    window.dispatchEvent(new Event("online"));
-    h.enqueue(secondary);
-    await vi.advanceTimersByTimeAsync(120_000);
-    expect(h.client.identity).toHaveBeenCalledTimes(1);
-    expect(h.status).toHaveBeenLastCalledWith({
-      phase: "needs-binding",
-      pending: 2,
-    });
-    h.session.signOut();
-    expect(h.status).toHaveBeenLastCalledWith({
-      phase: "signed-out",
-      pending: 2,
-    });
-    h.client.identity.mockResolvedValue({ kind: "identity", pubkey: viewer });
-    await h.session.signIn();
-    await until(() => expect(h.status).toHaveBeenLastCalledWith(synced()));
-    expect(h.client.identity).toHaveBeenCalledTimes(2);
-    expect(h.client.update).toHaveBeenCalledTimes(2);
-    h.dispose();
-  },
-);
-
-it.each([
-  {
-    name: "the identity route refuses the account",
-    arrange: (h: Awaited<ReturnType<typeof fixture>>) =>
-      h.client.identity.mockResolvedValue({ kind: "forbidden" }),
-    status: {
-      phase: "error",
-      pending: 1,
-      error: "This Builderlab account can’t sync communities.",
-    },
-  },
   {
     name: "the list route refuses the account",
     arrange: (h: Awaited<ReturnType<typeof fixture>>) =>
@@ -311,15 +241,9 @@ it.each([
     },
   },
   {
-    name: "an upload reports a mismatched binding",
-    arrange: (h: Awaited<ReturnType<typeof fixture>>) =>
-      h.client.update.mockResolvedValue({ kind: "identity_mismatch" }),
-    status: { phase: "needs-binding", pending: 1 },
-  },
-  {
     name: "an upload is forbidden",
     arrange: (h: Awaited<ReturnType<typeof fixture>>) =>
-      h.client.update.mockResolvedValue({ kind: "forbidden" }),
+      h.client.add.mockResolvedValue({ kind: "forbidden" }),
     status: {
       phase: "error",
       pending: 1,
@@ -335,36 +259,47 @@ it.each([
   await h.session.signIn();
   await until(() => expect(h.status).toHaveBeenLastCalledWith(status));
   const calls = () =>
-    h.client.identity.mock.calls.length +
     h.client.list.mock.calls.length +
-    h.client.update.mock.calls.length;
+    h.client.add.mock.calls.length +
+    h.client.remove.mock.calls.length;
   const before = calls();
   window.dispatchEvent(new Event("online"));
+  h.enqueue(secondary);
   await vi.advanceTimersByTimeAsync(120_000);
   expect(calls()).toBe(before);
-  expect(h.outbox()).toHaveLength(1);
+  expect(h.outbox()).toHaveLength(2);
+  h.session.signOut();
+  h.client.list.mockResolvedValue({ kind: "listed", communities: [] });
+  h.client.add.mockResolvedValue(accepted);
+  await h.session.signIn();
+  await until(() => expect(h.status).toHaveBeenLastCalledWith(synced()));
+  expect(h.outbox()).toEqual([]);
   h.dispose();
 });
 
-it("uploads one operation at a time, in queue order", async () => {
+it("uploads one intent at a time, in queue order", async () => {
   const first = deferred<UpdateResult>();
-  const h = await fixture({ snapshot: { sync: queued(primary, secondary) } });
-  h.client.update.mockReturnValueOnce(first.promise);
-  await until(() => expect(h.client.update).toHaveBeenCalledTimes(1));
-  expect(h.client.update.mock.calls[0]?.[1]).toMatchObject({ url: primary });
+  const h = await fixture({
+    snapshot: { sync: queued(primary, secondary) },
+    arrange: (client) => client.add.mockReturnValueOnce(first.promise),
+  });
+  await until(() => expect(h.client.add).toHaveBeenCalledTimes(1));
+  expect(h.client.add.mock.calls[0]?.[0]).toBe(primary);
   expect(h.status).toHaveBeenLastCalledWith({ phase: "syncing", pending: 2 });
   await vi.advanceTimersByTimeAsync(5000);
-  expect(h.client.update).toHaveBeenCalledTimes(1);
-  first.resolve(accepted(h.outbox()[0] as PendingOp));
-  await until(() => expect(h.client.update).toHaveBeenCalledTimes(2));
-  expect(h.client.update.mock.calls[1]?.[1]).toMatchObject({ url: secondary });
+  expect(h.client.add).toHaveBeenCalledTimes(1);
+  first.resolve(accepted);
+  await until(() => expect(h.client.add).toHaveBeenCalledTimes(2));
+  expect(h.client.add.mock.calls[1]?.[0]).toBe(secondary);
   await until(() => expect(h.status).toHaveBeenLastCalledWith(synced()));
   h.dispose();
 });
 
 it("retries a failed upload with the identical request at doubling delays, capped at a minute", async () => {
-  const h = await fixture({ snapshot: { sync: queued(primary) } });
-  h.client.update.mockRejectedValue(reachError());
+  const h = await fixture({
+    snapshot: { sync: queued(primary) },
+    arrange: (client) => client.add.mockRejectedValue(reachError()),
+  });
   await until(() =>
     expect(h.status).toHaveBeenLastCalledWith({
       phase: "error",
@@ -372,26 +307,20 @@ it("retries a failed upload with the identical request at doubling delays, cappe
       error: "Couldn’t reach Builderlab.",
     }),
   );
-  const [, sent] = h.client.update.mock.calls[0] as [
-    string,
-    PendingOp,
-    AbortSignal,
-  ];
   let attempts = 1;
   // Each failed run reports twice: syncing, then the error.
   let reports = h.status.mock.calls.length;
   for (const delay of [1000, 2000, 4000, 8000, 16000, 32000, 60000, 60000]) {
     await vi.advanceTimersByTimeAsync(delay - 1);
-    expect(h.client.update).toHaveBeenCalledTimes(attempts);
+    expect(h.client.add).toHaveBeenCalledTimes(attempts);
     await vi.advanceTimersByTimeAsync(1);
-    expect(h.client.update).toHaveBeenCalledTimes(++attempts);
-    // The same operation ID and payload, so the service can replay its answer.
-    expect(h.client.update.mock.calls.at(-1)?.[1]).toEqual(sent);
+    expect(h.client.add).toHaveBeenCalledTimes(++attempts);
+    expect(h.client.add.mock.calls.at(-1)?.[0]).toBe(primary);
     reports += 2;
     await until(() => expect(h.status).toHaveBeenCalledTimes(reports));
   }
   // A success resets the backoff for the next failure.
-  h.client.update.mockImplementationOnce(async (_pubkey, op) => accepted(op));
+  h.client.add.mockResolvedValueOnce(accepted);
   await vi.advanceTimersByTimeAsync(60000);
   await until(() => expect(h.status).toHaveBeenLastCalledWith(synced()));
   expect(h.outbox()).toEqual([]);
@@ -401,33 +330,35 @@ it("retries a failed upload with the identical request at doubling delays, cappe
       expect.objectContaining({ phase: "error" }),
     ),
   );
-  const count = h.client.update.mock.calls.length;
+  const count = h.client.add.mock.calls.length;
   await vi.advanceTimersByTimeAsync(999);
-  expect(h.client.update).toHaveBeenCalledTimes(count);
+  expect(h.client.add).toHaveBeenCalledTimes(count);
   await vi.advanceTimersByTimeAsync(1);
-  expect(h.client.update).toHaveBeenCalledTimes(count + 1);
+  expect(h.client.add).toHaveBeenCalledTimes(count + 1);
   h.dispose();
 });
 
 it("runs again at once when the window comes online or becomes visible, resetting the backoff", async () => {
-  const h = await fixture({ snapshot: { sync: queued(primary) } });
-  h.client.update.mockRejectedValue(reachError());
+  const h = await fixture({
+    snapshot: { sync: queued(primary) },
+    arrange: (client) => client.add.mockRejectedValue(reachError()),
+  });
   await until(() =>
     expect(h.status).toHaveBeenLastCalledWith(
       expect.objectContaining({ phase: "error" }),
     ),
   );
-  expect(h.client.update).toHaveBeenCalledTimes(1);
+  expect(h.client.add).toHaveBeenCalledTimes(1);
   let reports = h.status.mock.calls.length;
   window.dispatchEvent(new Event("online"));
-  await until(() => expect(h.client.update).toHaveBeenCalledTimes(2));
+  await until(() => expect(h.client.add).toHaveBeenCalledTimes(2));
   // The trigger's own failure starts the backoff over at one second.
   reports += 2;
   await until(() => expect(h.status).toHaveBeenCalledTimes(reports));
   await vi.advanceTimersByTimeAsync(999);
-  expect(h.client.update).toHaveBeenCalledTimes(2);
+  expect(h.client.add).toHaveBeenCalledTimes(2);
   await vi.advanceTimersByTimeAsync(1);
-  expect(h.client.update).toHaveBeenCalledTimes(3);
+  expect(h.client.add).toHaveBeenCalledTimes(3);
   reports += 2;
   await until(() => expect(h.status).toHaveBeenCalledTimes(reports));
   let visibility = "hidden";
@@ -436,10 +367,10 @@ it("runs again at once when the window comes online or becomes visible, resettin
   );
   document.dispatchEvent(new Event("visibilitychange"));
   await vi.advanceTimersByTimeAsync(0);
-  expect(h.client.update).toHaveBeenCalledTimes(3);
+  expect(h.client.add).toHaveBeenCalledTimes(3);
   visibility = "visible";
   document.dispatchEvent(new Event("visibilitychange"));
-  await until(() => expect(h.client.update).toHaveBeenCalledTimes(4));
+  await until(() => expect(h.client.add).toHaveBeenCalledTimes(4));
   h.dispose();
 });
 
@@ -457,12 +388,15 @@ it.each([
     reason: "Builderlab refused this request (HTTP 415).",
   },
 ])(
-  "parks an operation the service answers $refusal.kind until the next sign-in, with what waits behind it, and keeps sending others",
+  "parks an add the service answers $refusal.kind, keeps sending others, and sends the intent that replaces it",
   async ({ refusal, reason }) => {
-    const h = await fixture({ snapshot: { sync: queued(primary, secondary) } });
-    h.client.update.mockImplementation(async (_pubkey, op) =>
-      op.url === primary ? refusal : accepted(op),
-    );
+    const h = await fixture({
+      snapshot: { sync: queued(primary, secondary) },
+      arrange: (client) =>
+        client.add.mockImplementation(async (url) =>
+          url === primary ? refusal : accepted,
+        ),
+    });
     await until(() =>
       expect(h.status).toHaveBeenLastCalledWith({
         phase: "error",
@@ -470,65 +404,69 @@ it.each([
         error: reason,
       }),
     );
-    expect(h.client.update).toHaveBeenCalledTimes(2);
-    expect(h.outbox().map((op) => op.url)).toEqual([primary]);
-    // Triggers and time pass it over, and an intent queued behind it waits
-    // with it rather than going out in its place.
+    expect(h.client.add).toHaveBeenCalledTimes(2);
+    expect(h.outbox()).toEqual([{ url: primary, removed: false }]);
+    // Triggers and time pass it over, and the same intent queued again is
+    // the same request: still parked.
     window.dispatchEvent(new Event("online"));
-    h.enqueue(primary, true);
+    h.enqueue(primary);
     await vi.advanceTimersByTimeAsync(120_000);
-    expect(h.client.update).toHaveBeenCalledTimes(2);
+    expect(h.client.add).toHaveBeenCalledTimes(2);
     expect(h.status).toHaveBeenLastCalledWith({
       phase: "error",
-      pending: 2,
+      pending: 1,
       error: reason,
     });
     // A fresh intent for another destination still goes.
     h.enqueue(secondary, true);
-    await until(() => expect(h.client.update).toHaveBeenCalledTimes(3));
-    expect(h.client.update.mock.calls[2]?.[1]).toMatchObject({
-      url: secondary,
-      removed: true,
-    });
+    await until(() => expect(h.client.remove).toHaveBeenCalledTimes(1));
+    expect(h.client.remove.mock.calls[0]?.[0]).toBe(secondary);
     await until(() =>
       expect(h.status).toHaveBeenLastCalledWith({
         phase: "error",
-        pending: 2,
+        pending: 1,
         error: reason,
       }),
     );
-    h.session.signOut();
-    h.client.update.mockImplementation(async (_pubkey, op) => accepted(op));
-    await h.session.signIn();
+    // Leaving the refused community replaces the parked add with a removal,
+    // which is a different request and goes out; nothing then remains parked.
+    h.enqueue(primary, true);
+    await until(() => expect(h.client.remove).toHaveBeenCalledTimes(2));
+    expect(h.client.remove.mock.calls[1]?.[0]).toBe(primary);
     await until(() => expect(h.status).toHaveBeenLastCalledWith(synced()));
-    // The parked head goes first as it was; the removal behind it follows on
-    // the revision the head produced.
-    expect(h.client.update).toHaveBeenCalledTimes(5);
-    expect(h.client.update.mock.calls[3]?.[1]).toEqual(
-      h.client.update.mock.calls[0]?.[1],
-    );
-    expect(h.client.update.mock.calls[4]?.[1]).toMatchObject({
-      url: primary,
-      removed: true,
-      expectedRevision: 1,
-    });
     expect(h.outbox()).toEqual([]);
     h.dispose();
   },
 );
 
+it("sends a parked intent again on the next sign-in", async () => {
+  const h = await fixture({
+    snapshot: { sync: queued(primary) },
+    arrange: (client) =>
+      client.add.mockResolvedValueOnce({ kind: "limit_reached" }),
+  });
+  await until(() =>
+    expect(h.status).toHaveBeenLastCalledWith({
+      phase: "error",
+      pending: 1,
+      error: "Builderlab can’t save more communities for this account.",
+    }),
+  );
+  h.session.signOut();
+  await h.session.signIn();
+  await until(() => expect(h.status).toHaveBeenLastCalledWith(synced()));
+  expect(h.client.add).toHaveBeenCalledTimes(2);
+  expect(h.outbox()).toEqual([]);
+  h.dispose();
+});
+
 it.each([
   { name: "join, lost acknowledgement, leave", first: false },
   { name: "leave, lost acknowledgement, rejoin", first: true },
 ])(
-  "converges on the latest intent after $name: the head is replayed as sent, then the queued intent goes as a fresh edit",
+  "converges on the latest intent after $name: the retry sends only the newer intent",
   async ({ first }) => {
-    const service = fakeService();
-    if (first)
-      service.rows.set(primary, {
-        record: { url: primary, revision: 1, removed: false },
-        operationId: "seeded-elsewhere",
-      });
+    const service = fakeService(...(first ? [primary] : []));
     const h = await fixture({
       signedIn: false,
       snapshot: {
@@ -539,15 +477,18 @@ it.each([
     });
     h.client.list.mockImplementation(async () => service.list());
     let lost = true;
-    h.client.update.mockImplementation(async (_pubkey, op) => {
-      const result = service.update(op);
-      // The service applied it, but its answer never arrived.
-      if (lost) {
-        lost = false;
-        throw reachError();
-      }
-      return result;
-    });
+    const edit =
+      (apply: (url: string) => UpdateResult) => async (url: string) => {
+        const result = apply(url);
+        // The service applied it, but its answer never arrived.
+        if (lost) {
+          lost = false;
+          throw reachError();
+        }
+        return result;
+      };
+    h.client.add.mockImplementation(edit((url) => service.add(url)));
+    h.client.remove.mockImplementation(edit((url) => service.remove(url)));
     await h.session.signIn();
     await until(() => expect(h.status).toHaveBeenLastCalledWith(synced()));
     h.enqueue(primary, first);
@@ -556,39 +497,20 @@ it.each([
         expect.objectContaining({ phase: "error" }),
       ),
     );
-    const [, sent] = h.client.update.mock.calls[0] as [
-      string,
-      PendingOp,
-      AbortSignal,
-    ];
-    const applied = {
-      url: primary,
-      revision: sent.expectedRevision + 1,
-      removed: first,
-    };
-    expect(service.rows.get(primary)?.record).toEqual(applied);
-    // The user changes their mind during the backoff. The head is still the
-    // one sent, so the replay answers for what it wrote, and the newer intent
-    // follows on that revision instead of carrying the head's stale fence.
+    expect(service.rows.has(primary)).toBe(!first);
+    // The user changes their mind during the backoff: the newer intent
+    // replaces the one whose answer was lost, and is what the retry sends.
     h.enqueue(primary, !first);
     await until(() => expect(h.status).toHaveBeenLastCalledWith(synced()));
-    const ops = h.client.update.mock.calls.map(([, op]) => op);
-    expect(ops).toHaveLength(3);
-    expect(ops[1]).toEqual(sent);
-    expect(ops[2]).toMatchObject({
-      url: primary,
-      removed: !first,
-      expectedRevision: applied.revision,
-    });
-    expect(ops[2]?.operationId).not.toBe(sent.operationId);
-    const final = { revision: applied.revision + 1, removed: !first };
-    expect(service.rows.get(primary)?.record).toEqual({
-      url: primary,
-      ...final,
-    });
-    expect(h.known()).toEqual({ [primary]: final });
+    expect(h.sent()).toEqual([
+      { url: primary, removed: first },
+      { url: primary, removed: !first },
+    ]);
+    expect(service.rows.has(primary)).toBe(first);
+    expect(h.known()).toEqual(first ? [primary] : []);
     expect(h.outbox()).toEqual([]);
-    // No divergence was ever reported against the user's own change of mind.
+    // No membership change was ever reported against the user's own change
+    // of mind.
     expect(
       h.apply.mock.calls.flatMap(([, changes]) => [
         ...(changes?.add ?? []),
@@ -599,7 +521,7 @@ it.each([
   },
 );
 
-it("backs off when the device record will not save, then replays the identical operation", async () => {
+it("backs off when the device record will not save, then replays the identical request", async () => {
   const h = await fixture();
   await until(() => expect(h.status).toHaveBeenLastCalledWith(synced()));
   const failure = new Error(
@@ -614,23 +536,18 @@ it("backs off when the device record will not save, then replays the identical o
       error: failure.message,
     }),
   );
-  expect(h.client.update).toHaveBeenCalledTimes(1);
-  const [, sent] = h.client.update.mock.calls[0] as [
-    string,
-    PendingOp,
-    AbortSignal,
-  ];
+  expect(h.client.add).toHaveBeenCalledTimes(1);
   // The service accepted it; only the record did not take the answer. The
-  // operation stays as sent, so the service can replay its answer.
-  expect(h.outbox()).toEqual([sent]);
+  // intent stays, and the idempotent request goes again.
+  expect(h.outbox()).toEqual([{ url: primary, removed: false }]);
   await vi.advanceTimersByTimeAsync(999);
-  expect(h.client.update).toHaveBeenCalledTimes(1);
+  expect(h.client.add).toHaveBeenCalledTimes(1);
   await vi.advanceTimersByTimeAsync(1);
-  expect(h.client.update).toHaveBeenCalledTimes(2);
-  expect(h.client.update.mock.calls[1]?.[1]).toEqual(sent);
+  expect(h.client.add).toHaveBeenCalledTimes(2);
+  expect(h.client.add.mock.calls[1]?.[0]).toBe(primary);
   await until(() => expect(h.status).toHaveBeenLastCalledWith(synced()));
   expect(h.outbox()).toEqual([]);
-  expect(h.known()).toEqual({ [primary]: { revision: 1, removed: false } });
+  expect(h.known()).toEqual([primary]);
   h.dispose();
 });
 
@@ -646,73 +563,56 @@ it("keeps an intent queued while the list is in flight: the merge reads the reco
   await until(() => expect(h.status).toHaveBeenLastCalledWith(synced()));
   expect(h.apply).toHaveBeenNthCalledWith(
     1,
-    { known: {}, outbox: [op] },
+    { known: [], outbox: [op] },
     { add: [], remove: [] },
   );
-  expect(h.client.update).toHaveBeenCalledTimes(1);
-  expect(h.client.update.mock.calls[0]?.[1]).toEqual(op);
+  expect(h.client.add).toHaveBeenCalledTimes(1);
+  expect(h.client.add.mock.calls[0]?.[0]).toBe(primary);
   expect(h.outbox()).toEqual([]);
   h.dispose();
 });
 
-it.each([
-  {
-    name: "a removal elsewhere beats a queued add",
-    removed: false,
-    record: { url: primary, revision: 5, removed: true },
-    changes: { remove: [primary] },
-    known: { [primary]: { revision: 5, removed: true } },
-  },
-  {
-    name: "an add elsewhere beats a queued removal",
-    removed: true,
-    record: { url: primary, revision: 5, removed: false },
-    changes: { add: [primary] },
-    known: { [primary]: { revision: 5, removed: false } },
-  },
-  {
-    name: "a conflict without a record forgets the destination",
-    removed: false,
-    record: undefined,
-    changes: {},
-    known: {},
-  },
-])(
-  "lets the service win a revision conflict: $name",
-  async ({ removed, record, changes, known }) => {
-    const h = await fixture({
-      snapshot: {
-        sync: {
-          known: { [primary]: { revision: 2, removed: !removed } },
-          outbox: [],
-        },
-      },
-    });
-    h.client.update.mockResolvedValue(
-      record
-        ? { kind: "revision_conflict", record }
-        : { kind: "revision_conflict" },
-    );
-    await until(() => expect(h.status).toHaveBeenLastCalledWith(synced()));
-    h.enqueue(primary, removed);
-    await until(() => expect(h.client.update).toHaveBeenCalledTimes(1));
-    await until(() => expect(h.status).toHaveBeenLastCalledWith(synced()));
-    expect(h.apply).toHaveBeenLastCalledWith({ known, outbox: [] }, changes);
-    expect(h.outbox()).toEqual([]);
-    h.dispose();
-  },
-);
+it("follows the account on the next sign-in: a removal elsewhere is applied, a membership never uploaded is sent", async () => {
+  const service = fakeService(secondary);
+  const h = await fixture({
+    signedIn: false,
+    snapshot: {
+      memberships: [
+        { id: "https://primary.example", name: "Primary" },
+        { id: "https://secondary.example", name: "Secondary" },
+      ],
+      sync: { known: [secondary], outbox: [] },
+    },
+  });
+  h.client.list.mockImplementation(async () => service.list());
+  h.client.add.mockImplementation(async (url) => service.add(url));
+  // Another device removed the secondary and added a third community.
+  service.rows.delete(secondary);
+  service.rows.add("wss://third.example");
+  await h.session.signIn();
+  await until(() => expect(h.status).toHaveBeenLastCalledWith(synced()));
+  expect(h.apply).toHaveBeenNthCalledWith(
+    1,
+    {
+      known: ["wss://third.example"],
+      outbox: [{ url: primary, removed: false }],
+    },
+    { add: ["wss://third.example"], remove: [secondary] },
+  );
+  expect(h.sent()).toEqual([{ url: primary, removed: false }]);
+  expect(h.known()).toEqual(["wss://third.example", primary]);
+  h.dispose();
+});
 
 it("signing out abandons the upload in flight and keeps the outbox for the next sign-in", async () => {
   const gate = deferred<UpdateResult>();
-  const h = await fixture({ snapshot: { sync: queued(primary) } });
-  h.client.update.mockReturnValueOnce(gate.promise);
-  await until(() => expect(h.client.update).toHaveBeenCalledTimes(1));
-  const [, op, signal] = h.client.update.mock.calls[0] as [
-    string,
-    PendingOp,
-    AbortSignal,
-  ];
+  const h = await fixture({
+    snapshot: { sync: queued(primary) },
+    arrange: (client) => client.add.mockReturnValueOnce(gate.promise),
+  });
+  await until(() => expect(h.client.add).toHaveBeenCalledTimes(1));
+  const [, signal] = h.client.add.mock.calls[0] as [string, AbortSignal];
+  const op = h.outbox()[0];
   const applied = h.apply.mock.calls.length;
   h.session.signOut();
   expect(signal.aborted).toBe(true);
@@ -720,26 +620,29 @@ it("signing out abandons the upload in flight and keeps the outbox for the next 
     phase: "signed-out",
     pending: 1,
   });
-  gate.resolve(accepted(op));
+  gate.resolve(accepted);
   await vi.advanceTimersByTimeAsync(120_000);
   expect(h.apply).toHaveBeenCalledTimes(applied);
   expect(h.outbox()).toEqual([op]);
   await h.session.signIn();
   await until(() => expect(h.status).toHaveBeenLastCalledWith(synced()));
-  // A fresh sign-in checks the binding and the list again, then resends.
-  expect(h.client.identity).toHaveBeenCalledTimes(2);
+  // A fresh sign-in reads the list again, then resends.
   expect(h.client.list).toHaveBeenCalledTimes(2);
-  expect(h.client.update).toHaveBeenCalledTimes(2);
-  expect(h.client.update.mock.calls[1]?.[1]).toEqual(op);
+  expect(h.client.add).toHaveBeenCalledTimes(2);
+  expect(h.client.add.mock.calls[1]?.[0]).toBe(primary);
   h.dispose();
 });
 
 it("stops without a retry when the service ends the session", async () => {
-  const h = await fixture({ snapshot: { sync: queued(primary) } });
-  h.client.update.mockImplementation(async () => {
+  const h = await fixture({
+    signedIn: false,
+    snapshot: { sync: queued(primary) },
+  });
+  h.client.add.mockImplementation(async () => {
     h.session.signOut();
     throw new DOMException("Builderlab session changed.", "AbortError");
   });
+  await h.session.signIn();
   await until(() =>
     expect(h.status).toHaveBeenLastCalledWith({
       phase: "signed-out",
@@ -747,7 +650,7 @@ it("stops without a retry when the service ends the session", async () => {
     }),
   );
   await vi.advanceTimersByTimeAsync(120_000);
-  expect(h.client.update).toHaveBeenCalledTimes(1);
+  expect(h.client.add).toHaveBeenCalledTimes(1);
   expect(h.outbox()).toHaveLength(1);
   h.dispose();
 });
@@ -761,6 +664,6 @@ it("disposal withdraws the report and stops listening", async () => {
   h.enqueue(primary);
   window.dispatchEvent(new Event("online"));
   await vi.advanceTimersByTimeAsync(120_000);
-  expect(h.client.update).not.toHaveBeenCalled();
+  expect(h.client.add).not.toHaveBeenCalled();
   expect(h.status).toHaveBeenCalledTimes(reports);
 });

@@ -225,15 +225,8 @@ it("resumes after an uncertain claim, saves the profile, and restores only the s
   );
   // The completed join queued its upload in the same device record.
   expect(stored.sync).toEqual({
-    known: {},
-    outbox: [
-      {
-        operationId: expect.stringMatching(/^[0-9a-f-]{36}$/),
-        url: "wss://native-join.test",
-        expectedRevision: 0,
-        removed: false,
-      },
-    ],
+    known: [],
+    outbox: [{ url: "wss://native-join.test", removed: false }],
   });
   stored.memberships.push({ id: "https://unopened.test", name: "Unopened" });
   localStorage.setItem(

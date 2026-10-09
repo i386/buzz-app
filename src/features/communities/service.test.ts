@@ -9,8 +9,6 @@ import { recordReaction } from "../messages/quick-reactions";
 import { readView, writeView } from "../../shared/view-state";
 
 const viewer = "a".repeat(64);
-const uuid =
-  /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 const roots: Context[] = [];
 const requests: string[] = [];
 function setup(saved?: unknown, savedViewer = viewer, openRelay = "") {
@@ -365,7 +363,7 @@ it("preserves unresolved saved aliases across profile saves and reloads without 
   expect(persisted).toEqual({
     ...saved,
     profile: { name: "After", picture: "" },
-    sync: { known: {}, outbox: [] },
+    sync: { known: [], outbox: [] },
   });
   const reloaded = setup(persisted);
   await flush();
@@ -481,7 +479,7 @@ it("opens the configured relay for an identity without a saved record and rememb
     profile: { name: "", picture: "", about: "" },
     memberships: [membership],
     selected: membership.id,
-    sync: { known: {}, outbox: [] },
+    sync: { known: [], outbox: [] },
   });
   // A configured alias for the relay origin is honored like any other join.
   const aliased = setup(undefined, "c".repeat(64), "wss://primary.example");
@@ -802,15 +800,8 @@ it("leaving the last community lands on Personal space with an empty saved recor
     memberships: [],
     selected: null,
     sync: {
-      known: {},
-      outbox: [
-        {
-          operationId: expect.stringMatching(uuid),
-          url: "wss://primary.example",
-          expectedRevision: 0,
-          removed: true,
-        },
-      ],
+      known: [],
+      outbox: [{ url: "wss://primary.example", removed: true }],
     },
   });
 });
@@ -834,15 +825,8 @@ it("join and leave each save the membership change and its upload intent in one 
     memberships: [{ id: "https://third.example", name: "Third" }],
     selected: "https://third.example",
     sync: {
-      known: {},
-      outbox: [
-        {
-          operationId: expect.stringMatching(uuid),
-          url: "wss://third.example",
-          expectedRevision: 0,
-          removed: false,
-        },
-      ],
+      known: [],
+      outbox: [{ url: "wss://third.example", removed: false }],
     },
   });
   writes.mockClear();
@@ -850,20 +834,11 @@ it("join and leave each save the membership change and its upload intent in one 
   expect(records()).toHaveLength(1);
   const left = records()[0];
   expect(left).toMatchObject({ memberships: [], selected: null });
-  // The add may already be in flight, so the removal waits behind it under
-  // its own operation.
+  // The removal replaces the add: whichever idempotent edit lands last is the
+  // state, and the latest intent is what gets sent.
   expect(left.sync.outbox).toEqual([
-    joined.sync.outbox[0],
-    {
-      operationId: expect.stringMatching(uuid),
-      url: "wss://third.example",
-      expectedRevision: 1,
-      removed: true,
-    },
+    { url: "wss://third.example", removed: true },
   ]);
-  expect(left.sync.outbox[1].operationId).not.toBe(
-    joined.sync.outbox[0].operationId,
-  );
   // Joining never waits for an upload: the queued intent survives a restart as saved.
   const restored = setup(left);
   await flush();
@@ -871,22 +846,16 @@ it("join and leave each save the membership change and its upload intent in one 
   expect(restored.pendingSync()).toEqual(left.sync.outbox);
 });
 
-it("re-running a join the service already holds queues nothing; a join after a tombstone queues on its revision", async () => {
+it("re-running a join the service already holds queues nothing; a join it does not hold queues an add", async () => {
   const client = setup({
     profile: { name: "Local", picture: "" },
     memberships: [{ id: "primary", name: "Primary" }],
     selected: null,
-    sync: {
-      known: {
-        "wss://primary.example": { revision: 2, removed: false },
-        "wss://gone.example": { revision: 3, removed: true },
-      },
-      outbox: [],
-    },
+    sync: { known: ["wss://primary.example"], outbox: [] },
   });
   await flush();
-  // The dialog reaches joined() for an already_member claim too: no new
-  // revision for other devices' pending operations to trip over.
+  // The dialog reaches joined() for an already_member claim too: nothing to
+  // tell the service.
   client.joined({ id: "primary", name: "Primary" }, { name: "", picture: "" });
   expect(client.snapshot().selected).toBe("primary");
   expect(client.pendingSync()).toEqual([]);
@@ -895,12 +864,7 @@ it("re-running a join the service already holds queues nothing; a join after a t
     { name: "", picture: "" },
   );
   expect(client.pendingSync()).toEqual([
-    {
-      operationId: expect.stringMatching(uuid),
-      url: "wss://gone.example",
-      expectedRevision: 3,
-      removed: false,
-    },
+    { url: "wss://gone.example", removed: false },
   ]);
 });
 
@@ -919,11 +883,7 @@ it("applies a server list in one record write: adds under the host name, forgets
   const scope = `https://gone.example:${viewer}`;
   writeView(scope, "draft:general", "unsent");
   const next = {
-    known: {
-      "wss://primary.example": { revision: 1, removed: false },
-      "wss://gone.example": { revision: 2, removed: true },
-      "wss://new.example:8443": { revision: 1, removed: false },
-    },
+    known: ["wss://primary.example", "wss://new.example:8443"],
     outbox: [],
   };
   const writes = vi.spyOn(localStorage, "setItem");
@@ -989,10 +949,7 @@ it("a native sync write that will not save throws before anything changes", asyn
   const snapshot = client.snapshot();
   await expect(
     client.applySync(
-      {
-        known: { "wss://native.example": { revision: 1, removed: true } },
-        outbox: [],
-      },
+      { known: [], outbox: [] },
       { remove: ["wss://native.example"] },
     ),
   ).rejects.toThrow("Could not save this community on this device");

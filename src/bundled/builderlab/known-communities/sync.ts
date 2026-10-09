@@ -1,10 +1,7 @@
 import {
   acknowledge,
-  conflict,
-  heads,
   mergeList,
-  type KnownRecord,
-  type ListedCommunity,
+  type PendingOp,
   type SyncStatus,
 } from "../../../features/communities/known-communities";
 import type { KnownCommunities } from "../../../features/communities/service";
@@ -12,39 +9,32 @@ import type { OAuthSession } from "../oauth/session";
 import type { KnownCommunitiesClient, Refusal } from "./client";
 
 /** Why the service refused, in the viewer's terms. */
-const REASONS: Record<
-  Exclude<Refusal["kind"], "identity_mismatch" | "rejected">,
-  string
-> = {
+const REASONS: Record<Exclude<Refusal["kind"], "rejected">, string> = {
   invalid_request: "Builderlab refused one of your community addresses.",
   forbidden: "This Builderlab account can’t sync communities.",
   limit_reached: "Builderlab can’t save more communities for this account.",
 };
-const reason = (refusal: Exclude<Refusal, { kind: "identity_mismatch" }>) =>
+const reason = (refusal: Refusal) =>
   refusal.kind === "rejected"
     ? `Builderlab refused this request (HTTP ${refusal.status}).`
     : REASONS[refusal.kind];
 const backoff = (failures: number) => Math.min(60_000, 1000 * 2 ** failures);
-/** The record is kept under the destination's key; its own address stays out. */
-const known = ({ revision, removed }: ListedCommunity): KnownRecord => ({
-  revision,
-  removed,
-});
+/** An intent's identity for parking: the newer intent that replaces a parked
+ * one is a different request and goes out. */
+const key = (op: PendingOp) => `${op.removed ? "-" : "+"}${op.url}`;
 
 /** Drains the known-community outbox to the account service and reconciles
  * its list, for one plugin lifetime. It runs only while signed in: each
- * sign-in checks that the account's bound key is this device's identity
- * (never binding it), merges the complete server list, then uploads queued
- * operations one at a time, so a destination never has two in flight and a
- * retry re-sends the identical request under the same operation ID. A newly
- * queued operation, the window coming online or becoming visible runs it
- * again at once; a failure retries at 1·2·4… s, capped at a minute. Only a
- * destination's head is sent; an intent queued behind it waits for the head
- * to settle. The service's refusals are not retried: a mismatched binding
- * stops everything until the next sign-in, as does an account that cannot
- * sync, while a refused address, a full account or another client error parks
- * that one operation. Signing out or disposal abandons in-flight work and
- * leaves the outbox intact. */
+ * sign-in merges the complete server list, then sends each destination's
+ * latest intent one at a time. A newly queued intent, the window coming online
+ * or becoming visible runs it again at once; a failure retries at 1·2·4… s,
+ * capped at a minute, re-sending whatever intent then stands, which is safe
+ * because the service's add and remove are idempotent. The service's refusals
+ * are not retried: an account that cannot sync stops everything until the
+ * next sign-in, while a refused address, a full account or another client
+ * error parks that one intent until it is replaced or the next sign-in.
+ * Signing out or disposal abandons in-flight work and leaves the outbox
+ * intact. */
 export function startKnownCommunitiesSync({
   client,
   session,
@@ -62,9 +52,9 @@ export function startKnownCommunitiesSync({
   let running = false;
   let rerun = false;
   let listed = false;
-  let halted: "needs-binding" | "error" | undefined;
+  let halted = false;
   let error: string | undefined;
-  // Refused operations wait for the next sign-in, counted as pending meanwhile.
+  // Refused intents wait for the next sign-in, counted as pending meanwhile.
   const parked = new Set<string>();
   let outbox = knownCommunities.snapshot().sync.outbox;
   let ready = knownCommunities.snapshot().status === "ready";
@@ -74,15 +64,13 @@ export function startKnownCommunitiesSync({
     const pending = knownCommunities.pending().length;
     const phase: SyncStatus["phase"] = !controller
       ? "signed-out"
-      : halted === "needs-binding"
-        ? "needs-binding"
-        : running
-          ? "syncing"
-          : error
-            ? "error"
-            : pending
-              ? "pending"
-              : "synced";
+      : running
+        ? "syncing"
+        : error
+          ? "error"
+          : pending
+            ? "pending"
+            : "synced";
     knownCommunities.status(
       phase === "error" && error
         ? { phase, pending, error }
@@ -90,11 +78,8 @@ export function startKnownCommunitiesSync({
     );
   };
   const refuse = (refusal: Refusal) => {
-    if (refusal.kind === "identity_mismatch") halted = "needs-binding";
-    else {
-      halted = "error";
-      error = reason(refusal);
-    }
+    halted = true;
+    error = reason(refusal);
   };
   async function run() {
     if (disposed || !controller || halted || running) return;
@@ -104,19 +89,12 @@ export function startKnownCommunitiesSync({
     clearTimeout(timer);
     timer = undefined;
     const { signal } = controller;
-    const viewer = snapshot.viewer;
     running = true;
     rerun = false;
     publish();
     try {
       if (!listed) {
-        const bound = await client.identity(signal);
-        if (bound.kind !== "identity") return refuse(bound);
-        // Binding is Hosted communities' job; here a different or missing
-        // key only means the list belongs to another identity.
-        if (bound.pubkey !== viewer)
-          return refuse({ kind: "identity_mismatch" });
-        const list = await client.list(viewer, signal);
+        const list = await client.list(signal);
         if (list.kind !== "listed") return refuse(list);
         signal.throwIfAborted();
         const current = knownCommunities.snapshot();
@@ -132,44 +110,29 @@ export function startKnownCommunitiesSync({
         listed = true;
       }
       for (;;) {
-        const op = heads(knownCommunities.pending()).find(
-          (entry) => !parked.has(entry.operationId),
-        );
+        const op = knownCommunities
+          .pending()
+          .find((entry) => !parked.has(key(entry)));
         if (!op) break;
-        const result = await client.update(viewer, op, signal);
+        const result = op.removed
+          ? await client.remove(op.url, signal)
+          : await client.add(op.url, signal);
         signal.throwIfAborted();
-        const state = knownCommunities.snapshot().sync;
         if (result.kind === "accepted")
           await knownCommunities.apply(
-            acknowledge(state, op, known(result.record)),
+            acknowledge(knownCommunities.snapshot().sync, op),
           );
-        else if (result.kind === "revision_conflict") {
-          // The service wins: its record is adopted and followed, never
-          // overwritten by re-sending the refused intent.
-          const settled = conflict(
-            state,
-            op,
-            result.record && known(result.record),
-          );
-          await knownCommunities.apply(
-            settled.state,
-            settled.divergence === "removed-elsewhere"
-              ? { remove: [op.url] }
-              : settled.divergence === "added-elsewhere"
-                ? { add: [op.url] }
-                : {},
-          );
-        } else if (
-          result.kind === "identity_mismatch" ||
-          result.kind === "forbidden"
-        )
-          return refuse(result);
+        else if (result.kind === "forbidden") return refuse(result);
         else {
-          parked.add(op.operationId);
+          parked.add(key(op));
           error = reason(result);
         }
       }
       failures = 0;
+      // A parked intent that was replaced or withdrawn no longer counts.
+      const pending = knownCommunities.pending().map(key);
+      for (const entry of parked)
+        if (!pending.includes(entry)) parked.delete(entry);
       if (parked.size === 0) error = undefined;
     } catch (reason) {
       if (
@@ -203,7 +166,7 @@ export function startKnownCommunitiesSync({
     if (signedIn && !controller) {
       controller = new AbortController();
       listed = false;
-      halted = undefined;
+      halted = false;
       error = undefined;
       parked.clear();
       kick();
@@ -227,11 +190,9 @@ export function startKnownCommunitiesSync({
     }
     const previous = outbox;
     outbox = snapshot.sync.outbox;
-    // A queued intent this owner has not seen runs the drain at once; its own
-    // acknowledgements only shrink or rebase the queue.
-    const fresh = outbox.some(
-      (op) => !previous.some((seen) => seen.operationId === op.operationId),
-    );
+    // An intent this owner has not seen runs the drain at once; its own
+    // acknowledgements only shrink the queue.
+    const fresh = outbox.some((op) => !previous.includes(op));
     if (fresh || (ready && !wasReady)) kick();
     publish();
   };

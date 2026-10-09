@@ -122,7 +122,7 @@ it.each([
     name: "a removal synced from another device",
     forget: (current: AppServices, id: string) =>
       current.communities.applySync(
-        { known: {}, outbox: [] },
+        { known: [], outbox: [] },
         { remove: [`wss://${new URL(id).host}`] },
       ),
   },

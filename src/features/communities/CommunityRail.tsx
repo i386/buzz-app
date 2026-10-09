@@ -192,10 +192,7 @@ export function CommunityRail({
   // Only a running sync owner can say why uploads wait. Where none runs (no
   // Builderlab plugin, no configured service, a browser build) the queue is
   // not a promise anyone will keep, so nothing is shown.
-  const unsynced =
-    !!client.syncStatus &&
-    (client.sync.outbox.length > 0 ||
-      client.syncStatus.phase === "needs-binding");
+  const unsynced = !!client.syncStatus && client.sync.outbox.length > 0;
   const reason = client.syncStatus ? syncReason(client.syncStatus) : "";
   const select = (id: string | null) => {
     if (onSelect) onSelect(id);
@@ -359,8 +356,6 @@ export function CommunityRail({
  * the sync owner signed out, signing in is the step. */
 function syncReason(status: SyncStatus) {
   switch (status.phase) {
-    case "needs-binding":
-      return "Link this device’s identity to your Builderlab account in Hosted communities to sync your community list.";
     case "syncing":
       return "Syncing your community list…";
     case "pending":

@@ -1,30 +1,18 @@
-import type {
-  ListedCommunity,
-  PendingOp,
-} from "../../../features/communities/known-communities";
 import type { Host, HostResponse } from "../../../features/host/service";
 import { oauthTarget, type Credential } from "../oauth/browser";
 import type { OAuthSession } from "../oauth/session";
 
-/** The service's refusals. None is retried as sent: a mismatch waits for the
- * account's binding, the rest for a fresh sign-in. A client error the service
- * did not name is `rejected` with its status: the request as sent will not be
- * accepted, unlike a timeout, a rate limit or a server error. */
+/** The service's refusals. None is retried as sent: each waits for a fresh
+ * sign-in. A client error the service did not name is `rejected` with its
+ * status: the request as sent will not be accepted, unlike a timeout, a rate
+ * limit or a server error. */
 export type Refusal =
-  | { kind: "identity_mismatch" }
   | { kind: "invalid_request" }
   | { kind: "forbidden" }
   | { kind: "limit_reached" }
   | { kind: "rejected"; status: number };
-export type IdentityResult = { kind: "identity"; pubkey?: string } | Refusal;
-export type ListResult =
-  | { kind: "listed"; communities: ListedCommunity[] }
-  | Refusal;
-export type UpdateResult =
-  | { kind: "accepted"; record: ListedCommunity }
-  /** Another operation won. The current record comes along when a row exists. */
-  | { kind: "revision_conflict"; record?: ListedCommunity }
-  | Refusal;
+export type ListResult = { kind: "listed"; communities: string[] } | Refusal;
+export type UpdateResult = { kind: "accepted" } | Refusal;
 
 /** Refusals the framework answers in plain text, by status alone. */
 const BY_STATUS: Record<number, Refusal["kind"]> = {
@@ -34,7 +22,6 @@ const BY_STATUS: Record<number, Refusal["kind"]> = {
 };
 type Named = Exclude<Refusal, { kind: "rejected" }>["kind"];
 const REFUSALS: ReadonlySet<string> = new Set<Named>([
-  "identity_mismatch",
   "invalid_request",
   "forbidden",
   "limit_reached",
@@ -56,25 +43,13 @@ function unexpected(status: number): Refusal {
 }
 const invalid = () => new Error("Builderlab returned an invalid response.");
 
-/** One destination as the service holds it. The proto's int64 revision is
- * accepted as a number or a numeric string. */
-function record(value: unknown): ListedCommunity | undefined {
+/** A listed destination's address as the service holds it. */
+function address(value: unknown): string | undefined {
   if (!value || typeof value !== "object") return undefined;
-  const { relay_url, revision, removed } = value as Record<string, unknown>;
-  const parsed =
-    typeof revision === "string" && /^\d+$/.test(revision)
-      ? Number(revision)
-      : revision;
-  if (
-    typeof relay_url !== "string" ||
-    !relay_url.startsWith("wss://") ||
-    typeof parsed !== "number" ||
-    !Number.isSafeInteger(parsed) ||
-    parsed < 0 ||
-    (removed !== undefined && typeof removed !== "boolean")
-  )
-    return undefined;
-  return { url: relay_url, revision: parsed, removed: removed === true };
+  const { relay_url } = value as Record<string, unknown>;
+  return typeof relay_url === "string" && relay_url.startsWith("wss://")
+    ? relay_url
+    : undefined;
 }
 
 /** The known-communities routes under the signed-in Builderlab session. The
@@ -93,15 +68,15 @@ export function createKnownCommunitiesClient(
       throw new DOMException("Builderlab session changed.", "AbortError");
   }
   /** Posts under the current credential and parses the body on every status:
-   * the service answers its refusals in JSON, a 409 with the current record,
-   * while the framework's own refusals are plain text. */
+   * the service answers its refusals in JSON, while the framework's own
+   * refusals are plain text. */
   async function request(path: string, body: unknown, signal: AbortSignal) {
     signal.throwIfAborted();
     const credential = session.credential();
     let response: HostResponse;
     try {
       response = await host.request({
-        url: `${oauthTarget()}/v1/buzz/${path}`,
+        url: `${oauthTarget()}/v1/buzz/known-communities/${path}`,
         method: "POST",
         headers: {
           Accept: "application/json",
@@ -133,89 +108,34 @@ export function createKnownCommunitiesClient(
         : {}) as Record<string, unknown>,
     };
   }
-  const code = (status: number, value: Record<string, unknown>) =>
-    typeof value.error === "string" ? value.error : BY_STATUS[status];
+  const refusal = (status: number, value: Record<string, unknown>): Refusal => {
+    const code =
+      typeof value.error === "string" ? value.error : BY_STATUS[status];
+    return isRefusal(code) ? { kind: code } : unexpected(status);
+  };
+  /** Both edits are idempotent, so a lost answer is retried as sent. */
+  async function send(
+    path: "add" | "remove",
+    url: string,
+    signal: AbortSignal,
+  ): Promise<UpdateResult> {
+    const { status, value } = await request(path, { relay_url: url }, signal);
+    return status === 200 ? { kind: "accepted" } : refusal(status, value);
+  }
   return {
-    /** The key the account is bound to, or none while it has not been bound. */
-    async identity(signal: AbortSignal): Promise<IdentityResult> {
-      const { status, value } = await request(
-        "nostr-identities/current",
-        {},
-        signal,
-      );
-      // This route names its refusals as objects; only the status is shared.
-      if (status === 403) return { kind: "forbidden" };
-      if (status !== 200) return unexpected(status);
-      const identity = value.identity;
-      if (identity === undefined || identity === null)
-        return { kind: "identity" };
-      const hex =
-        identity && typeof identity === "object" && "pubkey_hex" in identity
-          ? identity.pubkey_hex
-          : undefined;
-      if (typeof hex !== "string" || !/^[0-9a-f]{64}$/.test(hex))
+    /** Every destination the account holds, in the service's spelling. */
+    async list(signal: AbortSignal): Promise<ListResult> {
+      const { status, value } = await request("list", {}, signal);
+      if (status !== 200) return refusal(status, value);
+      // Protobuf JSON can omit an empty repeated field.
+      const rows = value.communities ?? [];
+      const communities = Array.isArray(rows) ? rows.map(address) : [];
+      if (!Array.isArray(rows) || communities.includes(undefined))
         throw invalid();
-      return { kind: "identity", pubkey: hex };
+      return { kind: "listed", communities: communities as string[] };
     },
-    async list(pubkey: string, signal: AbortSignal): Promise<ListResult> {
-      const { status, value } = await request(
-        "known-communities/list",
-        { pubkey_hex: pubkey },
-        signal,
-      );
-      if (status === 200) {
-        // Protobuf JSON can omit an empty repeated field.
-        const rows = value.communities ?? [];
-        const communities = Array.isArray(rows) ? rows.map(record) : [];
-        if (!Array.isArray(rows) || communities.includes(undefined))
-          throw invalid();
-        return {
-          kind: "listed",
-          communities: communities as ListedCommunity[],
-        };
-      }
-      const refusal = code(status, value);
-      if (isRefusal(refusal)) return { kind: refusal };
-      return unexpected(status);
-    },
-    /** Sends one queued operation exactly as queued, so a retry replays the
-     * same operation ID with the same payload. */
-    async update(
-      pubkey: string,
-      op: PendingOp,
-      signal: AbortSignal,
-    ): Promise<UpdateResult> {
-      const { status, value } = await request(
-        "known-communities/update",
-        {
-          pubkey_hex: pubkey,
-          relay_url: op.url,
-          expected_revision: op.expectedRevision,
-          operation_id: op.operationId,
-          removed: op.removed,
-        },
-        signal,
-      );
-      const current = record(value.community);
-      if (status === 200) {
-        if (!current) throw invalid();
-        return { kind: "accepted", record: current };
-      }
-      const refusal = code(status, value);
-      if (refusal === "revision_conflict") {
-        if (
-          value.community !== undefined &&
-          value.community !== null &&
-          !current
-        )
-          throw invalid();
-        return current
-          ? { kind: "revision_conflict", record: current }
-          : { kind: "revision_conflict" };
-      }
-      if (isRefusal(refusal)) return { kind: refusal };
-      return unexpected(status);
-    },
+    add: (url: string, signal: AbortSignal) => send("add", url, signal),
+    remove: (url: string, signal: AbortSignal) => send("remove", url, signal),
   };
 }
 export type KnownCommunitiesClient = ReturnType<

@@ -32,8 +32,6 @@ import { stubAvatarBrowserApis } from "../../features/agents/avatar-testing";
 const native = vi.hoisted(() => ({ isTauri: () => true, invoke: vi.fn() }));
 vi.mock("@tauri-apps/api/core", () => native);
 stubAvatarBrowserApis();
-/** The device's identity, which the account must be bound to before its
- * community list follows the sign-in. */
 const viewer = "cd".repeat(32);
 function provideKnownCommunities(root: Context) {
   const knownCommunities: KnownCommunities = {
@@ -41,7 +39,7 @@ function provideKnownCommunities(root: Context) {
       status: "ready",
       relayAvailable: true,
       profile: { name: "", picture: "" },
-      sync: { known: {}, outbox: [] },
+      sync: { known: [], outbox: [] },
       viewer,
       selected: null,
       memberships: [],
@@ -229,8 +227,6 @@ it("shares plugin login with Settings, hosted Agents and community sync, replays
       result = { status: 1 };
     } else if (url.endsWith("/delete-agent")) {
       result = { status: 1 };
-    } else if (url.endsWith("/nostr-identities/current")) {
-      result = { identity: { pubkey_hex: viewer } };
     } else if (url.endsWith("/known-communities/list")) {
       result = { communities: [] };
     } else {
@@ -313,7 +309,7 @@ it("shares plugin login with Settings, hosted Agents and community sync, replays
       id: "native-attempt-id",
     });
     // The signed-in account's community list follows through the same wiring:
-    // the binding is checked, then the complete list is read.
+    // the complete list is read under the session credential.
     await waitFor(() =>
       expect(knownCommunities.status).toHaveBeenLastCalledWith({
         phase: "synced",
@@ -337,16 +333,12 @@ it("shares plugin login with Settings, hosted Agents and community sync, replays
       "private-token",
     );
     expect(sync.map((input) => input.request.url)).toEqual([
-      "https://builderlab.example/api/goose/v1/buzz/nostr-identities/current",
       "https://builderlab.example/api/goose/v1/buzz/known-communities/list",
     ]);
-    expect(
-      sync.every(
-        (input) =>
-          input.request.headers["X-BB-Session-Credential"] === "private-token",
-      ),
-    ).toBe(true);
-    expect(sync[1].request.body).toBe(JSON.stringify({ pubkey_hex: viewer }));
+    expect(sync[0].request.headers["X-BB-Session-Credential"]).toBe(
+      "private-token",
+    );
+    expect(sync[0].request.body).toBe("{}");
     // Both writes happen after Beekeeper has returned the identity. Neither
     // failure may turn a retry into a second backend creation.
     for (const failedKey of [

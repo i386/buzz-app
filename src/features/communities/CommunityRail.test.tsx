@@ -70,7 +70,7 @@ function harness({
     status: "ready",
     relayAvailable: true,
     profile: { name: "", picture: "" },
-    sync: { known: {}, outbox: [] },
+    sync: { known: [], outbox: [] },
     viewer,
     selected,
     memberships: [
@@ -925,13 +925,8 @@ it("leaving the selected community lands on Personal space, and the last one lea
 it("says that the community list is not synced while uploads wait, and why", async () => {
   const user = userEvent.setup();
   const h = harness();
-  const op = {
-    operationId: "0f3d6b1e-6d2a-4f5b-9c1e-2a7d8e9f0a1b",
-    url: "wss://primary.example",
-    expectedRevision: 0,
-    removed: false,
-  };
-  h.update({ sync: { known: {}, outbox: [op] } });
+  const op = { url: "wss://primary.example", removed: false };
+  h.update({ sync: { known: [], outbox: [op] } });
   render(<CommunityRail communities={h.communities} />);
   // No sync owner has reported (no Builderlab plugin, no configured service,
   // or a browser build): the queue is nobody's promise, so nothing is said.
@@ -964,22 +959,19 @@ it("says that the community list is not synced while uploads wait, and why", asy
     h.update({ syncStatus });
     expect(screen.getByRole("status")).toHaveTextContent(reason);
   }
-  // The acknowledged upload leaves nothing to say.
-  h.update({
-    sync: { known: { [op.url]: { revision: 1, removed: false } }, outbox: [] },
-    syncStatus: { phase: "synced", pending: 0 },
-  });
-  expect(screen.queryByRole("status")).toBeNull();
-  // An account bound to another key cannot take this list even with an empty queue.
-  h.update({ syncStatus: { phase: "needs-binding", pending: 0 } });
-  expect(screen.getByRole("status")).toHaveTextContent(
-    "Link this device’s identity to your Builderlab account in Hosted communities",
-  );
   expect(
     screen.getByRole("navigation", { name: "Communities" }),
   ).toContainElement(screen.getByRole("status"));
+  // The acknowledged upload leaves nothing to say, whatever the owner reports.
+  h.update({
+    sync: { known: [op.url], outbox: [] },
+    syncStatus: { phase: "synced", pending: 0 },
+  });
+  expect(screen.queryByRole("status")).toBeNull();
+  h.update({ syncStatus: { phase: "error", pending: 0, error: "Stale" } });
+  expect(screen.queryByRole("status")).toBeNull();
   // The owner withdrawing its report (plugin disabled) withdraws the indicator.
-  h.update({ syncStatus: undefined, sync: { known: {}, outbox: [op] } });
+  h.update({ syncStatus: undefined, sync: { known: [], outbox: [op] } });
   expect(screen.queryByRole("status")).toBeNull();
 });
 
