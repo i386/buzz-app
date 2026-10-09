@@ -53,41 +53,78 @@ it("names watches by what and where they wake", () => {
   );
 });
 
-it("groups watches under their interest, pauses them, and adds timers", async () => {
-  const user = userEvent.setup();
-  const save = vi.fn(async () => {});
+const timer = {
+  type: "timer",
+  interest_id: "release-triage",
+  prompt: "Summarise blockers",
+  enabled: true,
+  interval_secs: 60,
+  armed_at: 100,
+  max_occurrences: 1,
+  expires_at: null,
+} as const;
+
+it("shows the agent's attention without any way to author it", () => {
   render(
     <AttentionPanel
-      agent={agent}
-      save={save}
+      agent={{
+        ...agent,
+        attention: {
+          ...agent.attention,
+          "watch/timer": { slug: "watch/timer", modifiedAt: 1, value: timer },
+        },
+        timers: { "watch/timer": { armedAt: 100, nextDue: 220, used: 1 } },
+      }}
+      save={vi.fn(async () => {})}
       channels={[{ id: "c1", name: "releases" }]}
     />,
   );
   const group = screen.getByRole("region", { name: "Release triage" });
   expect(within(group).getByText("Keep releases moving.")).toBeInTheDocument();
+  expect(within(group).getByText("Messages in #releases")).toBeInTheDocument();
+  expect(within(group).getByText("On")).toBeInTheDocument();
+  expect(within(group).getByText(/Done, ran 1 of 1 time/)).toBeInTheDocument();
+  expect(within(group).getByText("Spent")).toBeInTheDocument();
+  // The agent authors attention; the owner has only the switch.
+  expect(screen.getAllByRole("switch")).toHaveLength(1);
+  expect(screen.queryByRole("button")).not.toBeInTheDocument();
+  expect(screen.queryByRole("textbox")).not.toBeInTheDocument();
+});
 
-  await user.click(
-    within(group).getByRole("switch", { name: "Messages in #releases on" }),
+it("says when a watch's classifier cannot run", () => {
+  const classified: Agent = {
+    ...agent,
+    attention: {
+      ...agent.attention,
+      "watch/questions": {
+        slug: "watch/questions",
+        modifiedAt: 1,
+        value: {
+          type: "event",
+          interest_id: "release-triage",
+          enabled: false,
+          since: 1,
+          channels: ["c1"],
+          kinds: [9],
+          classifier: { questions: { asks: "Is this a question?" } },
+        } as never,
+      },
+    },
+  };
+  const { rerender } = render(
+    <AttentionPanel agent={classified} save={vi.fn(async () => {})} />,
   );
-  expect(save).toHaveBeenLastCalledWith({
-    attention: {
-      "watch/questions": expect.objectContaining({ enabled: false }),
-    },
-  });
-
-  await user.click(within(group).getByRole("button", { name: "Add timer" }));
-  await user.type(screen.getByLabelText("Prompt"), "Summarise blockers");
-  await user.click(screen.getByRole("button", { name: "Add timer" }));
-  expect(save).toHaveBeenLastCalledWith({
-    attention: {
-      "watch/timer": expect.objectContaining({
-        type: "timer",
-        interest_id: "release-triage",
-        prompt: "Summarise blockers",
-        interval_secs: 3600,
-      }),
-    },
-  });
+  expect(screen.getByText(/cannot run on this device/)).toBeInTheDocument();
+  expect(screen.getByText("Paused")).toBeInTheDocument();
+  rerender(
+    <AttentionPanel
+      agent={classified}
+      save={vi.fn(async () => {})}
+      classifier="available"
+    />,
+  );
+  expect(screen.queryByText(/cannot run/)).not.toBeInTheDocument();
+  expect(screen.getByText("has a classifier")).toBeInTheDocument();
 });
 
 it("lets the owner turn the agent's attention off", async () => {
@@ -100,71 +137,25 @@ it("lets the owner turn the agent's attention off", async () => {
   expect(save).toHaveBeenLastCalledWith({ attentionEnabled: false });
 });
 
-it("accepts the curly quotes macOS substitutes in a watch filter", async () => {
-  const user = userEvent.setup();
-  const save = vi.fn(async () => {});
-  render(<AttentionPanel agent={agent} save={save} channels={[]} />);
-  const group = screen.getByRole("region", { name: "Release triage" });
-  await user.click(within(group).getByRole("button", { name: "Add watch" }));
-  await user.click(screen.getByText("Advanced filter"));
-  await user.type(
-    screen.getByLabelText("Filter expression (optional)"),
-    "content == \u201Csecretpassword\u201D",
+it("says when the agent has no attention yet", () => {
+  render(
+    <AttentionPanel
+      agent={{ ...agent, attention: {}, attentionEnabled: false }}
+      save={vi.fn(async () => {})}
+    />,
   );
-  await user.click(screen.getByRole("button", { name: "Add watch" }));
-  expect(save).toHaveBeenLastCalledWith({
-    attention: {
-      "watch/messages": expect.objectContaining({
-        filter: 'content == "secretpassword"',
-      }),
-    },
-  });
+  expect(
+    screen.getByText(/no Interests\. Turn attention on to let it add some/),
+  ).toBeInTheDocument();
 });
 
-it("builds a filter from the simple fields and the advanced expression", async () => {
+it("lets the owner remove an object the agent cannot read", async () => {
   const user = userEvent.setup();
   const save = vi.fn(async () => {});
-  render(<AttentionPanel agent={agent} save={save} channels={[]} />);
-  const group = screen.getByRole("region", { name: "Release triage" });
-  await user.click(within(group).getByRole("button", { name: "Add watch" }));
-  await user.type(screen.getByLabelText("Text is exactly (optional)"), "ship");
-  await user.click(screen.getByText("Advanced filter"));
-  await user.type(
-    screen.getByLabelText("Filter expression (optional)"),
-    'author == "a" || author == "b"',
-  );
-  await user.click(screen.getByRole("button", { name: "Add watch" }));
-  expect(save).toHaveBeenLastCalledWith({
-    attention: {
-      "watch/messages": expect.objectContaining({
-        filter: 'content == "ship" && (author == "a" || author == "b")',
-      }),
-    },
-  });
-});
-
-it("keeps an Interest in use, shows skipped objects, and rearms a spent timer", async () => {
-  const user = userEvent.setup();
-  const save = vi.fn(async () => {});
-  const timer = {
-    type: "timer",
-    interest_id: "release-triage",
-    prompt: "Summarise blockers",
-    enabled: true,
-    interval_secs: 60,
-    armed_at: 100,
-    max_occurrences: 1,
-    expires_at: null,
-  } as const;
   render(
     <AttentionPanel
       agent={{
         ...agent,
-        attention: {
-          ...agent.attention,
-          "watch/timer": { slug: "watch/timer", modifiedAt: 1, value: timer },
-        },
-        timers: { "watch/timer": { armedAt: 100, nextDue: 220, used: 1 } },
         skipped: {
           "watch/bad": {
             slug: "watch/bad",
@@ -175,72 +166,14 @@ it("keeps an Interest in use, shows skipped objects, and rearms a spent timer", 
         },
       }}
       save={save}
-      channels={[]}
     />,
   );
-  await user.click(
-    screen.getByRole("button", { name: "Actions for Release triage" }),
-  );
-  expect(
-    await screen.findByRole("menuitem", {
-      name: "Remove (first remove what uses it)",
-    }),
-  ).toHaveAttribute("aria-disabled", "true");
-  await user.keyboard("{Escape}");
-
   const skipped = screen.getByRole("region", { name: "Skipped" });
   expect(
     within(skipped).getByText("Missing field: interest_id"),
   ).toBeInTheDocument();
-
-  expect(screen.getByText(/Done, ran 1 of 1 time/)).toBeInTheDocument();
-  await user.click(screen.getByRole("button", { name: /^Actions for Every/ }));
-  await user.click(await screen.findByRole("menuitem", { name: "Edit JSON" }));
-  expect(
-    screen.getByText(/A changed interval_secs starts after the next run\./),
-  ).toBeInTheDocument();
-  await user.click(screen.getByRole("button", { name: "Cancel" }));
-  await user.click(screen.getByRole("button", { name: /^Actions for Every/ }));
-  await user.click(await screen.findByRole("menuitem", { name: "Run again" }));
-  expect(save).toHaveBeenLastCalledWith({
-    attention: {
-      "watch/timer": expect.objectContaining({
-        enabled: true,
-        armed_at: expect.any(Number),
-      }),
-    },
-    restart: ["watch/timer"],
-  });
-  const [change] = save.mock.lastCall as unknown as [
-    { attention: Record<string, { armed_at: number }> },
-  ];
-  expect(change.attention["watch/timer"]?.armed_at).toBeGreaterThan(100);
-});
-
-it("never names a new object after a skipped one it would replace", async () => {
-  const user = userEvent.setup();
-  const save = vi.fn(async () => {});
-  render(
-    <AttentionPanel
-      agent={{
-        ...agent,
-        skipped: {
-          "watch/messages": {
-            slug: "watch/messages",
-            value: { type: "event" },
-            modifiedAt: 1,
-            problem: "Missing field: interest_id",
-          },
-        },
-      }}
-      save={save}
-      channels={[]}
-    />,
+  await user.click(
+    within(skipped).getByRole("button", { name: "Remove watch/bad" }),
   );
-  const group = screen.getByRole("region", { name: "Release triage" });
-  await user.click(within(group).getByRole("button", { name: "Add watch" }));
-  await user.click(screen.getByRole("button", { name: "Add watch" }));
-  expect(save).toHaveBeenLastCalledWith({
-    attention: { "watch/messages-2": expect.any(Object) },
-  });
+  expect(save).toHaveBeenLastCalledWith({ attention: { "watch/bad": null } });
 });

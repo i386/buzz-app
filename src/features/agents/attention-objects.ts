@@ -293,7 +293,7 @@ export async function checkedWrite(
   if (record.skipped?.[slug])
     throw new AttentionError(
       "invalid-operation",
-      `${slug} is stored in a form this app cannot read; your owner can fix or remove it`,
+      `${slug} is stored in a form this app cannot read; your owner can remove it on your Attention tab`,
     );
   const prior = record.attention[slug]?.value;
   checkScope(record, slug, value, interest);
