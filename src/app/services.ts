@@ -41,10 +41,10 @@ export function createServices() {
   const shortcutBindings = createShortcutBindings();
   const updates = createUpdates();
   const ctx = new Context();
-  new HostService(ctx);
   const plugins = createPluginManager(ctx, {
     bundled: bundledPlugins,
   });
+  new HostService(ctx, plugins);
   const localAgents = createLocalAgents();
   const localActivity = createLocalAgentActivity();
   const navigationHost = provideNavigation(ctx);
