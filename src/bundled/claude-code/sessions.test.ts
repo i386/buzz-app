@@ -1,10 +1,11 @@
 import { afterEach, expect, it, vi } from "vitest";
 import { fakeSpawn, flush } from "./claude-testing";
-import type { ToolServer } from "./claude";
+import type { Spawn, ToolServer } from "./claude";
 import {
   AgentSessions,
   IDLE_MS,
   localSessions,
+  MAX_LIVE,
   type SavedSession,
   Spare,
   type SessionStore,
@@ -24,6 +25,28 @@ const memoryStore = (): SessionStore & { all: Map<string, SavedSession> } => {
   };
 };
 
+/** The native host's processes, shared by every agent: it allows `capacity`
+ * alive at once, counting one from when it is asked until it has exited. */
+function host(capacity = Number.POSITIVE_INFINITY, known?: Set<string>) {
+  const fake = fakeSpawn(known);
+  const alive = new Set<object>();
+  const counts = { spawns: 0, peak: 0 };
+  const spawn: Spawn = (id, spawnOptions) => {
+    if (alive.size >= capacity)
+      return Promise.reject(new Error("Too many processes are running"));
+    const slot = {};
+    alive.add(slot);
+    counts.spawns++;
+    counts.peak = Math.max(counts.peak, alive.size);
+    const process = fake.spawn(id, spawnOptions);
+    void process
+      .then((started) => started.exited)
+      .finally(() => alive.delete(slot));
+    return process;
+  };
+  return { ...fake, spawn, alive, counts };
+}
+
 function sessions(
   options: Partial<{
     known: Set<string>;
@@ -34,14 +57,17 @@ function sessions(
     launched: Promise<void>;
     /** The shared spare its new conversations look for. */
     spare: Spare;
+    /** The host its processes run on; by default its own, with no limit. */
+    host: ReturnType<typeof host>;
     tools: ToolServer;
+    now: () => number;
   }> = {},
 ) {
-  const fake = fakeSpawn(options.known);
+  const fake = options.host ?? host(undefined, options.known);
   const store = options.store ?? memoryStore();
   let model = "opus";
   let ids = 0;
-  const spawn = (id: string, spawnOptions?: object) => {
+  const spawn: Spawn = (id, spawnOptions) => {
     // The fake records each process as the call begins.
     const process = fake.spawn(id, spawnOptions);
     const started = fake.processes.at(-1);
@@ -64,6 +90,7 @@ function sessions(
     },
     fingerprint: () => model,
     newId: () => `new-${++ids}`,
+    ...(options.now ? { now: options.now } : {}),
   });
   const claudes = () =>
     fake.processes.filter((process) => process.id === "claude");
@@ -71,6 +98,7 @@ function sessions(
     pool,
     store,
     spawn,
+    host: fake,
     claudes,
     live: () => claudes().filter((process) => !process.killed),
     setModel: (next: string) => {
@@ -322,12 +350,12 @@ it("runs a turn with the model and effort it was delivered with, starting over i
   expect(fresh?.efforts).toEqual(["low", "high"]);
 });
 
-it("runs any number of conversations at once", async () => {
+it("runs up to MAX_LIVE conversations at once", async () => {
   const { pool, live } = sessions({ hold: true });
-  for (let index = 0; index < 12; index++)
+  for (let index = 0; index < MAX_LIVE; index++)
     void pool.deliver(`c/${index}`, "hi", index);
   await flush();
-  expect(live()).toHaveLength(12);
+  expect(live()).toHaveLength(MAX_LIVE);
   expect(pool.snapshot().every((session) => session.busy)).toBe(true);
 });
 
@@ -391,6 +419,118 @@ it("keeps a one-off turn's entry until its process has exited", async () => {
   expect(pool.snapshot().map((session) => session.key)).not.toContain(
     "timer/slow #1",
   );
+});
+
+it("stops the least recently used conversation to stay within its process limit", async () => {
+  let clock = 0;
+  const { pool, store, live, claudes } = sessions({ now: () => ++clock });
+  for (let index = 0; index < MAX_LIVE; index++)
+    await pool.deliver(`c/${index}`, "hi", index);
+  // Used again: the oldest conversation is no longer the least recently used.
+  await pool.deliver("c/0", "again", MAX_LIVE);
+  await pool.deliver("c/new", "hi", MAX_LIVE + 1);
+  await flush();
+  expect(live()).toHaveLength(MAX_LIVE);
+  const keys = pool.snapshot().map((session) => session.key);
+  expect(keys).not.toContain("c/1");
+  expect(keys).toEqual(expect.arrayContaining(["c/0", "c/new"]));
+  // The stopped conversation kept its session, and resumes from it.
+  expect(store.get("c/1")).toMatchObject({ id: "new-2" });
+  await pool.deliver("c/1", "back", MAX_LIVE + 2);
+  expect(claudes().at(-1)?.options.args).toEqual(
+    expect.arrayContaining(["--resume", "new-2"]),
+  );
+  expect(claudes().at(-1)?.prompts).toEqual(["back"]);
+  expect(live()).toHaveLength(MAX_LIVE);
+});
+
+it("says it is busy rather than start a process past its limit", async () => {
+  // A host with no room past the limit: a start would fail, not be refused.
+  const full = host(MAX_LIVE);
+  const { pool, live } = sessions({ hold: true, host: full });
+  for (let index = 0; index < MAX_LIVE; index++)
+    void pool.deliver(`c/${index}`, "hi", index);
+  await flush();
+  expect(live()).toHaveLength(MAX_LIVE);
+  await expect(pool.deliver("c/extra", "hi", 9)).resolves.toEqual({
+    ok: false,
+    error: `Claude is already working in ${MAX_LIVE} conversations; try again when one finishes`,
+  });
+  expect(full.counts.spawns).toBe(MAX_LIVE);
+  expect(live()).toHaveLength(MAX_LIVE);
+  expect(pool.snapshot().map((session) => session.key)).not.toContain(
+    "c/extra",
+  );
+});
+
+it("counts conversations still starting toward its limit", async () => {
+  let release!: () => void;
+  const launched = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const { pool, live } = sessions({ hold: true, launched });
+  const results = Array.from({ length: MAX_LIVE + 1 }, (_, index) =>
+    pool.deliver(`c/${index}`, "hi", index),
+  );
+  await expect(results[MAX_LIVE]).resolves.toMatchObject({ ok: false });
+  release();
+  await flush();
+  expect(live()).toHaveLength(MAX_LIVE);
+});
+
+it("stops a finished conversation for a new one before its idle time is up", async () => {
+  vi.useFakeTimers();
+  const { pool, store, live } = sessions();
+  await pool.deliver("c/stale", "hi", 1);
+  // Past its idle time: stopped by its own timer, not for another.
+  vi.advanceTimersByTime(IDLE_MS + 1);
+  expect(pool.snapshot()).toEqual([]);
+  for (let index = 0; index < MAX_LIVE; index++) {
+    vi.advanceTimersByTime(60_000);
+    await pool.deliver(`c/${index}`, "hi", index + 2);
+  }
+  vi.advanceTimersByTime(60_000);
+  await pool.deliver("c/new", "hi", MAX_LIVE + 2);
+  const keys = pool.snapshot().map((session) => session.key);
+  expect(keys).not.toContain("c/0");
+  expect(keys).toContain("c/new");
+  expect(live()).toHaveLength(MAX_LIVE);
+  expect(store.get("c/0")).toBeDefined();
+});
+
+it("keeps new threads from several agents within the host's process limit", async () => {
+  // Three thread-scoped agents that answer anyone, or watch an active
+  // channel, each addressed in two new threads a minute for 14 minutes: well
+  // under the rate limit, every turn finished at once, and no conversation
+  // idle long enough to stop on its own. One host serves all three, with the
+  // room the native host has for every plugin's processes.
+  const shared = host(64);
+  const spare = new Spare(shared.spawn, async () => ({}));
+  const agents = Array.from({ length: 3 }, () =>
+    sessions({ host: shared, spare }),
+  );
+  spare.warm({ cwd: "/work", model: "opus" });
+  await flush();
+  vi.useFakeTimers();
+  const MINUTES = 14;
+  for (let minute = 0; minute < MINUTES; minute++) {
+    for (const [index, agent] of agents.entries())
+      for (const thread of [0, 1])
+        await expect(
+          agent.pool.deliver(
+            `channel/root-${minute}-${thread}`,
+            `thread ${minute}-${thread}`,
+            minute * 10 + index,
+          ),
+        ).resolves.toEqual({ ok: true });
+    vi.advanceTimersByTime(60_000);
+  }
+  // More processes were started than the host keeps alive at once, so without
+  // stopping conversations the host would have refused the later starts.
+  expect(shared.counts.spawns).toBeGreaterThan(64);
+  expect(shared.counts.peak).toBeLessThanOrEqual(agents.length * MAX_LIVE + 1);
+  for (const agent of agents)
+    expect(agent.pool.snapshot()).toHaveLength(MAX_LIVE);
 });
 
 it("starts again with settings saved while a conversation's process started", async () => {
