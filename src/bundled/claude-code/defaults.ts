@@ -7,7 +7,7 @@ export type ClaudeProviderDefaults = Readonly<{
 export type ResolvedConfig = Config & Readonly<{ disableAutoMemory: boolean }>;
 const NATIVE_DEFAULTS: ClaudeProviderDefaults = Object.freeze({
   model: "",
-  autoMemory: false,
+  autoMemory: true,
 });
 const STORAGE_KEY = "buzz.claude-code.provider-defaults.v1";
 const MODELS = new Set(["", "opus", "sonnet", "haiku"]);
@@ -59,7 +59,7 @@ export class ClaudeDefaults {
       )
         return Object.freeze({
           model: (value as { model: string }).model,
-          autoMemory: (value as { autoMemory?: unknown }).autoMemory === true,
+          autoMemory: (value as { autoMemory?: unknown }).autoMemory !== false,
         });
     } catch {
       // Malformed local preferences preserve Claude Code's native default.
