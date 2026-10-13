@@ -91,6 +91,14 @@
       "plugins": ["./tests/browser/fixed-sleeps.grit"]
     },
     {
+      "includes": [
+        "tests/browser/**",
+        "src/**",
+        "!tests/browser/playwright-test.mjs"
+      ],
+      "plugins": ["./tests/browser/playwright-test.grit"]
+    },
+    {
       "includes": ["src/shared/design-system/icons/**"],
       "linter": {
         "rules": {

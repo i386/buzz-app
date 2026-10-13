@@ -1,0 +1,15 @@
+language js
+
+// Browser journeys take `test` from playwright-test.mjs, whose teardown stops
+// routes still in flight before Playwright closes the context.
+`import { $names } from $source` where {
+  $source <: or {
+    `"@playwright/test"`,
+    `'@playwright/test'`
+  },
+  $names <: contains or {
+    `test`,
+    `test as $_`
+  },
+  register_diagnostic(span=$names, message="Import test from tests/browser/playwright-test.mjs.", severity="error")
+}

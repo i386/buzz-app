@@ -1,4 +1,4 @@
-import { expect, test } from "@playwright/test";
+import { expect, test } from "./playwright-test.mjs";
 import { preview } from "vite";
 import { build } from "vite";
 import react from "@vitejs/plugin-react";

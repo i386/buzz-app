@@ -1,4 +1,4 @@
-import { test, expect } from "@playwright/test";
+import { test, expect } from "./playwright-test.mjs";
 import react from "@vitejs/plugin-react";
 import { crc32, deflateSync } from "node:zlib";
 import { createServer } from "./vite-server.mjs";

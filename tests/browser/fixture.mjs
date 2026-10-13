@@ -1,5 +1,5 @@
 import { fixtureRelayUrl, fixtureAliases } from "../relay-config.ts";
-import { test as base, expect } from "@playwright/test";
+import { test as base, expect } from "./playwright-test.mjs";
 import { preview } from "vite";
 import {
   finalizeEvent,

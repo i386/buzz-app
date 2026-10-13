@@ -181,6 +181,10 @@ Tests must control the ordering they assert, not depend on runner speed.
   immediate snapshots of asynchronous effects (lint rejects `waitForTimeout`). Negative assertions need a
   completion barrier proving the work that could violate them has finished.
   Scope selectors to the semantic content being tested, not unrelated UI.
+- Browser journeys import `test` from `tests/browser/playwright-test.mjs`
+  (lint enforces it). Its teardown stops routes that are still in flight
+  before the context closes, so a route handler that a finished test never
+  waited for cannot fail that test.
 - When elapsed time is the behavior under test (expiry, debounce, retry), use a
   controlled clock and assert before/after the boundary. Keep real clocks for
   performance measurements; preserve their documented isolation and budgets.
