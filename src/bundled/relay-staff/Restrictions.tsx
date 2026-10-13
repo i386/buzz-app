@@ -34,7 +34,7 @@ export function Restrictions({ communityHost }: { communityHost: string }) {
   // A failed later page retries that page; a failed first load starts over.
   const retry = useRetry(
     pages.failure,
-    pages.loading,
+    pages.settled,
     pages.next ? pages.more : pages.restart,
   );
   const [lifting, setLifting] = useState<Lift | null>(null);

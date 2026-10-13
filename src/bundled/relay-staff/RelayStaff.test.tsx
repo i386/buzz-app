@@ -32,6 +32,7 @@ import { foldProfiles } from "../../features/relay/profiles";
 import { StrictMode, useState, useSyncExternalStore } from "react";
 import { createSession, SessionProvider, useWrite } from "./session";
 import { createStaff, type Staff, type StaffTarget } from "./staff";
+import { useRetry } from "./ui";
 
 const signer = "a".repeat(64);
 const member = "b".repeat(64);
@@ -700,6 +701,9 @@ it("a failed attachment preview recovers with Retry in place", async () => {
     expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
     expect(attempts).toBe(2);
   } finally {
+    await act(async () =>
+      release?.(fail({ message: "released" }) as StaffOutcome<Uint8Array>),
+    );
     backend.attachment = original;
   }
 });
@@ -766,17 +770,17 @@ it("Retry on a failed later directory page resends that cursor in place", async 
   const retry = await screen.findByRole("button", { name: "Retry" });
   retry.focus();
   fireEvent.click(retry);
-  await waitFor(() => expect(release).toBeTypeOf("function"));
-  expect(screen.getByRole("button", { name: "Retry" })).toBe(retry);
-  expect(retry).toHaveFocus();
-  await act(async () =>
-    release(
-      ok({
-        items: [{ id: "b", host: "b.example.com", icon: null }],
-        nextCursor: null,
-      }),
-    ),
-  );
+  const page = ok({
+    items: [{ id: "b", host: "b.example.com", icon: null }],
+    nextCursor: null,
+  });
+  try {
+    await waitFor(() => expect(release).toBeTypeOf("function"));
+    expect(screen.getByRole("button", { name: "Retry" })).toBe(retry);
+    expect(retry).toHaveFocus();
+  } finally {
+    await act(async () => release?.(page));
+  }
   const cursors = sent("listCommunities")
     .map((r) => r as { q?: string; cursor?: string })
     .filter((r) => !r.q)
@@ -2909,4 +2913,137 @@ it("direct action validation errors sit on their fields and clear when corrected
   await waitFor(() => expect(target).toHaveAttribute("aria-invalid", "true"));
   expect(target).toHaveAccessibleDescription(/64-hex event id/);
   expect(sent("directAction")).toHaveLength(0);
+});
+
+/** First lookup on `route` fails; the held Retry fails again, then recovers. */
+async function heldLookupRetry(
+  route: StaffRequest["route"],
+  open: () => Promise<void>,
+  recovered: string,
+) {
+  const answer = routes[route] as Handler;
+  routes[route] = () => fail({ message: "Lookup failed" });
+  mount();
+  await reopenActions();
+  await open();
+  await screen.findByText("Lookup failed");
+  const again = holdNext(route, answer);
+  const retry = screen.getByRole("button", { name: "Retry" });
+  retry.focus();
+  fireEvent.click(retry);
+  try {
+    await again.started();
+    expect(screen.getByRole("button", { name: "Retry" })).toBe(retry);
+    expect(retry).toHaveFocus();
+    expect(screen.getByRole("button", { name: "Review" })).toBeDisabled();
+  } finally {
+    await again.release(fail({ message: "Still failing" }));
+  }
+  await screen.findByText("Still failing");
+  expect(screen.getByRole("button", { name: "Retry" })).toBe(retry);
+  expect(retry).toHaveFocus();
+  fireEvent.click(retry);
+  expect(await screen.findByText(recovered)).toBeVisible();
+  expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
+}
+
+const eventFound = () =>
+  ok({
+    id: "e".repeat(64),
+    authorPubkey: member,
+    kind: 9,
+    content: "the message",
+    createdAt: "2026-01-01T00:00:00Z",
+    deletedAt: null,
+    channelId: null,
+  });
+async function typeEventId() {
+  fireEvent.click(await screen.findByRole("radio", { name: "Delete message" }));
+  fireEvent.change(screen.getByLabelText("Event id"), {
+    target: { value: "e".repeat(64) },
+  });
+}
+
+it("a held member lookup Retry keeps the same focused button through another failure", async () => {
+  await heldLookupRetry("getMember", pickBob, "Role: member");
+});
+
+it("a held event lookup Retry keeps the same focused button through another failure", async () => {
+  routes.getEvent = eventFound;
+  await heldLookupRetry("getEvent", typeEventId, "the message");
+});
+
+it.each([
+  ["member lookup", "getMember", pickBob, "Role: member", "Retry"],
+  ["event lookup", "getEvent", typeEventId, "the message", "Retry"],
+  [
+    "member search",
+    "searchMembers",
+    async () => {
+      fireEvent.change(await screen.findByLabelText("Member"), {
+        target: { value: "Bob" },
+      });
+    },
+    "Bob",
+    "Retry search",
+  ],
+] as const)(
+  "an unsupported %s offers Retry and recovers with the same input",
+  async (_, route, open, recovered, button) => {
+    if (route === "getEvent") routes.getEvent = eventFound;
+    const answer = routes[route] as Handler;
+    let missing = true;
+    routes[route] = (request) => (missing ? routeMissing : answer(request));
+    mount();
+    await reopenActions();
+    await open();
+    const retry = await screen.findByRole("button", { name: button });
+    expect(screen.getAllByText(/doesn't support/).length).toBeGreaterThan(0);
+    // A search has no member yet, so only lookups block Review.
+    if (route !== "searchMembers")
+      expect(screen.getByRole("button", { name: "Review" })).toBeDisabled();
+    missing = false;
+    fireEvent.click(retry);
+    expect(
+      await screen.findByText(recovered, { exact: route !== "searchMembers" }),
+    ).toBeVisible();
+    expect(screen.queryByRole("button", { name: button })).toBeNull();
+    expect(sent(route)).toHaveLength(2);
+    expect(sent(route)[1]).toEqual(sent(route)[0]);
+  },
+);
+
+it("Retry ends busy when its attempt settles the same failure before any loading render", async () => {
+  const same = (fail({ message: "Same failure" }) as { failure: StaffFailure })
+    .failure;
+  function Harness() {
+    const [settled, setSettled] = useState(1);
+    // The rerun settles at once with the identical failure: no loading state.
+    const retry = useRetry(same, settled, () => setSettled((n) => n + 1));
+    return (
+      <button type="button" aria-busy={retry.retrying} onClick={retry.retry}>
+        Retry
+      </button>
+    );
+  }
+  render(<Harness />);
+  const retry = screen.getByRole("button", { name: "Retry" });
+  fireEvent.click(retry);
+  expect(retry).toHaveAttribute("aria-busy", "false");
+});
+
+it("a fresh form after a successful action shows no field errors until Review", async () => {
+  routes.directAction = () =>
+    ok({ state: "succeeded", actionId: "done", replayed: false });
+  mount();
+  await openCommunityActions();
+  fireEvent.click(await screen.findByRole("button", { name: "Confirm" }));
+  const memberField = await screen.findByLabelText("Member");
+  await waitFor(() => expect(sent("directAction")).toHaveLength(1));
+  expect(memberField).not.toHaveAttribute("aria-invalid");
+  expect(memberField).not.toHaveAccessibleDescription(/Choose a member/);
+  fireEvent.click(screen.getByRole("button", { name: "Review" }));
+  await waitFor(() =>
+    expect(memberField).toHaveAttribute("aria-invalid", "true"),
+  );
 });

@@ -89,6 +89,9 @@ export type Read<T> =
   | { state: "ok"; value: T }
   | { state: "failed"; failure: StaffFailure };
 
+/** A read plus how many outcomes it has settled, so Retry can tell when its attempt ended. */
+export type Tracked<T> = Read<T> & { settled: number };
+
 /**
  * One read, tied to the session and `deps`. A response that arrives after the
  * session, community or query changed (or after unmount) is dropped.
@@ -98,21 +101,22 @@ export function useRead<R extends StaffRequest>(
   deps: DependencyList,
 ) {
   const { request: send } = useSession();
-  const [read, setRead] = useState<Read<StaffResults[R["route"]]>>({
+  const [read, setRead] = useState<Tracked<StaffResults[R["route"]]>>({
     state: "loading",
+    settled: 0,
   });
   const [attempt, setAttempt] = useState(0);
   // biome-ignore lint/correctness/useExhaustiveDependencies: `deps` describe `request`
   useEffect(() => {
     if (!request) return;
     let current = true;
-    setRead({ state: "loading" });
+    setRead(({ settled }) => ({ state: "loading", settled }));
     void send(request).then((outcome) => {
       if (!current) return;
-      setRead(
+      setRead(({ settled }) =>
         outcome.ok
-          ? { state: "ok", value: outcome.value }
-          : { state: "failed", failure: outcome.failure },
+          ? { state: "ok", value: outcome.value, settled: settled + 1 }
+          : { state: "failed", failure: outcome.failure, settled: settled + 1 },
       );
     });
     return () => {
@@ -185,6 +189,8 @@ type Pages<R extends Paged> = {
   next: string | null;
   loading: boolean;
   failure: StaffFailure | null;
+  /** Outcomes applied so far; see `Tracked`. */
+  settled: number;
 };
 
 /**
@@ -197,7 +203,11 @@ export function usePages<R extends Paged>(
 ) {
   const { request: send } = useSession();
   const empty = { items: [], next: null, failure: null };
-  const [pages, setPages] = useState<Pages<R>>({ ...empty, loading: true });
+  const [pages, setPages] = useState<Pages<R>>({
+    ...empty,
+    loading: true,
+    settled: 0,
+  });
   const generation = useRef(0);
   const pageRef = useRef(page);
   pageRef.current = page;
@@ -217,14 +227,24 @@ export function usePages<R extends Paged>(
             next: outcome.value.nextCursor,
             loading: false,
             failure: null,
+            settled: current.settled + 1,
           }
-        : { ...current, loading: false, failure: outcome.failure },
+        : {
+            ...current,
+            loading: false,
+            failure: outcome.failure,
+            settled: current.settled + 1,
+          },
     );
   };
   // biome-ignore lint/correctness/useExhaustiveDependencies: `deps` describe `page`
   useEffect(() => {
     const at = ++generation.current;
-    setPages({ ...empty, loading: !!pageRef.current });
+    setPages(({ settled }) => ({
+      ...empty,
+      loading: !!pageRef.current,
+      settled,
+    }));
     void load(undefined, at);
     return () => {
       generation.current++;

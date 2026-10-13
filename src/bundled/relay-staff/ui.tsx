@@ -8,7 +8,7 @@ import {
   unsupported,
   type StaffFailure,
 } from "../../features/relay-staff/contract";
-import { describe, type Read } from "./session";
+import { describe, type Tracked } from "./session";
 
 export const UNSUPPORTED_BROWSING =
   "This relay doesn't support community browsing yet.";
@@ -106,28 +106,26 @@ export function Failure({
 
 /**
  * Retry for a failed read. While the retry runs, the failure stays on screen
- * with its Retry busy, so the focused control stays mounted; a new outcome
- * replaces it.
+ * with its Retry busy, so the focused control stays mounted. The attempt is
+ * over once the read settles another outcome (`settled` moves), whatever it
+ * is and however fast it came back.
  */
 export function useRetry(
   failure: StaffFailure | null,
-  loading: boolean,
+  settled: number,
   run: () => void,
 ) {
   const [kept, setKept] = useState<{
     failure: StaffFailure;
-    started: boolean;
+    settled: number;
   } | null>(null);
-  if (kept && loading && !kept.started) setKept({ ...kept, started: true });
-  // The attempt is over once its read has loaded and settled, even if it
-  // settled on the very same failure object.
-  if (kept && !loading && (kept.started || failure !== kept.failure))
-    setKept(null);
+  if (kept && settled !== kept.settled) setKept(null);
+  const live = kept && settled === kept.settled ? kept : null;
   return {
-    failure: failure ?? kept?.failure ?? null,
-    retrying: kept !== null,
+    failure: failure ?? live?.failure ?? null,
+    retrying: live !== null,
     retry: () => {
-      if (failure) setKept({ failure, started: false });
+      if (failure) setKept({ failure, settled });
       run();
     },
   };
@@ -140,7 +138,7 @@ export function Loaded<T>({
   unsupportedText,
   children,
 }: {
-  read: Read<T>;
+  read: Tracked<T>;
   /** The read's reload, offered as Retry beside a failure. */
   onRetry?: (() => void) | undefined;
   unsupportedText?: string | undefined;
@@ -148,7 +146,7 @@ export function Loaded<T>({
 }) {
   const retry = useRetry(
     read.state === "failed" ? read.failure : null,
-    read.state === "loading",
+    read.settled,
     () => onRetry?.(),
   );
   if (retry.failure)

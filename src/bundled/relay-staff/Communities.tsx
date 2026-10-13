@@ -61,7 +61,7 @@ export function Communities({
   // A failed later page retries that page; a failed first load starts over.
   const retry = useRetry(
     pages.failure,
-    pages.loading,
+    pages.settled,
     pages.next ? pages.more : pages.restart,
   );
   const [pinnedRead, reloadPinned] = useRead(
@@ -75,7 +75,7 @@ export function Communities({
   const shownPinned = pinned?.host.toLowerCase().startsWith(q) ? pinned : null;
   const pinnedRetry = useRetry(
     pinnedRead.state === "failed" ? pinnedRead.failure : null,
-    pinnedRead.state === "loading",
+    pinnedRead.settled,
     reloadPinned,
   );
 

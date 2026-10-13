@@ -24,7 +24,14 @@ import {
 import { npubEncode } from "nostr-tools/nip19";
 import { PeopleScope, Person, PersonName, usePeople } from "./people";
 import { reasonAudience, SECRET_REASON } from "./Reports";
-import { describe, useRead, useSession, useWrite, type Read } from "./session";
+import {
+  describe,
+  useRead,
+  useSession,
+  useWrite,
+  type Read,
+  type Tracked,
+} from "./session";
 import {
   absoluteTime,
   CommunityBadge,
@@ -78,6 +85,8 @@ type Draft = {
   member: Member | null;
   secs: string;
   reason: string;
+  /** Review was tried, so field errors show and track the input. */
+  checked: boolean;
 };
 const emptyDraft = (host: string): Draft => ({
   host,
@@ -86,6 +95,7 @@ const emptyDraft = (host: string): Draft => ({
   member: null,
   secs: "",
   reason: "",
+  checked: false,
 });
 
 /** A reviewed action. Its intent, including `requestId`, never changes. */
@@ -206,23 +216,20 @@ function validate(draft: Draft, eventId: string | null): Problems {
   };
 }
 
-/** Whether rerunning a failed lookup could change its answer. */
-const retryable = (failure: StaffFailure) =>
-  !unsupported(failure) &&
-  failure.code !== "event_not_found" &&
-  failure.code !== "not_found";
-
-/** A failed lookup's message, with Retry beside it when that could help. */
+/**
+ * A failed lookup's message with Retry beside it. Mounted for the whole life
+ * of one lookup target, so the Retry keeps focus while its attempt runs.
+ */
 function LookupFailure({
   read,
   reload,
 }: {
-  read: Read<unknown>;
+  read: Tracked<unknown>;
   reload(): void;
 }) {
   const retry = useRetry(
     read.state === "failed" ? read.failure : null,
-    read.state === "loading",
+    read.settled,
     reload,
   );
   if (!retry.failure) return null;
@@ -231,11 +238,9 @@ function LookupFailure({
       <p className="text-body-sm text-danger" role="alert">
         {lookupFailure(retry.failure)}
       </p>
-      {retryable(retry.failure) && (
-        <Button size="sm" loading={retry.retrying} onClick={retry.retry}>
-          Retry
-        </Button>
-      )}
+      <Button size="sm" loading={retry.retrying} onClick={retry.retry}>
+        Retry
+      </Button>
     </div>
   );
 }
@@ -274,7 +279,7 @@ function useLookup<R extends StaffRequest>(
   key: string | null,
 ) {
   const [read, reload] = useRead(request, [key]);
-  return request ? { read, reload } : null;
+  return request && key ? { read, reload, key } : null;
 }
 
 export function ActionsSection({ community }: { community: CommunityRef }) {
@@ -283,8 +288,6 @@ export function ActionsSection({ community }: { community: CommunityRef }) {
   const host = community.host;
   const draft = c.draftFor(host);
   const set = (patch: Partial<Draft>) => c.setDraft({ ...draft, ...patch });
-  /** Field errors show once Review is first tried, then track the input. */
-  const [checked, setChecked] = useState(false);
 
   useEffect(() => {
     c.shownHost.current = host;
@@ -311,15 +314,11 @@ export function ActionsSection({ community }: { community: CommunityRef }) {
   const preview = previewLookup?.read ?? null;
   const active = draft.action === "delete" ? previewLookup : memberLookup;
   const lookup: Read<unknown> | null = active?.read ?? null;
-  const problems = checked ? validate(draft, eventId) : {};
+  const problems = draft.checked ? validate(draft, eventId) : {};
   const blocked =
-    lookup?.state === "failed"
-      ? lookupFailure(lookup.failure)
-      : draft.action !== "delete" &&
-          member?.state === "ok" &&
-          member.value.isStaff
-        ? STAFF_COPY
-        : null;
+    draft.action !== "delete" && member?.state === "ok" && member.value.isStaff
+      ? STAFF_COPY
+      : null;
 
   if (c.frozen && c.frozen.intent.communityHost !== host)
     return (
@@ -334,7 +333,7 @@ export function ActionsSection({ community }: { community: CommunityRef }) {
 
   const locked = !!c.frozen || c.submitting || !canMutate;
   const review = () => {
-    setChecked(true);
+    set({ checked: true });
     if (Object.keys(validate(draft, eventId)).length > 0) return;
     if (lookup?.state !== "ok" || blocked) return;
     const target = eventId ?? memberKey ?? "";
@@ -401,16 +400,18 @@ export function ActionsSection({ community }: { community: CommunityRef }) {
       {!c.frozen && preview?.state === "ok" && draft.action === "delete" && (
         <EventPreview event={preview.value} />
       )}
-      {!c.frozen &&
-        (lookup?.state === "failed" && active ? (
-          <LookupFailure read={active.read} reload={active.reload} />
-        ) : (
-          blocked && (
-            <p className="text-body-sm text-danger" role="alert">
-              {blocked}
-            </p>
-          )
-        ))}
+      {!c.frozen && active && (
+        <LookupFailure
+          key={active.key}
+          read={active.read}
+          reload={active.reload}
+        />
+      )}
+      {!c.frozen && blocked && (
+        <p className="text-body-sm text-danger" role="alert">
+          {blocked}
+        </p>
+      )}
       {draft.action === "timeout" && (
         <Field label="Duration (seconds)" error={problems.secs}>
           <Input
@@ -446,7 +447,7 @@ export function ActionsSection({ community }: { community: CommunityRef }) {
             disabled={
               !canMutate ||
               c.submitting ||
-              lookup?.state === "loading" ||
+              (lookup !== null && lookup.state !== "ok") ||
               blocked !== null
             }
             onClick={review}
@@ -574,7 +575,7 @@ export function MemberPicker({
   const failed = searching && results.state === "failed";
   const retry = useRetry(
     failed ? results.failure : null,
-    searching && results.state === "loading",
+    results.settled,
     reload,
   );
 
@@ -651,7 +652,7 @@ export function MemberPicker({
           </Combobox.List>
         </Combobox.Popup>
       </Combobox.Root>
-      {searching && retry.failure && retryable(retry.failure) && (
+      {searching && retry.failure && (
         <div>
           <Button size="sm" loading={retry.retrying} onClick={retry.retry}>
             Retry search
