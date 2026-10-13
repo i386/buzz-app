@@ -427,10 +427,6 @@
 .conversationMessage[data-bodyless] {
   align-items: center;
 }
-html[data-keyboard-navigation] .conversationMessage:focus-visible {
-  outline: 2px solid var(--text-standard);
-  outline-offset: 2px;
-}
 .messageMarker {
   position: relative;
   z-index: 1;
@@ -469,23 +465,29 @@ html[data-keyboard-navigation] .conversationMessage:focus-visible {
   min-width: 0;
 }
 /* The linked comment keeps GitHub's anchored wash while its link is current.
-   The wash extends into the timeline's gaps without changing the row's box;
-   the scroll margin keeps it and the focus ring clear of the scroller edge. */
+   Like the channel feed's return wash, it paints the whole row and extends
+   into the timeline's inset without changing the row's box; the focus ring
+   draws on the same box, and the scroll margin keeps both clear of the
+   scroller edge. */
 .conversationMessage[data-anchored] {
+  position: relative;
+  isolation: isolate;
   scroll-margin-block: var(--space-3);
 }
-.conversationMessage[data-anchored] > .messageContent {
-  isolation: isolate;
-}
-.conversationMessage[data-anchored] > .messageContent::before {
+.conversationMessage[data-anchored]::before {
   content: "";
   position: absolute;
-  inset: calc(-1 * var(--space-2));
+  inset-block: 0;
+  inset-inline: calc(-1 * var(--space-2));
   z-index: -1;
   border-radius: var(--radius-row);
   background: var(--affordance-accent);
-  box-shadow: inset 0 0 0 1px var(--border-accent);
   pointer-events: none;
+}
+html[data-keyboard-navigation]
+  .conversationMessage[data-anchored]:focus-visible::before {
+  outline: 2px solid var(--border-focus);
+  outline-offset: 2px;
 }
 .messageHeader {
   position: relative;
