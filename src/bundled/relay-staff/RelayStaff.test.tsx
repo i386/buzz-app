@@ -2060,10 +2060,10 @@ it("opening Settings again re-probes, and a demotion removes the entries", async
   const release = staff.ensure();
   expect(await settingsTitles(staff)).toContain("Staff");
   release();
-  // Closed Settings sends nothing, even for another identity.
+  // Closed Settings sends nothing, even for another identity. A check would
+  // start synchronously inside refresh(), so no wait is needed.
   selection.signer = member;
   staff.refresh();
-  await new Promise((resolve) => setTimeout(resolve, 20));
   expect(sent("probe")).toHaveLength(1);
   selection.signer = signer;
 
@@ -2112,4 +2112,97 @@ it("a report's community badge opens that community in the same entry, and Back 
   expect(
     screen.queryByRole("tab", { name: "Restrictions" }),
   ).not.toBeInTheDocument();
+});
+
+/** Probe responses released by the test, in the order it chooses. */
+function heldProbes() {
+  const pending: ((outcome: StaffOutcome<unknown>) => void)[] = [];
+  routes.probe = () =>
+    new Promise((resolve) => {
+      pending.push(resolve);
+    });
+  return async (index: number, outcome: StaffOutcome<unknown>) => {
+    await act(async () => pending[index]?.(outcome));
+  };
+}
+const operatorProbe = () => probe({ role: "operator", canStaff: true });
+const denied = () => fail({ category: "forbidden", status: 403 });
+
+it("a newer role check wins over an older one that finishes later", async () => {
+  const answer = heldProbes();
+  const staff = createStaff(backend, () => ({ relay, signer }));
+  const release = staff.ensure();
+  await waitFor(() => expect(sent("probe")).toHaveLength(1));
+  release();
+  staff.ensure();
+  expect(sent("probe")).toHaveLength(2);
+  await answer(1, denied());
+  expect(staff.visible()).toBe(false);
+  await answer(0, operatorProbe());
+  expect(staff.visible()).toBe(false);
+  expect(staff.operatorVisible()).toBe(false);
+});
+
+it("a newer authorization is not hidden by an older denial", async () => {
+  const answer = heldProbes();
+  const staff = createStaff(backend, () => ({ relay, signer }));
+  const release = staff.ensure();
+  await waitFor(() => expect(sent("probe")).toHaveLength(1));
+  release();
+  staff.ensure();
+  await answer(1, operatorProbe());
+  expect(staff.operatorVisible()).toBe(true);
+  await answer(0, denied());
+  expect(staff.visible()).toBe(true);
+  expect(staff.operatorVisible()).toBe(true);
+});
+
+it("relays sharing one admin host keep the newest role check", async () => {
+  const answer = heldProbes();
+  const selection = { relay, signer };
+  const staff = createStaff(backend, () => ({ ...selection }));
+  staff.ensure();
+  await waitFor(() => expect(sent("probe")).toHaveLength(1));
+  selection.relay = "wss://other.example.com";
+  staff.refresh();
+  await waitFor(() => expect(sent("probe")).toHaveLength(2));
+  expect(contexts.map((c) => c.origin)).toEqual([origin, origin]);
+  await answer(1, denied());
+  await answer(0, operatorProbe());
+  expect(staff.visible()).toBe(false);
+});
+
+/** An authorized session for the selected context, as an open entry has. */
+async function authorizedSession(staff: Staff) {
+  await waitFor(() => expect(staff.visible()).toBe(true));
+  const context = staff.context();
+  if (!context) throw new Error("no context");
+  const access = staff.access(context);
+  if (access?.state !== "authorized") throw new Error("not authorized");
+  return createSession(staff, context, access.probe);
+}
+const reportsRead = { route: "listReports", query: { scope: "all" } } as const;
+
+it("a 401 or 403 that arrives after Settings closes starts no role check", async () => {
+  routes.listReports = denied;
+  const staff = createStaff(backend, () => ({ relay, signer }));
+  const release = staff.ensure();
+  const session = await authorizedSession(staff);
+  release();
+  await session.request(reportsRead);
+  expect(calls.map((c) => c.route)).toEqual(["probe", "listReports"]);
+});
+
+it("a 401 or 403 for a context that is no longer selected starts no role check for it", async () => {
+  routes.listReports = denied;
+  const selection = { relay, signer };
+  const staff = createStaff(backend, () => ({ ...selection }));
+  staff.ensure();
+  const session = await authorizedSession(staff);
+  selection.signer = member;
+  staff.refresh();
+  await session.request(reportsRead);
+  expect(
+    contexts.filter((_, i) => calls[i]?.route === "probe").map((c) => c.signer),
+  ).toEqual([signer, member]);
 });

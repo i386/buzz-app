@@ -48,8 +48,8 @@ export function useSession() {
 
 /**
  * Every signed operation goes through here, so a 401 or 403 from any of them
- * re-checks the role in the background. An unchanged role keeps the session
- * (see `Staff.probe`), so the re-check cannot loop.
+ * re-checks the role in the background while Settings is open (see
+ * `Staff.reprobe`). An unchanged role keeps the session, so it cannot loop.
  */
 export function createSession(
   staff: Staff,
@@ -57,7 +57,7 @@ export function createSession(
   probe: ProbeDto,
 ): Session {
   const checked = (failure: StaffFailure | null) => {
-    if (failure?.authLost) void staff.probe(context, true);
+    if (failure?.authLost) staff.reprobe(context);
   };
   return {
     staff,

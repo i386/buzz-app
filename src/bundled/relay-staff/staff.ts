@@ -38,6 +38,8 @@ export function createStaff(
   let retained = 0;
   /** Contexts probed since Settings last opened. */
   const checked = new Set<string>();
+  /** Latest probe per access key; an older one's result is dropped. */
+  const attempts = new Map<string, number>();
   const emit = () => {
     for (const listener of listeners) listener();
   };
@@ -113,7 +115,10 @@ export function createStaff(
       access.set(id, { state: "probing" });
       emit();
     }
+    const attempt = (attempts.get(id) ?? 0) + 1;
+    attempts.set(id, attempt);
     const outcome = await backend.request(context, { route: "probe" });
+    if (attempts.get(id) !== attempt) return;
     const next = toAccess(outcome);
     // An unchanged role keeps the same session, so its reads do not rerun.
     const previous = access.get(id);
@@ -177,6 +182,15 @@ export function createStaff(
       return access.get(key(context)) ?? null;
     },
     probe,
+    /**
+     * Automatic re-check (a 401 or 403, or a change to your own staff entry). Skipped once Settings has closed
+     * or another identity, admin host or relay is selected.
+     */
+    reprobe(context: StaffContext) {
+      const now = contextKey();
+      if (!retained || now !== `${key(context)} ${context.relay}`) return;
+      void probe(context, true);
+    },
   };
 }
 export type Staff = ReturnType<typeof createStaff>;

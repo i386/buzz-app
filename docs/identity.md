@@ -211,12 +211,16 @@ and NIP-98. That client ignores system proxies and follows no redirects. The
 webview names a closed route; native code builds the URL, checks the request's
 expected relay, admin origin and signer before signing, and caps each response.
 NIP-11 `self` establishes relay authority; the operator-contact `pubkey` is not
-a substitute. Opening Settings sends one signed `probe` (`GET
-/api/admin/v1/probe`, empty body) to the advertised admin host, without a
-further click, so the Relay admin entries show only to staff. It proves the
-active key to that host, which can differ from the community's connection
-host; no private key, login token or community data is sent. It repeats each
-time Settings opens and when the identity or relay changes while it is open.
+a substitute. When there is a selected identity and relay and the relay
+advertises a valid admin host, opening Settings sends one signed `probe` (`GET
+/api/admin/v1/probe`, empty body) to that host without a further click, so the
+Relay admin entries show only to staff (a relay with admin auth off shows its
+read-only entries to everyone). It proves the active key to that host, which
+can differ from the community's connection host; no private key, login token or
+community data is sent. It repeats each time Settings opens, and each newly
+selected identity or relay is checked once while Settings stays open. Other
+re-checks (a 401 or 403, Check again, changing your own staff entry) are listed
+in [relay-staff.md](relay-staff.md); none starts after Settings closes.
 The existing live owner handles WSS/NIP-42 authentication and signature
 verification. IPC permissions remain limited to the main WebView.
 

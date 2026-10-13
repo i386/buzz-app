@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, useSyncExternalStore } from "react";
+import { useEffect, useMemo, useSyncExternalStore } from "react";
 import { Button } from "../../shared/design-system/ui/Button";
 import { EmptyState } from "../../shared/design-system/ui/EmptyState";
 import { Header } from "../../shared/design-system/ui/Header";
@@ -9,7 +9,7 @@ import {
   WarningCircleIcon,
 } from "../../shared/design-system/icons";
 import { Console, SCREENS, type Screen } from "./Console";
-import { createSession, describe, SessionProvider } from "./session";
+import { createSession, SessionProvider } from "./session";
 import type { Access, Staff } from "./staff";
 
 export function RelayStaff({
@@ -57,7 +57,7 @@ export function RelayStaff({
           </Button>
         }
       />
-      <AccessStatus access={access} signer={context.signer} />
+      <AccessStatus access={access} />
       {access?.state === "authorized" && (
         <Authorized
           key={contextKey}
@@ -93,91 +93,30 @@ function Authorized({
   );
 }
 
-function AccessStatus({
-  access,
-  signer,
-}: {
-  access: Access | null;
-  signer: string;
-}) {
-  const [copied, setCopied] = useState(false);
-  if (!access || access.state === "probing")
+function AccessStatus({ access }: { access: Access | null }) {
+  if (access?.state !== "authorized")
     return (
       <p className="flex items-center gap-2 text-body-sm text-secondary">
         <CircleNotchIcon className="animate-spin" /> Checking your access…
       </p>
     );
-  switch (access.state) {
-    case "authorized": {
-      const { role, authMode } = access.probe;
-      if (authMode === "disabled")
-        return (
-          <p
-            className="flex items-center gap-2 text-body-sm text-warning"
-            role="status"
-          >
-            <WarningCircleIcon /> Admin auth is disabled on this relay. The
-            console is read-only; taking action requires BUZZ_ADMIN_AUTH=nip98.
-          </p>
-        );
-      return (
-        <p
-          className="flex items-center gap-2 text-body-sm text-success"
-          role="status"
-        >
-          <CheckCircleIcon /> Connected as {role ?? "staff"}
-        </p>
-      );
-    }
-    case "denied":
-      return (
-        <div className="flex flex-col gap-2 text-body-sm" role="alert">
-          <p className="flex items-center gap-2 text-danger">
-            <WarningCircleIcon /> Access denied
-          </p>
-          <p className="text-secondary">
-            Your public key is not on this relay's staff list. Ask a relay
-            operator to add:
-          </p>
-          <div className="flex items-center gap-2">
-            <code className="min-w-0 flex-1 break-all font-mono text-caption">
-              {signer}
-            </code>
-            <Button
-              size="sm"
-              onClick={() =>
-                void navigator.clipboard
-                  .writeText(signer)
-                  .then(() => setCopied(true))
-              }
-            >
-              {copied ? "Copied" : "Copy"}
-            </Button>
-          </div>
-        </div>
-      );
-    case "notAdminApi":
-      return (
-        <p
-          className="flex items-center gap-2 text-body-sm text-secondary"
-          role="alert"
-        >
-          <WarningCircleIcon /> The admin host this relay advertises has no
-          admin API.
-        </p>
-      );
-    case "unreachable":
-      return (
-        <p
-          className="flex items-center gap-2 text-body-sm text-danger"
-          role="alert"
-        >
-          <WarningCircleIcon />
-          {access.failure.category === "ambiguous" ||
-          access.failure.category === "intercepted"
-            ? "Could not reach the admin host. Check your network, TLS, DNS, or whether a VPN or SSO gateway intercepts it."
-            : describe(access.failure)}
-        </p>
-      );
-  }
+  const { role, authMode } = access.probe;
+  if (authMode === "disabled")
+    return (
+      <p
+        className="flex items-center gap-2 text-body-sm text-warning"
+        role="status"
+      >
+        <WarningCircleIcon /> Admin auth is disabled on this relay. The console
+        is read-only; taking action requires BUZZ_ADMIN_AUTH=nip98.
+      </p>
+    );
+  return (
+    <p
+      className="flex items-center gap-2 text-body-sm text-success"
+      role="status"
+    >
+      <CheckCircleIcon /> Connected as {role ?? "staff"}
+    </p>
+  );
 }

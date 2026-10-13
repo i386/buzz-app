@@ -48,7 +48,7 @@ export function Operators() {
     if (!outcome.ok) return setError(describe(outcome.failure));
     reload();
     if (change.route === "putOperator") setInput("");
-    if (change.pubkey === context.signer) void staff.probe(context, true);
+    if (change.pubkey === context.signer) staff.reprobe(context);
   });
   const working = write.busy ? (write.frozen?.pubkey ?? null) : null;
   const [removing, setRemoving] = useState<OperatorDto | null>(null);
