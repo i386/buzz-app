@@ -1808,6 +1808,50 @@ it("an event heard before the saved key's status is read waits for it, then is c
   });
 });
 
+it("a failed read of the key's status does not stop a saved key from classifying", async () => {
+  const jev = fakeJev();
+  jev.status.mockRejectedValueOnce(new Error("The Keychain is locked"));
+  const { service, run, emit } = await classifiedAgent(jev);
+  expect(service.classifier()).toBe("unavailable");
+  emit({ events: [event("w")] });
+  await vi.waitFor(() => expect(run).toHaveBeenCalledOnce());
+  expect(jev.classify).toHaveBeenCalledOnce();
+  expect(run.mock.calls[0]?.[0].trigger).toMatchObject({
+    classifier: { outcome: "passed" },
+  });
+  expect(service.classifier()).toBe("available");
+});
+
+it("classifies a reply without its parent when the parent lookup does not answer", async () => {
+  vi.useFakeTimers({ shouldAdvanceTime: true });
+  try {
+    const jev = fakeJev();
+    const { native, run, emit } = await classifiedAgent(jev);
+    native.query.mockImplementation(() => new Promise(() => {}));
+    emit({
+      events: [
+        event("r", {
+          tags: [
+            ["h", channel],
+            ["e", "b".repeat(64), "", "reply"],
+          ],
+        }),
+      ],
+    });
+    await vi.waitFor(() => expect(native.query).toHaveBeenCalled());
+    expect(jev.classify).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(5_000);
+    await vi.waitFor(() => expect(run).toHaveBeenCalledOnce());
+    const [state] = jev.classify.mock.calls[0] ?? [];
+    expect((state as { context: { thread: unknown } }).context.thread).toEqual({
+      is_reply: true,
+      parent: null,
+    });
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
 it("sends nothing to the classifier for a watch stopped while its event waited", async () => {
   const jev = fakeJev();
   let known!: (value: boolean) => void;

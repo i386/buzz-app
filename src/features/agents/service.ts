@@ -470,6 +470,8 @@ function defaults(pubkey: string, type: RegisteredAgentType) {
   return record;
 }
 /** Classifier calls in flight per agent. */
+/** How long the classifier waits for a reply's parent before it goes on. */
+const PARENT_LOOKUP_MS = 5_000;
 const CLASSIFY_LIMIT = 32;
 const seconds = () => Math.floor(Date.now() / 1000);
 const message = (error: unknown) =>
@@ -691,6 +693,9 @@ export class AgentsService extends Service implements Agents {
   /** Settles once the saved key's status is known; until then a classified
    * event waits rather than pass unchecked. */
   private jevStatus: Promise<void> | undefined;
+  /** Whether the key's status is known. While it is not (its read failed), a
+   * classified event still calls native, which reports a missing key. */
+  private jevKnown = false;
   private readonly contributions;
   private readonly listeners = new Set<() => void>();
   /** Every saved identity, deleted ones included: native's list is the agent
@@ -911,6 +916,7 @@ export class AgentsService extends Service implements Agents {
     this.setAvailability(false);
   }
   private setAvailability(configured: boolean) {
+    this.jevKnown = true;
     const classifier = configured ? "available" : "unavailable";
     if (this.state.classifier === classifier) return;
     this.state = Object.freeze({ ...this.state, classifier });
@@ -1957,7 +1963,8 @@ export class AgentsService extends Service implements Agents {
       // A saved key is not known to be missing until its status is read.
       await this.jevStatus;
       const jev = this.jev;
-      if (!jev || this.classifier() === "unavailable") return notRun();
+      if (!jev || (this.jevKnown && this.classifier() === "unavailable"))
+        return notRun();
       // Only the copy of the app that holds the agent sends its events out.
       if (!(await this.claim(runner)) || !live()) return undefined;
       const context = await this.context(agent, trigger.event);
@@ -1975,8 +1982,10 @@ export class AgentsService extends Service implements Agents {
         },
         context,
       });
-      // The key was removed outside the app since it was read.
+      // The key was removed outside the app since it was read, or native
+      // found one the failed status read could not.
       if (result.outcome === "not-run") this.setAvailability(false);
+      else if (!this.jevKnown) this.setAvailability(true);
       return pass ? result : undefined;
     })().catch((error) => {
       console.warn(`Agent ${agent.name} could not classify an event`, error);
@@ -2014,9 +2023,18 @@ export class AgentsService extends Service implements Agents {
     let found: RelayEvent | undefined;
     if (parent)
       try {
-        [found] = await this.require().query(agent.pubkey, [
-          { ids: [parent], limit: 1 },
-        ]);
+        // Bounded: classified events release in order, so a stuck lookup
+        // would hold back every later one.
+        let timer: ReturnType<typeof setTimeout> | undefined;
+        [found] = await Promise.race([
+          this.require().query(agent.pubkey, [{ ids: [parent], limit: 1 }]),
+          new Promise<never>((_, reject) => {
+            timer = setTimeout(
+              () => reject(new Error("The parent lookup timed out")),
+              PARENT_LOOKUP_MS,
+            );
+          }),
+        ]).finally(() => clearTimeout(timer));
       } catch {
         // The parent stays unknown; the classifier still runs.
       }

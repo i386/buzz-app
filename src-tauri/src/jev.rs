@@ -107,13 +107,21 @@ impl JevHost {
             return Err("That does not look like a TypeSafe API key".into());
         }
         let mut key = self.key.lock().await;
-        self.store.replace(value)?;
-        *key = Some(Some(Zeroizing::new(value.to_owned())));
+        let store = self.store.clone();
+        let saved = Zeroizing::new(value.to_owned());
+        let write = saved.clone();
+        tokio::task::spawn_blocking(move || store.replace(&write))
+            .await
+            .map_err(|_| "The Keychain is unavailable".to_string())??;
+        *key = Some(Some(saved));
         Ok(())
     }
     pub(crate) async fn clear(&self) -> Result<(), String> {
         let mut key = self.key.lock().await;
-        self.store.clear()?;
+        let store = self.store.clone();
+        tokio::task::spawn_blocking(move || store.clear())
+            .await
+            .map_err(|_| "The Keychain is unavailable".to_string())??;
         *key = Some(None);
         Ok(())
     }
