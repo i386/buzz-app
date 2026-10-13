@@ -1613,7 +1613,7 @@ it("people show their profile name with the short key, never the raw key", async
   ).toBeInTheDocument();
   expect(document.body.textContent).not.toContain(member);
   expect(document.body.textContent).not.toContain(author);
-  expect(ensured).toContain(author);
+  await waitFor(() => expect(ensured).toContain(author));
 });
 
 it("each community's count is a lower bound when the relay's limit is hit", async () => {
