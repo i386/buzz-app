@@ -36,7 +36,7 @@ export type AgentReads = Readonly<{
     signal: AbortSignal,
   ): Promise<readonly EventData[]>;
   /** Asks for these people's profiles, so `name` can name them. */
-  profiles(pubkeys: readonly string[]): Promise<unknown>;
+  profiles(pubkeys: readonly string[]): Promise<void>;
   /** A person's name, as the channel with these members shows it when
    * given; if known yet. */
   name(pubkey: string, members?: readonly string[]): string | undefined;
@@ -85,8 +85,9 @@ export function ownerReads(
     },
     read: (filters: readonly ReadFilter[], signal: AbortSignal) =>
       session.read(filters, { signal }),
-    profiles: (pubkeys: readonly string[]) =>
-      session.profiles.ensure(pubkeys, "foreground"),
+    profiles: async (pubkeys: readonly string[]) => {
+      await session.profiles.ensure(pubkeys, "foreground");
+    },
     name: (person: string, members?: readonly string[]) =>
       session.names.resolve(person, undefined, members) ??
       session.profiles.snapshot().get(person)?.name ??
