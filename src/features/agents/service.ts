@@ -45,6 +45,7 @@ import {
   type NipOaAuthorization,
 } from "../host/service";
 import { avatarSource } from "../../shared/avatar-source";
+import { publicKeyLabels } from "../../shared/identity/public-key";
 import {
   hasEventProof,
   newer,
@@ -1171,10 +1172,10 @@ export class AgentsService extends Service implements Agents {
     const failed: { name: string; error: string }[] = [];
     const elsewhere: string[] = [];
     const listed = new Set(found.agents.map((agent) => agent.pubkey));
+    const labels = publicKeyLabels(old.members.map(({ pubkey }) => pubkey));
     for (const member of old.members) {
-      const npub = npubEncode(member.pubkey);
       const name =
-        member.name.trim() || `${npub.slice(0, 11)}…${npub.slice(-6)}`;
+        member.name.trim() || (labels.get(member.pubkey) ?? member.pubkey);
       const here = live.find((identity) => identity.pubkey === member.pubkey);
       if (here && originOf(here.relay) === origin) {
         members.push(member.pubkey);

@@ -757,11 +757,10 @@ it("names a member with no name by its short npub", async () => {
     members: team.members.map((member) => ({ ...member, name: "  " })),
   });
   native.port.mockRejectedValue(new Error("Keychain access was denied"));
-  const npub = npubEncode(birch);
   const result = await importTeam(service);
   expect(result.failed).toEqual([
     {
-      name: `${npub.slice(0, 11)}…${npub.slice(-6)}`,
+      name: `npub…${npubEncode(birch).slice(-3)}`,
       error: "Keychain access was denied",
     },
   ]);
