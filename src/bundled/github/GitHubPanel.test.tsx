@@ -510,3 +510,77 @@ it("renders the settled conversation in Discussion without mounting or requestin
   expect(screen.getByRole("heading", { name: "Details" })).toBeVisible();
   expect(fetch).toHaveBeenCalledTimes(3);
 });
+
+it("keeps one PR request across anchor-only targets and returns to Discussion for the new comment", async () => {
+  const scroll = vi.fn();
+  Object.defineProperty(HTMLElement.prototype, "scrollIntoView", {
+    configurable: true,
+    value: scroll,
+  });
+  const fetch = vi.fn(async (destination: string) => {
+    let data: unknown = { total_count: 0, statuses: [] };
+    if (destination.includes("/check-runs?"))
+      data = { total_count: 0, check_runs: [] };
+    else if (destination.includes("/comments?"))
+      data = [
+        { id: 20, body: "First", user: { login: "reader" } },
+        { id: 21, body: "Second", user: { login: "reader" } },
+      ];
+    else if (destination.includes("/reviews?")) data = [];
+    else if (destination.endsWith("/pulls/1"))
+      data = { title: "Anchored PR", state: "open", head: { sha: "abc" } };
+    return new Response(JSON.stringify(data));
+  });
+  vi.stubGlobal("fetch", fetch);
+  const base = "https://github.com/sample/project/pull/1";
+  const view = render(
+    <GitHubPanel target={`${base}#issuecomment-20`} close={() => {}} />,
+  );
+  const first = await waitFor(() => {
+    const row = document.querySelector('[data-event-key="discussion-20"]');
+    if (!(row instanceof HTMLElement)) throw new Error("Not loaded yet");
+    return row;
+  });
+  await waitFor(() => expect(first).toHaveFocus());
+  const conversation = screen.getByRole("region", {
+    name: "Pull request conversation",
+  });
+  expect(screen.getByRole("link", { name: "Anchored PR #1" })).toHaveAttribute(
+    "href",
+    `${base}#issuecomment-20`,
+  );
+  expect(fetch).toHaveBeenCalledTimes(3);
+  fireEvent.click(screen.getByRole("tab", { name: "Checks" }));
+  expect(screen.getByRole("tab", { name: "Checks" })).toHaveAttribute(
+    "aria-selected",
+    "true",
+  );
+  view.rerender(
+    <GitHubPanel
+      target={`${base}?view=all#issuecomment-21`}
+      close={() => {}}
+    />,
+  );
+  const second = document.querySelector('[data-event-key="discussion-21"]');
+  await waitFor(() => expect(second).toHaveFocus());
+  expect(second).toHaveAttribute("data-anchored", "true");
+  expect(first).not.toHaveAttribute("data-anchored");
+  expect(
+    screen.getByRole("region", { name: "Pull request conversation" }),
+  ).toBe(conversation);
+  expect(screen.getByRole("tab", { name: "Discussion" })).toHaveAttribute(
+    "aria-selected",
+    "true",
+  );
+  expect(screen.getByRole("link", { name: "Anchored PR #1" })).toHaveAttribute(
+    "href",
+    `${base}#issuecomment-21`,
+  );
+  expect(
+    fetch.mock.calls.filter(([destination]) =>
+      /\/(pulls\/1|comments\?|reviews\?)/.test(destination),
+    ),
+  ).toHaveLength(3);
+  expect(scroll).toHaveBeenCalledTimes(2);
+  delete (HTMLElement.prototype as Partial<HTMLElement>).scrollIntoView;
+});

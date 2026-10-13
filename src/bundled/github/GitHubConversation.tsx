@@ -51,6 +51,7 @@ import {
 import { relativeTimestamp } from "../../shared/relative-timestamp";
 import { GitHubBody } from "./GitHubBody";
 import type { GitHubDetails } from "./data";
+import { gitHubAnchorUrl, type GitHubAnchor } from "./references";
 import { bodyPreview, isTextBody } from "./preview";
 import styles from "./GitHub.module.css";
 import inlineStyles from "../../shared/InlineReference.module.css";
@@ -287,6 +288,8 @@ function Message({
   kind = "comment",
   reviewState,
   fallback = "No message provided",
+  eventKey,
+  anchored = false,
 }: {
   message: ConversationMessage;
   url: string;
@@ -295,8 +298,14 @@ function Message({
   kind?: "description" | "review" | "comment" | "merge";
   reviewState?: string | undefined;
   fallback?: string;
+  eventKey?: string | undefined;
+  /** The linked comment: read in full, focusable and painted as the anchor. */
+  anchored?: boolean;
 }) {
   const [open, setOpen] = useState(false);
+  useLayoutEffect(() => {
+    if (anchored) setOpen(true);
+  }, [anchored]);
   const preview = useMemo(
     () => bodyPreview(message.body, message.bodyHtml, url),
     [message.body, message.bodyHtml, url],
@@ -391,6 +400,9 @@ function Message({
       onOpenChange={setOpen}
       data-bodyless={!hasBody || undefined}
       data-single-line={(hasBody && !expandable) || undefined}
+      data-event-key={eventKey}
+      data-anchored={anchored || undefined}
+      tabIndex={anchored ? -1 : undefined}
     >
       <div className={styles.messageMarker}>
         {expandable ? (
@@ -509,17 +521,26 @@ const reviewLabels: Record<string, string> = {
 function EventMessage({
   event,
   url,
+  anchorKey,
 }: {
   event: ConversationEvent;
   url: string;
+  anchorKey: string | undefined;
 }) {
-  const commentUrl = new URL(url);
-  commentUrl.hash = `${event.kind === "review" ? "pullrequestreview" : "issuecomment"}-${event.message.id}`;
   return (
     <Message
       message={event.message}
       url={url}
-      commentUrl={event.kind === "merge" ? undefined : commentUrl.href}
+      commentUrl={
+        event.kind === "merge"
+          ? undefined
+          : gitHubAnchorUrl(url, {
+              kind: event.kind,
+              id: String(event.message.id),
+            })
+      }
+      eventKey={event.key}
+      anchored={event.key === anchorKey}
       label={
         event.kind === "merge"
           ? "Merged"
@@ -538,10 +559,12 @@ function HistoryEvents({
   run,
   url,
   id,
+  anchorKey,
 }: {
   run: EventRun;
   url: string;
   id: string;
+  anchorKey: string | undefined;
 }) {
   const present = useIsPresent();
   const instant = usePresenceData() === true;
@@ -565,18 +588,38 @@ function HistoryEvents({
     >
       <div className={styles.commentRunEvents}>
         {run.events.map((event) => (
-          <EventMessage key={event.key} event={event} url={url} />
+          <EventMessage
+            key={event.key}
+            event={event}
+            url={url}
+            anchorKey={anchorKey}
+          />
         ))}
       </div>
     </motion.div>
   );
 }
 
-function History({ run, url }: { run: EventRun; url: string }) {
+function History({
+  run,
+  url,
+  anchorKey,
+}: {
+  run: EventRun;
+  url: string;
+  anchorKey: string | undefined;
+}) {
   const [open, setOpen] = useState(false);
-  const [keyboardToggle, setKeyboardToggle] = useState(false);
+  const [instant, setInstant] = useState(false);
   const reduceMotion = useReducedMotion();
   const id = useId();
+  const anchored = run.events.some((event) => event.key === anchorKey);
+  // The linked comment's run opens in place so the reveal can scroll to a settled row.
+  useLayoutEffect(() => {
+    if (!anchored) return;
+    setOpen(true);
+    setInstant(true);
+  }, [anchored]);
   const label = run.events.length === 1 ? "message" : "messages";
   const summary = run.afterMerge
     ? `${run.events.length} ${label} after merge`
@@ -600,7 +643,7 @@ function History({ run, url }: { run: EventRun; url: string }) {
         className={`buzz-accordion-trigger text-body-sm ${styles.commentRunTrigger}`}
         aria-label={`${open ? "Hide" : "Show"} ${summary}`}
         aria-controls={open ? id : undefined}
-        onClick={(event) => setKeyboardToggle(event.detail === 0)}
+        onClick={(event) => setInstant(event.detail === 0)}
       >
         <span className={styles.eventIcon} aria-hidden="true">
           {open ? <CaretUpIcon size={20} /> : <DotsThreeIcon size={20} />}
@@ -615,11 +658,16 @@ function History({ run, url }: { run: EventRun; url: string }) {
           )}
         </span>
       </Collapsible.Trigger>
-      <AnimatePresence
-        initial={false}
-        custom={!!reduceMotion || keyboardToggle}
-      >
-        {open && <HistoryEvents key="events" run={run} url={url} id={id} />}
+      <AnimatePresence initial={false} custom={!!reduceMotion || instant}>
+        {open && (
+          <HistoryEvents
+            key="events"
+            run={run}
+            url={url}
+            id={id}
+            anchorKey={anchorKey}
+          />
+        )}
       </AnimatePresence>
     </Collapsible.Root>
   );
@@ -673,12 +721,46 @@ function SourceStatus({
   );
 }
 
+/** One reveal per linked comment: scroll to and focus its row once it mounts. */
+function useAnchorReveal(
+  conversation: RefObject<HTMLElement | null>,
+  key: string | undefined,
+) {
+  useLayoutEffect(() => {
+    const container = conversation.current;
+    if (!key || !container) return;
+    let frame = 0;
+    const reveal = () => {
+      const row = [
+        ...container.querySelectorAll<HTMLElement>("[data-event-key]"),
+      ].find((element) => element.dataset.eventKey === key);
+      if (!row) return; // A folded run mounts its rows after opening; observe the mount.
+      observer.disconnect();
+      row.scrollIntoView({ block: "start", behavior: "instant" });
+      row.focus({ preventScroll: true });
+    };
+    const schedule = () => {
+      cancelAnimationFrame(frame);
+      frame = requestAnimationFrame(reveal);
+    };
+    const observer = new MutationObserver(schedule);
+    observer.observe(container, { childList: true, subtree: true });
+    schedule();
+    return () => {
+      cancelAnimationFrame(frame);
+      observer.disconnect();
+    };
+  }, [conversation, key]);
+}
+
 function Conversation({
   details,
   url,
+  anchor,
 }: {
   details: GitHubDetails;
   url: string;
+  anchor?: GitHubAnchor | undefined;
 }) {
   const conversation = useRef<HTMLElement>(null);
   const discussion = useConversationSource(url, "discussion");
@@ -690,6 +772,15 @@ function Conversation({
   const incomplete = [discussion, reviews].some(
     (source) => source.loading || source.error || source.next,
   );
+  const anchorKey = anchor && `${anchor.kind}-${anchor.id}`;
+  const anchored = events.some((event) => event.key === anchorKey);
+  // Later pages or an omitted empty review may hold the linked comment; the
+  // notice offers GitHub once its own source has answered.
+  const missing =
+    anchor &&
+    !anchored &&
+    !(anchor.kind === "review" ? reviews : discussion).loading;
+  useAnchorReveal(conversation, anchored ? anchorKey : undefined);
   return (
     <section
       className={styles.conversation}
@@ -697,6 +788,19 @@ function Conversation({
       ref={conversation}
       tabIndex={-1}
     >
+      {missing && (
+        <p className={styles.conversationNotice} role="status">
+          The linked comment isn’t in the loaded conversation.{" "}
+          <a
+            className={inlineStyles.link}
+            href={gitHubAnchorUrl(url, anchor)}
+            target="_blank"
+            rel="noreferrer"
+          >
+            Open it on GitHub
+          </a>
+        </p>
+      )}
       <div
         className={styles.conversationTimeline}
         data-has-events={!!events.length || undefined}
@@ -710,9 +814,19 @@ function Conversation({
         />
         {groupConversationEvents(events).map((event) =>
           event.kind === "history" ? (
-            <History key={event.key} run={event} url={url} />
+            <History
+              key={event.key}
+              run={event}
+              url={url}
+              anchorKey={anchorKey}
+            />
           ) : (
-            <EventMessage key={event.key} event={event} url={url} />
+            <EventMessage
+              key={event.key}
+              event={event}
+              url={url}
+              anchorKey={anchorKey}
+            />
           ),
         )}
       </div>
@@ -740,6 +854,7 @@ function Conversation({
 export function GitHubConversation(props: {
   details: GitHubDetails;
   url: string;
+  anchor?: GitHubAnchor | undefined;
 }) {
   return <Conversation key={props.url} {...props} />;
 }

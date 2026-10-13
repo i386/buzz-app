@@ -12,7 +12,12 @@ import {
 } from "../../shared/design-system/icons/index";
 import type { PluginModule } from "../../plugins/api";
 import type { PanelProps } from "../../features/panels/service";
-import { parseGitHubReference, type GitHubReference } from "./references";
+import {
+  gitHubAnchorUrl,
+  parseGitHubReference,
+  type GitHubAnchor,
+  type GitHubReference,
+} from "./references";
 import { loadGitHubDetails, type GitHubDetails } from "./data";
 import { Tabs } from "../../shared/design-system/ui/Tabs";
 import { GitHubChecks } from "./GitHubChecks";
@@ -53,11 +58,19 @@ const stateIcons = {
 
 export function GitHubPanel({ target }: PanelProps) {
   const [attempt, retry] = useState(0);
-  const reference = useMemo(() => parseGitHubReference(target), [target]);
+  const parsed = useMemo(() => parseGitHubReference(target), [target]);
+  const identity = parsed?.url;
+  // An anchor-only target change keeps the object's reference, request and
+  // loaded content; only the revealed comment moves.
+  const reference = useMemo(
+    () => (identity ? parseGitHubReference(identity) : undefined),
+    [identity],
+  );
   return reference ? (
     <ObjectPanel
       key={`${reference.url}:${attempt}`}
       reference={reference}
+      anchor={parsed?.anchor}
       retry={() => retry(attempt + 1)}
     />
   ) : (
@@ -67,12 +80,15 @@ export function GitHubPanel({ target }: PanelProps) {
 
 function ObjectPanel({
   reference,
+  anchor,
   retry,
 }: {
   reference: GitHubReference;
+  anchor: GitHubAnchor | undefined;
   retry(): void;
 }) {
   const [result, setResult] = useState<GitHubDetails | string>();
+  const link = anchor ? gitHubAnchorUrl(reference.url, anchor) : reference.url;
   useEffect(() => {
     const controller = new AbortController();
     setResult(undefined);
@@ -101,7 +117,7 @@ function ObjectPanel({
       {reference.kind === "pull" ? (
         <a
           className={`${inlineStyles.link} ${styles.titleLink}`}
-          href={reference.url}
+          href={link}
           target="_blank"
           rel="noreferrer"
         >
@@ -177,7 +193,7 @@ function ObjectPanel({
               render={
                 <a
                   className={styles.errorExternal}
-                  href={reference.url}
+                  href={link}
                   target="_blank"
                   rel="noreferrer"
                 />
@@ -300,7 +316,11 @@ function ObjectPanel({
             </dl>
           )}
           {reference.kind === "pull" ? (
-            <PullContent details={result} reference={reference} />
+            <PullContent
+              details={result}
+              reference={reference}
+              anchor={anchor}
+            />
           ) : (
             result.body && (
               <GitHubBody
@@ -323,13 +343,19 @@ function ObjectPanel({
 function PullContent({
   details,
   reference,
+  anchor,
 }: {
   details: GitHubDetails;
   reference: GitHubReference;
+  anchor: GitHubAnchor | undefined;
 }) {
   const id = useId();
   const [tab, setTab] = useState<"discussion" | "checks">("discussion");
   const [checksOpened, setChecksOpened] = useState(false);
+  // A newly linked comment lives in Discussion, whichever tab was showing.
+  useEffect(() => {
+    if (anchor) setTab("discussion");
+  }, [anchor]);
   return (
     <>
       <div className={styles.pullTabs}>
@@ -360,7 +386,11 @@ function PullContent({
         // biome-ignore lint/a11y/noNoninteractiveTabindex: tab panels are keyboard destinations linked by the shared tabs.
         tabIndex={0}
       >
-        <GitHubConversation details={details} url={reference.url} />
+        <GitHubConversation
+          details={details}
+          url={reference.url}
+          anchor={anchor}
+        />
       </div>
       <div
         role="tabpanel"

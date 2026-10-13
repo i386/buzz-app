@@ -1,5 +1,5 @@
 import { expect, it } from "vitest";
-import { parseGitHubReference } from "./references";
+import { gitHubAnchorUrl, parseGitHubReference } from "./references";
 
 it("recognizes typed GitHub references while refusing lookalike hosts and invalid targets", () => {
   for (const [path, kind] of [
@@ -24,13 +24,27 @@ it("recognizes typed GitHub references while refusing lookalike hosts and invali
 
 it("claims only PR and issue links whose target the pane can show", () => {
   const pull = "https://github.com/block/buzz-app/pull/838";
-  for (const fragment of ["", "#issuecomment-123", "#pullrequestreview-456"])
-    expect(parseGitHubReference(`${pull}${fragment}`)?.url).toBe(
-      `${pull}${fragment}`,
-    );
+  // The anchor is structured once; the identity stays hash-less so comment
+  // links to one PR share its object, request and content.
+  for (const [fragment, anchor] of [
+    ["", undefined],
+    ["#issuecomment-123", { kind: "discussion", id: "123" }],
+    ["#pullrequestreview-456", { kind: "review", id: "456" }],
+  ] as const) {
+    const reference = parseGitHubReference(`${pull}?view=all${fragment}`);
+    expect(reference?.url).toBe(pull);
+    expect(reference?.anchor).toEqual(anchor);
+    if (anchor)
+      expect(gitHubAnchorUrl(pull, anchor)).toBe(`${pull}${fragment}`);
+  }
   expect(
-    parseGitHubReference("https://github.com/block/buzz-app/issues/12")?.url,
-  ).toBe("https://github.com/block/buzz-app/issues/12");
+    parseGitHubReference("https://github.com/block/buzz-app/issues/12"),
+  ).toEqual({
+    url: "https://github.com/block/buzz-app/issues/12",
+    repository: "block/buzz-app",
+    kind: "issue",
+    label: "#12",
+  });
   for (const url of [
     `${pull}#discussion_r4240253516`,
     `${pull}#event-987`,

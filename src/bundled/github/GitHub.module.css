@@ -427,6 +427,10 @@
 .conversationMessage[data-bodyless] {
   align-items: center;
 }
+html[data-keyboard-navigation] .conversationMessage:focus-visible {
+  outline: 2px solid var(--text-standard);
+  outline-offset: 2px;
+}
 .messageMarker {
   position: relative;
   z-index: 1;
@@ -463,6 +467,21 @@
   display: grid;
   grid-template-columns: minmax(0, 1fr);
   min-width: 0;
+}
+/* The linked comment keeps GitHub's anchored wash while its link is current.
+   The wash extends into the timeline's gaps without changing the row's box. */
+.conversationMessage[data-anchored] > .messageContent {
+  isolation: isolate;
+}
+.conversationMessage[data-anchored] > .messageContent::before {
+  content: "";
+  position: absolute;
+  inset: calc(-1 * var(--space-2));
+  z-index: -1;
+  border-radius: var(--radius-row);
+  background: var(--affordance-accent);
+  box-shadow: inset 0 0 0 1px var(--border-accent);
+  pointer-events: none;
 }
 .messageHeader {
   position: relative;

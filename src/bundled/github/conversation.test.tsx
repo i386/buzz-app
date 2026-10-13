@@ -1717,3 +1717,198 @@ it.each([
     ).toHaveFocus();
   },
 );
+
+function stubScrollIntoView() {
+  const scroll = vi.fn();
+  Object.defineProperty(HTMLElement.prototype, "scrollIntoView", {
+    configurable: true,
+    value: scroll,
+  });
+  return {
+    scroll,
+    [Symbol.dispose]: () => {
+      delete (HTMLElement.prototype as Partial<HTMLElement>).scrollIntoView;
+    },
+  };
+}
+const anchoredRow = (key: string) =>
+  document.querySelector<HTMLElement>(`[data-event-key="${key}"]`);
+
+it("reveals the linked comment inside a folded run in full, then moves to a later anchor without fetching", async () => {
+  using stub = stubScrollIntoView();
+  const fetch = vi.fn(async (target: string) =>
+    response(
+      target.includes("/reviews?")
+        ? [
+            {
+              id: 10,
+              state: "COMMENTED",
+              body: "Review summary",
+              user: { login: "reviewer" },
+              submitted_at: date(14),
+            },
+          ]
+        : [
+            {
+              id: 20,
+              body: "First discussion",
+              user: { login: "contributor" },
+              created_at: date(13),
+            },
+            {
+              id: 21,
+              body: "Second discussion",
+              user: { login: "contributor" },
+              created_at: date(15),
+            },
+          ],
+    ),
+  );
+  vi.stubGlobal("fetch", fetch);
+  const merged = { ...details, mergedAt: date(17), mergedBy: "maintainer" };
+  const view = render(
+    <GitHubConversation
+      details={merged}
+      url={url}
+      anchor={{ kind: "discussion", id: "21" }}
+    />,
+  );
+  const trigger = await screen.findByRole("button", {
+    name: "Hide 3 earlier messages",
+  });
+  expect(trigger).toHaveAttribute("aria-expanded", "true");
+  const second = anchoredRow("discussion-21");
+  if (!second) throw new Error("Missing anchored row");
+  await waitFor(() => expect(second).toHaveFocus());
+  expect(second).toHaveAttribute("data-anchored", "true");
+  expect(second).toHaveAttribute("tabindex", "-1");
+  expect(second).toHaveAccessibleName("Comment");
+  expect(
+    within(second).getByRole("button", { name: "Expand Comment" }),
+  ).toHaveAttribute("aria-expanded", "true");
+  expect(
+    within(second)
+      .getAllByText("Second discussion")
+      .find((node) => !node.closest("[aria-hidden]")),
+  ).toBeVisible();
+  expect(stub.scroll).toHaveBeenCalledExactlyOnceWith({
+    block: "start",
+    behavior: "instant",
+  });
+  expect(stub.scroll.mock.contexts[0]).toBe(second);
+  const first = anchoredRow("discussion-20");
+  expect(first).not.toHaveAttribute("data-anchored");
+  expect(first).not.toHaveAttribute("tabindex");
+  expect(
+    within(first ?? document.body).getByRole("button", {
+      name: "Expand Comment",
+    }),
+  ).toHaveAttribute("aria-expanded", "false");
+  expect(screen.queryByText(/linked comment/)).not.toBeInTheDocument();
+  // A rerender without an anchor change neither scrolls nor refocuses.
+  const outside = document.createElement("button");
+  document.body.append(outside);
+  outside.focus();
+  view.rerender(
+    <GitHubConversation
+      details={merged}
+      url={url}
+      anchor={{ kind: "discussion", id: "21" }}
+    />,
+  );
+  await act(async () => {});
+  expect(outside).toHaveFocus();
+  expect(stub.scroll).toHaveBeenCalledOnce();
+  view.rerender(
+    <GitHubConversation
+      details={merged}
+      url={url}
+      anchor={{ kind: "review", id: "10" }}
+    />,
+  );
+  const review = anchoredRow("review-10");
+  if (!review) throw new Error("Missing review row");
+  await waitFor(() => expect(review).toHaveFocus());
+  expect(review).toHaveAttribute("data-anchored", "true");
+  expect(second).not.toHaveAttribute("data-anchored");
+  expect(stub.scroll).toHaveBeenCalledTimes(2);
+  expect(stub.scroll.mock.contexts[1]).toBe(review);
+  expect(trigger).toHaveAttribute("aria-expanded", "true");
+  expect(fetch).toHaveBeenCalledTimes(2);
+  outside.remove();
+});
+
+it("offers GitHub for a linked comment outside the loaded conversation and reveals it once a later page loads", async () => {
+  using stub = stubScrollIntoView();
+  let finishReviews!: (response: Response) => void;
+  vi.stubGlobal(
+    "fetch",
+    vi.fn((target: string) => {
+      if (target.includes("/reviews?"))
+        return new Promise<Response>((resolve) => {
+          finishReviews = resolve;
+        });
+      if (target.includes("page=2"))
+        return Promise.resolve(response([{ id: 21, body: "Second page" }]));
+      return Promise.resolve(
+        response([{ id: 20, body: "First page" }], {
+          link: '<https://api.github.com/repos/sample/project/issues/1/comments?per_page=30&page=2>; rel="next"',
+        }),
+      );
+    }),
+  );
+  const view = render(
+    <GitHubConversation
+      details={details}
+      url={url}
+      anchor={{ kind: "review", id: "30" }}
+    />,
+  );
+  await screen.findByRole("button", { name: "Load more discussion" });
+  // The review source has not answered yet, so the comment is not known to be missing.
+  expect(screen.queryByText(/linked comment/)).not.toBeInTheDocument();
+  await act(async () =>
+    finishReviews(
+      response([
+        {
+          id: 30,
+          state: "COMMENTED",
+          body: "",
+          user: { login: "reviewer" },
+          submitted_at: date(14),
+        },
+      ]),
+    ),
+  );
+  const notice = screen.getByRole("status", { name: "" });
+  expect(notice).toHaveTextContent(
+    "The linked comment isn’t in the loaded conversation.",
+  );
+  expect(
+    within(notice).getByRole("link", { name: "Open it on GitHub" }),
+  ).toHaveAttribute("href", `${url}#pullrequestreview-30`);
+  expect(document.querySelector("[data-anchored]")).toBeNull();
+  view.rerender(
+    <GitHubConversation
+      details={details}
+      url={url}
+      anchor={{ kind: "discussion", id: "21" }}
+    />,
+  );
+  expect(
+    screen.getByRole("link", { name: "Open it on GitHub" }),
+  ).toHaveAttribute("href", `${url}#issuecomment-21`);
+  expect(stub.scroll).not.toHaveBeenCalled();
+  await userEvent
+    .setup()
+    .click(screen.getByRole("button", { name: "Load more discussion" }));
+  const row = await waitFor(() => {
+    const element = anchoredRow("discussion-21");
+    if (!element) throw new Error("Second page not revealed yet");
+    return element;
+  });
+  await waitFor(() => expect(row).toHaveFocus());
+  expect(row).toHaveAttribute("data-anchored", "true");
+  expect(stub.scroll).toHaveBeenCalledOnce();
+  expect(screen.queryByText(/linked comment/)).not.toBeInTheDocument();
+});

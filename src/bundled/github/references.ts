@@ -1,9 +1,20 @@
+/** A conversation comment or submitted review the PR Discussion tab can reveal. */
+export type GitHubAnchor = Readonly<{
+  kind: "discussion" | "review";
+  id: string;
+}>;
 export type GitHubReference = Readonly<{
+  /** Hash-less identity: an anchor changes what is revealed, not which object. */
   url: string;
   repository: string;
   kind: "repository" | "pull" | "issue" | "commit";
   label: string;
+  anchor?: GitHubAnchor | undefined;
 }>;
+const fragmentKinds = {
+  issuecomment: "discussion",
+  pullrequestreview: "review",
+} as const;
 /**
  * Fragments the pane can show. The PR Discussion tab lists conversation
  * comments and submitted reviews; review-thread (`discussion_r…`), timeline
@@ -11,10 +22,17 @@ export type GitHubReference = Readonly<{
  * pane that cannot show them. Issues render only their body, so no fragment
  * qualifies.
  */
-const displayableFragments = {
-  pull: /^(?:#(?:issuecomment|pullrequestreview)-\d+)?$/,
-  issues: /^$/,
-};
+function parseGitHubAnchor(hash: string): GitHubAnchor | undefined {
+  const match = /^#(issuecomment|pullrequestreview)-(\d+)$/.exec(hash);
+  const fragment = match?.[1] as keyof typeof fragmentKinds | undefined;
+  const id = match?.[2];
+  return fragment && id ? { kind: fragmentKinds[fragment], id } : undefined;
+}
+export function gitHubAnchorUrl(url: string, anchor: GitHubAnchor) {
+  const fragment =
+    anchor.kind === "review" ? "pullrequestreview" : "issuecomment";
+  return `${url}#${fragment}-${anchor.id}`;
+}
 /** Exact host parsing: a lookalike domain or credentials can never become a GitHub card. */
 export function parseGitHubReference(
   value: string,
@@ -41,14 +59,16 @@ export function parseGitHubReference(
     if (
       (surface === "pull" || surface === "issues") &&
       rest.length === 1 &&
-      /^[1-9]\d*$/.test(target) &&
-      displayableFragments[surface].test(url.hash)
+      /^[1-9]\d*$/.test(target)
     ) {
+      const anchor = parseGitHubAnchor(url.hash);
+      if (url.hash && (surface === "issues" || !anchor)) return;
       return {
-        url: `${base}/${surface}/${target}${url.hash}`,
+        url: `${base}/${surface}/${target}`,
         repository,
         kind: surface === "pull" ? "pull" : "issue",
         label: `#${target}`,
+        anchor,
       };
     }
     if (
