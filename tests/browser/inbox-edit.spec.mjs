@@ -1,5 +1,4 @@
 import { test, expect } from "./fixture.mjs";
-import { openPage } from "./navigation.mjs";
 
 // Browser boundary: Inbox plugin routing and portalled message-menu dismissal
 // must focus the same native decorated editor and preserve its reply draft.
@@ -12,12 +11,24 @@ test.use({
   viewport: { width: 1280, height: 720 },
 });
 
+// Start in Inbox. The default #Alpha view shows the broadcast reply, and its
+// 300 ms reading dwell can read that reply out of Inbox before a slow runner
+// finishes navigating there.
+const inboxAddress = (origin) =>
+  `${origin}/#buzz=${encodeURIComponent(
+    JSON.stringify({
+      version: 1,
+      kind: "page",
+      pluginId: "buzz.inbox",
+      pageId: "inbox",
+    }),
+  )}`;
+
 test("Inbox edits an owned reply in place and restores the reply draft", async ({
   page,
   app,
 }, testInfo) => {
-  await page.goto(app.origin);
-  await openPage(page, "Inbox");
+  await page.goto(inboxAddress(app.origin));
   const inbox = page.getByRole("region", { name: "Inbox", exact: true });
   await expect(inbox.getByText("Checking recent activity…")).toHaveCount(0);
   const conversation = inbox
@@ -121,8 +132,7 @@ for (const submitted of [false, true])
     page,
     app,
   }) => {
-    await page.goto(app.origin);
-    await openPage(page, "Inbox");
+    await page.goto(inboxAddress(app.origin));
     const inbox = page.getByRole("region", { name: "Inbox", exact: true });
     await expect(inbox.getByText("Checking recent activity…")).toHaveCount(0);
     const conversation = inbox
