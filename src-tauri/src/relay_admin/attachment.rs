@@ -209,19 +209,39 @@ pub(super) fn save_to(chosen: Option<Result<std::path::PathBuf, String>>, bytes:
     }
 }
 
-/// Marks the file as downloaded before any byte lands, like `save_download`,
-/// so the OS checks it on open; a failed save leaves no file behind.
 fn write_marked(path: &std::path::Path, bytes: &[u8]) -> std::io::Result<()> {
+    replace_with(path, bytes, crate::relay::mark_download)
+}
+
+/// Writes a marked sibling temporary file, then renames it over `path`, so the
+/// OS checks the saved file on open and a failed save never touches an existing
+/// destination. Only the temporary file is removed on failure.
+pub(super) fn replace_with(
+    path: &std::path::Path,
+    bytes: &[u8],
+    mark: impl FnOnce(&std::fs::File, &std::path::Path) -> std::io::Result<()>,
+) -> std::io::Result<()> {
     use std::io::Write as _;
-    let mut file = std::fs::File::create(path)?;
-    let written = crate::relay::mark_download(&file, path)
+    let name = path
+        .file_name()
+        .ok_or_else(|| std::io::Error::other("not a file path"))?;
+    let mut temp_name = std::ffi::OsString::from(".");
+    temp_name.push(name);
+    temp_name.push(format!(".{}.part", uuid::Uuid::new_v4()));
+    let temp = path.with_file_name(temp_name);
+    let mut file = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&temp)?;
+    let written = mark(&file, &temp)
         .and_then(|_| file.write_all(bytes))
         .and_then(|_| file.sync_all());
-    if written.is_err() {
-        drop(file);
-        let _ = std::fs::remove_file(path);
+    drop(file);
+    let replaced = written.and_then(|_| std::fs::rename(&temp, path));
+    if replaced.is_err() {
+        let _ = std::fs::remove_file(&temp);
     }
-    written
+    replaced
 }
 
 /// `attachment-<hash prefix>.<ext>`; unknown types save as `.bin`.

@@ -2,7 +2,7 @@
 //! resolver and address rule so the real request path can reach a local TLS
 //! server that presents a certificate for `admin.test`.
 
-use super::attachment::{fetch, save_to, AttachmentRef, Use, ATTACHMENT_CAP};
+use super::attachment::{fetch, replace_with, save_to, AttachmentRef, Use, ATTACHMENT_CAP};
 use super::net::{admin_origin, public, Lookup, Net, Resolve};
 use super::*;
 use base64::engine::general_purpose::STANDARD;
@@ -1103,6 +1103,45 @@ fn save_reports_cancellation_success_and_disk_errors() {
     }
     let not_a_path = save_to(Some(Err("not a file path".into())), b"x");
     assert_eq!(not_a_path["state"], "failed");
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn failed_save_keeps_existing_destination_and_leaves_no_temporary_file() {
+    let dir = std::env::temp_dir().join(format!("relay-admin-replace-{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir(&dir).unwrap();
+    let file = dir.join("a.png");
+    std::fs::write(&file, b"previous").unwrap();
+    let entries = || std::fs::read_dir(&dir).unwrap().count();
+
+    let unmarkable = replace_with(&file, b"new", |_, _| {
+        Err(std::io::Error::other("no streams"))
+    });
+    assert!(unmarkable.is_err());
+    assert_eq!(std::fs::read(&file).unwrap(), b"previous");
+    assert_eq!(
+        entries(),
+        1,
+        "temporary file left behind after a mark failure"
+    );
+
+    // A destination that cannot be replaced fails at the rename step.
+    let blocked = dir.join("blocked");
+    std::fs::create_dir_all(blocked.join("child")).unwrap();
+    assert!(replace_with(&blocked, b"new", |_, _| Ok(())).is_err());
+    assert!(blocked.join("child").is_dir());
+    assert_eq!(
+        entries(),
+        2,
+        "temporary file left behind after a rename failure"
+    );
+
+    assert_eq!(
+        save_to(Some(Ok(file.clone())), b"replaced"),
+        json!({ "state": "saved" })
+    );
+    assert_eq!(std::fs::read(&file).unwrap(), b"replaced");
+    assert_eq!(entries(), 2);
     std::fs::remove_dir_all(dir).unwrap();
 }
 
