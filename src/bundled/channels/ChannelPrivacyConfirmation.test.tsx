@@ -61,7 +61,7 @@ it.each(["private", "public"] as const)(
         onOpenChange={() => {}}
         onCreate={onCreate}
         session={{ ...store.session, scope }}
-        groups={undefined}
+        destinations={[]}
         initialGroup=""
         groupsReady
       />

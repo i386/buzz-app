@@ -1,0 +1,14 @@
+[package]
+name = "buzz-ifc"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.89"
+license = "Apache-2.0"
+repository = "https://github.com/block/buzz-app"
+description = "Buzz execution domains and broker-side information-flow checks"
+
+[dependencies]
+ifc-core = { path = "../ifc-core" }
+nostr = { version = "=0.45.5", default-features = false, features = ["std"] }
+thiserror = "2"
+uuid = "1"

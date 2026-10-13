@@ -18,7 +18,6 @@ type MoveIntent = Readonly<{
   id: number;
   channelId: string;
   destination: MoveDestination;
-  source?: "personal";
 }>;
 type MoveFailure = MoveIntent & Readonly<{ error: string }>;
 type SortFailure = Readonly<{
@@ -133,7 +132,6 @@ export function createSidebarPreferencesStore(
       starred: Object.freeze([...data.starred]),
       muted: Object.freeze([...data.muted]),
       ...(data.sort ? { sort: Object.freeze({ ...data.sort }) } : {}),
-      ...(data.groupSource ? { groupSource: data.groupSource } : {}),
     });
   const publish = (next: Snapshot) => {
     const { moves: _moves, sortErrors: _errors, ...state } = next;
@@ -247,7 +245,6 @@ export function createSidebarPreferencesStore(
     channelId: string,
     destination: MoveDestination,
     signal?: AbortSignal,
-    source = confirmed?.groupSource,
   ): Promise<SidebarPreferences> {
     if (
       !writable() ||
@@ -267,12 +264,7 @@ export function createSidebarPreferencesStore(
       ...(signal ? [signal] : []),
     ]);
     if (writeSignal.aborted) return Promise.reject(writeSignal.reason);
-    const intent: MoveIntent = {
-      id: ++nextMove,
-      channelId,
-      destination,
-      ...(source ? { source } : {}),
-    };
+    const intent: MoveIntent = { id: ++nextMove, channelId, destination };
     pendingMoves.set(intent.id, intent);
     latestMove.set(channelId, intent.id);
     failedMoves.delete(channelId);
@@ -292,9 +284,7 @@ export function createSidebarPreferencesStore(
           // placement has no assignment. Another device may have changed it.
           const groups = starring
             ? undefined
-            : await (source
-                ? write({ channelId, ...destination }, writeSignal, source)
-                : write({ channelId, ...destination }, writeSignal));
+            : await write({ channelId, ...destination }, writeSignal);
           check();
           const stars =
             !groupsOnly && writeStar
@@ -351,7 +341,6 @@ export function createSidebarPreferencesStore(
       !writeSort
     )
       throw new Error("Sidebar section removal is unavailable");
-    const source = confirmed.groupSource ?? "legacy";
     const writeGeneration = generation;
     const writeSignal = AbortSignal.any([
       writeLifetime.signal,
@@ -365,11 +354,7 @@ export function createSidebarPreferencesStore(
         if (closed || generation !== writeGeneration)
           throw new Error("Sidebar section removal is unavailable");
         writeSignal.throwIfAborted();
-        if (!confirmed || (confirmed.groupSource ?? "legacy") !== source)
-          throw new Error(
-            "The active group source changed; refresh your sidebar before removing this section",
-          );
-        if (!confirmed.sections.some(({ id }) => id === sectionId))
+        if (!confirmed?.sections.some(({ id }) => id === sectionId))
           throw new Error("Sidebar section no longer exists");
         const group = `section:${sectionId}`;
         // Local Alpha can be stale while another device has saved an override.
@@ -384,21 +369,15 @@ export function createSidebarPreferencesStore(
         if (closed || generation !== writeGeneration)
           throw new Error("Sidebar section removal is unavailable");
         writeSignal.throwIfAborted();
-        if (!confirmed || (confirmed.groupSource ?? "legacy") !== source)
-          throw new Error(
-            "The active group source changed; refresh your sidebar before removing this section",
-          );
+        if (!confirmed)
+          throw new Error("Sidebar section removal is unavailable");
         confirmed = { ...confirmed, sort };
         mutation++;
         project();
-        const next = await removeSection(sectionId, writeSignal, source);
-        if (closed || generation !== writeGeneration)
+        const next = await removeSection(sectionId, writeSignal);
+        if (closed || generation !== writeGeneration || !confirmed)
           throw new Error("Sidebar section removal is unavailable");
         writeSignal.throwIfAborted();
-        if (!confirmed || (confirmed.groupSource ?? "legacy") !== source)
-          throw new Error(
-            "The active group source changed; refresh your sidebar before removing this section",
-          );
         mutation++;
         confirmed = {
           ...confirmed,
@@ -457,12 +436,7 @@ export function createSidebarPreferencesStore(
       publish({
         ...snapshot,
         cached: true,
-        data: retained({
-          ...parsed,
-          ...(data.groupSource === "personal"
-            ? { groupSource: "personal" as const }
-            : {}),
-        }),
+        data: retained(parsed),
       });
     })
     .catch(() => {});
@@ -479,7 +453,6 @@ export function createSidebarPreferencesStore(
         if (!groupsOnly) return removeSectionMutation(sectionId, callerSignal);
         if (!writable() || snapshot.cached || !removeSection)
           return Promise.reject(new Error("Section deletion is unavailable"));
-        const source = snapshot.data?.groupSource ?? "legacy";
         const writeGeneration = generation;
         const signal = writeLifetime.signal;
         const run = writeQueue
@@ -488,7 +461,7 @@ export function createSidebarPreferencesStore(
             signal.throwIfAborted();
             if (closed || generation !== writeGeneration)
               throw new Error("Section deletion is unavailable");
-            const groups = await removeSection(sectionId, signal, source);
+            const groups = await removeSection(sectionId, signal);
             signal.throwIfAborted();
             if (closed || generation !== writeGeneration || !confirmed)
               throw new Error("Section deletion is unavailable");
@@ -616,13 +589,8 @@ export function createSidebarPreferencesStore(
 
       retryMove(channelId: string) {
         const failed = failedMoves.get(channelId);
-        if (failed && failed.source !== confirmed?.groupSource)
-          return rejectMove(
-            channelId,
-            "The active group source changed; dismiss this move and choose its destination again",
-          );
         return failed
-          ? move(channelId, failed.destination, undefined, failed.source)
+          ? move(channelId, failed.destination)
           : Promise.reject(new Error("No failed move to retry"));
       },
       dismissMoveError(channelId: string) {

@@ -7,7 +7,6 @@ import styles from "./CreateSidebarSection.module.css";
 /** Mounted after the launching menu closes, so focus has one modal owner. */
 export function CreateSidebarSection({
   channelName,
-  maxLength = 256,
   create,
   close,
   writable,
@@ -15,7 +14,6 @@ export function CreateSidebarSection({
   retry,
 }: {
   channelName: string;
-  maxLength?: number;
   /** True only after the session accepts the optimistic move. */
   create: (section: { id: string; name: string }) => boolean;
   close: () => void;
@@ -75,7 +73,7 @@ export function CreateSidebarSection({
           aria-label="Section name"
           placeholder="Section name"
           required
-          maxLength={maxLength}
+          maxLength={256}
           value={name}
           onChange={(event) => setName(event.target.value)}
         />

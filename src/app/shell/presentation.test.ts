@@ -6,6 +6,7 @@ import {
   BellIcon,
   BrowserIcon,
   ChatsCircleIcon,
+  RobotIcon,
 } from "../../shared/design-system/icons/index";
 import {
   headerPageSelection,
@@ -78,13 +79,9 @@ test("other pages sort by label then full key and cannot claim bundled slots", (
 
 test("bundled pages get their own icons and Bestie's row shows its artwork", () => {
   expect(pagePresentation(inbox).icon).toBe(BellIcon);
-  expect(
-    renderToStaticMarkup(
-      createElement(
-        pagePresentation(page("buzz.agents/agents", "Agents")).icon,
-      ),
-    ),
-  ).toContain("tabler-icon-robot-face");
+  expect(pagePresentation(page("buzz.agents/agents", "Agents")).icon).toBe(
+    RobotIcon,
+  );
   expect(
     renderToStaticMarkup(
       createElement(pagePresentation(bestie).icon, { size: 15 }),

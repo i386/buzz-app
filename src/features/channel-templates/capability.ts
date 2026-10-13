@@ -101,7 +101,9 @@ export function createChannelKit({
             !d ||
             ![KIT_TAG, TEAM_MANIFEST_TAG, ME_KIT_TAG].some((tag) =>
               d?.startsWith(`${tag}:${encodeURIComponent(community)}:`),
-            )
+            ) ||
+            // Retired personal groups: ignore saved records, never reject the catalog.
+            d === `${KIT_TAG}:${encodeURIComponent(community)}:groups:personal`
           )
             continue;
           const old = heads.get(d);

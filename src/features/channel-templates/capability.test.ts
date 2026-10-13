@@ -263,6 +263,40 @@ it("fails visibly rather than exposing a partial or mismatched catalog", async (
   expect(f.capability.snapshot().entries).toEqual([]);
 });
 
+it("ignores retired personal groups without rejecting the catalog", async () => {
+  const f = fixture();
+  const kitEvent = (content: unknown, d: string) =>
+    signed(viewer, {
+      kind: 30078,
+      content: JSON.stringify(content),
+      tags: [
+        ["d", d],
+        ["t", KIT_TAG],
+      ],
+    });
+  f.events.push(
+    kitEvent(record, coordinate(record)),
+    kitEvent(
+      {
+        version: 1,
+        community,
+        deleted: false,
+        value: { type: "groups", id: "personal", groups: [], assignments: {} },
+      },
+      `${KIT_TAG}:${encodeURIComponent(community)}:groups:personal`,
+    ),
+  );
+  await f.capability.refresh();
+  expect(f.capability.snapshot()).toMatchObject({
+    status: "ready",
+    entries: [{ record }],
+  });
+  expect(f.host.decode).toHaveBeenCalledWith(
+    [expect.objectContaining({ id: f.events[0]?.id })],
+    expect.any(AbortSignal),
+  );
+});
+
 it.each(["recipe", "Canvas"])(
   "waits for the session outbox to hydrate before admitting a replacement %s save",
   async (kind) => {

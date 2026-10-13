@@ -23,6 +23,7 @@ it("derives the complete categorized inventory from the public gateway", () => {
     "NotificationFilledIcon",
     "OneDriveLogoIcon",
     "PiLogoIcon",
+    "RobotIcon",
   ]);
   expect([...tablerNames, ...customNames].sort()).toEqual(
     Object.keys(gatewayIcons).sort(),
@@ -87,6 +88,15 @@ it("derives the complete categorized inventory from the public gateway", () => {
       name: "PiLogoIcon",
       category: "Custom brand mark",
       intendedSizes: [{ width: 32, height: 32 }],
+    }),
+    expect.objectContaining({
+      name: "RobotIcon",
+      category: "Product mark",
+      intendedSizes: [
+        { width: 14, height: 14 },
+        { width: 16, height: 16 },
+        { width: 24, height: 24 },
+      ],
     }),
   ]);
 });
