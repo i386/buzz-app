@@ -99,11 +99,6 @@ test.beforeEach(async ({ page }) => {
     page.getByRole("button", { name: "Play voice note", exact: true }),
   ).toBeVisible();
 });
-// Attachments upload eagerly, so a preview can still be fetching media through
-// the route above when a test ends. Its late errors cannot affect the result.
-test.afterEach(async ({ page }) => {
-  await page.unrouteAll({ behavior: "ignoreErrors" });
-});
 async function record(page) {
   await page
     .getByRole("button", { name: "Record voice note", exact: true })
@@ -397,6 +392,11 @@ test("rejects a full attachment draft before opening the microphone", async ({
       buffer: Buffer.from("test"),
     })),
   );
+  // The attachment rows grow as the draft settles, moving the toolbar under a
+  // pointer aimed at its earlier position. Click once every file is Ready.
+  await expect(
+    page.getByRole("status").filter({ hasText: /· Ready$/ }),
+  ).toHaveCount(10);
   await page
     .getByRole("button", { name: "Record voice note", exact: true })
     .click();

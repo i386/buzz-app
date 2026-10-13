@@ -3,14 +3,23 @@
   "name": "Claude",
   "apiVersion": 1,
   "host": {
+    "networkOrigins": ["https://downloads.claude.ai"],
     "processes": [
-      { "id": "claude", "program": "claude" },
       {
-        "id": "install",
+        "id": "claude-sh",
         "program": "bash",
-        "args": ["-c", "curl -fsSL https://claude.ai/install.sh | bash"]
+        "args": ["-c"]
       },
-      { "id": "read", "program": "base64", "args": ["-i"] },
+      {
+        "id": "platform",
+        "program": "uname",
+        "args": ["-sm"]
+      },
+      {
+        "id": "read",
+        "program": "base64",
+        "args": ["-i"]
+      },
       { "id": "workspace", "program": "pwd" },
       {
         "id": "find",

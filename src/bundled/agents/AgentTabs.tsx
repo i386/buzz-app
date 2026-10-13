@@ -6,6 +6,7 @@ import type {
   Agents,
   RegisteredAgentType,
 } from "../../features/agents/service";
+import type { AgentMemories } from "../../features/agents/MemoryPanel";
 import { agentSections } from "../../features/agents/tabs";
 import { Tabs } from "../../shared/design-system/ui/Tabs";
 
@@ -16,6 +17,7 @@ export function AgentTabs(props: {
   type: RegisteredAgentType | undefined;
   channels: readonly ChannelChoice[];
   settingsHost: AgentSettingsHost;
+  memories: AgentMemories | undefined;
 }) {
   const sections = agentSections(props);
   const [tab, setTab] = useState<string>(sections[0]?.value ?? "");

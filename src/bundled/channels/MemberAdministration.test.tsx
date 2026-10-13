@@ -12,7 +12,7 @@ import {
   within,
 } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { formatPublicKey } from "../../shared/identity/public-key";
+import { canonicalPublicKey } from "../../shared/identity/public-key";
 import { beforeEach, afterEach, expect, it, vi } from "vitest";
 import { createRelaySession } from "../../features/relay/session";
 import { keypair, profile, signed } from "../../features/relay/testing";
@@ -1147,15 +1147,18 @@ it.each([false, true])(
       ),
     ).toHaveLength(before + 1);
     // Session revocation also clears optional names; identify the row by its stable key.
+    // Labels lengthen the npub suffix until visible keys differ, and these keys are random.
+    const npub = required(canonicalPublicKey(t.target.pubkey));
     const targetRow = () =>
       required(
         screen
           .getAllByRole("button", { name: /^Open profile for/ })
-          .find((button) =>
-            button
+          .find((button) => {
+            const suffix = button
               .getAttribute("aria-label")
-              ?.includes(`(${formatPublicKey(t.target.pubkey)})`),
-          )
+              ?.match(/\(npub…(\w+)\)/)?.[1];
+            return !!suffix && npub.endsWith(suffix);
+          })
           ?.closest("li"),
       );
     if (failure) {

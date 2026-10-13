@@ -466,7 +466,7 @@ test("session changes discard the previous sidebar targets and manual unread sti
     ).toBeVisible();
     await expectCueHidden(page, "below");
     await openChannelDetails(page);
-    await page.getByText("Diagnostics", { exact: true }).click();
+    await page.getByText("Diagnostics", { exact: true }).press("Enter");
     await page
       .getByRole("button", { name: "Mark unread on this device", exact: true })
       .click();

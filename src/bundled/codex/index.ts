@@ -3,19 +3,23 @@ import type { PluginModule } from "../../plugins/api";
 import { CodexLogoIcon } from "../../shared/design-system/icons";
 import { config, defaults, validWorkspace } from "./config";
 import { CodexRuntime } from "./runtime";
+import { CodexSetup, withScript } from "./setup";
 import { CodexProvider, createTabs } from "./tabs";
+/** How often Buzz's copy of Codex looks for a new release. */
+const UPDATE_MS = 6 * 60 * 60_000;
 export const inject = ["agents", "host"];
 export const apply: PluginModule["apply"] = (ctx) => {
-  // Only the desktop app can start `codex`, and file uploads run `base64`,
-  // which stock Windows lacks; no unusable type elsewhere.
+  // Only the desktop app can start `codex`, and setup and file uploads run
+  // `bash` and `base64`, which stock Windows lacks; no unusable type elsewhere.
   if (!isTauri() || !/Mac|Linux/i.test(navigator.platform)) return;
-  const spawn = ctx.host.spawn?.bind(ctx.host);
+  const spawn = ctx.host.spawn && withScript(ctx.host.spawn.bind(ctx.host));
+  const setup = new CodexSetup(spawn, (input) => ctx.host.request(input));
   const start =
     spawn ??
     (async () => {
       throw new Error("Codex agents run only in the desktop app");
     });
-  const providerController = new CodexProvider(start);
+  const providerController = new CodexProvider(start, localStorage, setup);
   const runtime = new CodexRuntime(
     start,
     ctx.agents.relay,
@@ -23,21 +27,35 @@ export const apply: PluginModule["apply"] = (ctx) => {
     (raw) => providerController.resolve(raw),
   );
   const typeKey = `${ctx.pluginOwner?.id ?? "buzz.codex"}/codex`;
+  /** A Codex agent is running, so Buzz's copy is needed; unknown until the
+   * agents have loaded. */
+  let needed: boolean | undefined;
   // Agents that stop running stop their turns, and the last one stops the
   // server; switching communities or a reconnect does not.
   const sync = () => {
     const snapshot = ctx.agents.snapshot();
     if (snapshot.status === "loading") return;
-    runtime.sync(snapshot.running.filter((agent) => agent.type === typeKey));
+    const running = snapshot.running.filter((agent) => agent.type === typeKey);
+    runtime.sync(running);
+    // Once loaded, and when the first Codex agent runs, the copy is brought
+    // up to date; that is also when a first copy is downloaded.
+    const was = needed;
+    needed = running.length > 0;
+    if (spawn && (was === undefined || (needed && !was)))
+      void setup.update(needed);
   };
   const offAgents = ctx.agents.subscribe(sync);
   const offProvider = providerController.subscribe(sync);
   sync();
+  const timer =
+    spawn && setInterval(() => void setup.update(needed ?? false), UPDATE_MS);
   ctx.effect(() => () => {
+    clearInterval(timer);
     offAgents();
     offProvider();
     providerController.dispose();
     runtime.dispose();
+    setup.dispose();
   });
   const {
     Create,
@@ -45,7 +63,7 @@ export const apply: PluginModule["apply"] = (ctx) => {
     createModelLabel,
     ProviderDialogBody,
     SettingsTab,
-  } = createTabs(providerController, runtime, start);
+  } = createTabs(providerController, runtime, start, setup);
   ctx.agents.register({
     id: "codex",
     title: "Codex",
@@ -106,7 +124,9 @@ export const apply: PluginModule["apply"] = (ctx) => {
       },
     ],
     models: (agent) => runtime.preview(agent),
+    // A mention during the first download waits for it, within its deadline.
     run: async (delivery) => {
+      await setup.installed(delivery.signal);
       if (providerController.snapshot().readiness === "checking")
         await providerController.check();
       return runtime.run(delivery);

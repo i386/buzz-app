@@ -208,12 +208,13 @@
     display: flex;
     flex-shrink: 0;
   }
-  /* Row choices retain a visible boundary; full labels stay in the popup and hint. */
+  /* The value and caret identify row choices; their boundary stays quiet. */
   .buzz-select[data-variant="compact"] {
     display: grid;
     min-width: 0;
   }
   .buzz-select[data-variant="compact"] .buzz-button {
+    --interaction-border: var(--border-standard);
     min-width: 0;
     max-width: 100%;
     color: var(--text-standard);
