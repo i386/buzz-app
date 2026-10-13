@@ -1,9 +1,5 @@
-import {
-  createLocalAgentActivity,
-  type LocalAgentActivity,
-  type WorkOutcome,
-} from "./local-activity";
-import { threadReference } from "../relay/thread-reference";
+import { createLocalAgentActivity } from "./local-activity";
+import { AgentRunners } from "./runner";
 import { workflowMentionOwner } from "../relay/workflow-attribution";
 import type { ProfileQueries } from "../relay/profile-directory";
 // Agents: agents that are plugins from the start. A plugin registers an agent
@@ -50,38 +46,24 @@ import {
   type EventData,
   type RelayEvent,
 } from "../relay/events";
-import { EFFORT_TAG, MODEL_TAG } from "../relay/messages";
-import type { LiveBatch } from "../relay/incoming";
 import { relayPartition } from "../relay/partition";
 import type { RelayData } from "../relay/service";
 import type { RelaySession } from "../relay/session";
 import {
-  addressedTo,
-  CHAT_KINDS,
-  compileFilter,
   parseSlug,
-  tagsAgent,
-  watchMatches,
   type AttentionObject,
   type AttentionValue,
-  timerSpent,
-  timerState,
   type EventWatch,
   type Interest,
   type TimerState,
   type TimerWatch,
 } from "./attention";
-import {
-  AttentionError,
-  checkedWrite,
-  interestIds,
-  show,
-  watchSummaries,
-  type ClassifierAvailability,
-  type Shown,
-  type WatchFilter,
-  type WatchSummary,
-  type WriteOptions,
+import type {
+  ClassifierAvailability,
+  Shown,
+  WatchFilter,
+  WatchSummary,
+  WriteOptions,
 } from "./attention-objects";
 import {
   nativeAgents,
@@ -530,14 +512,8 @@ declare module "@deepseek-ai/cordis" {
   }
 }
 
-const QUEUE_LIMIT = 32;
-/** The spec asks for at least the agent's 2,048 most recent events. */
-const SEEN_LIMIT = 2_048;
 /** Bounds one cleanup attempt, whose relay steps otherwise wait on the outbox. */
 const CLEANUP_TIMEOUT_MS = 60_000;
-/** Runs per agent per minute; bounds two agents that answer each other. */
-const RATE_LIMIT = 60;
-const RATE_WINDOW_MS = 60_000;
 const TIMEOUT_LIMIT_MS = 30 * 60_000;
 const TIMER_TICK_MS = 5_000;
 /** How often a failed connection to an unselected community is tried again. */
@@ -556,12 +532,6 @@ function defaults(pubkey: string, type: RegisteredAgentType) {
     record = setAttention(record, slug, value);
   return record;
 }
-/** Until a classifier is wired in, every classified watch passes unchecked. */
-const UNAVAILABLE: ClassifierSkip = Object.freeze({
-  outcome: "not-run",
-  reason: "no classifier is available on this device",
-});
-const seconds = () => Math.floor(Date.now() / 1000);
 const message = (error: unknown) =>
   String(error instanceof Error ? error.message : error);
 /** The team sections for agent `self`: each team it is on, its members that
@@ -600,10 +570,6 @@ export function teamPrompt(
     })
     .join("\n\n");
 }
-const bounded = (set: Set<string>, id: string) => {
-  set.add(id);
-  if (set.size > SEEN_LIMIT) set.delete(set.values().next().value as string);
-};
 /** Owner prompts, attested siblings, and verified relay workflow mentions
  * delegated by the owner or a profile-verified sibling to this particular agent. */
 export async function fromOwner(
@@ -638,40 +604,6 @@ export async function fromOwner(
     // Missing or failed profile reads are not ownership verdicts; a later
     // mention can retry through the session's existing profile directory.
     return false;
-  }
-}
-
-/** The model and effort the triggering message asks of this agent. Only the
- * owner picks them, so nobody else in a channel can run the agent at their
- * level, and only ones the type lists: effort from the model the run uses. */
-async function pickFor(
-  trigger: Trigger,
-  agent: Agent,
-  type: RegisteredAgentType,
-): Promise<{ model?: string; effort?: string }> {
-  if (trigger.type === "timer" || trigger.event.pubkey !== agent.owner)
-    return {};
-  const asked = (name: string) =>
-    trigger.event.tags.find(
-      (tag) => tag[0] === name && tag[1] === agent.pubkey,
-    )?.[2];
-  const model = asked(MODEL_TAG);
-  const effort = asked(EFFORT_TAG);
-  if (!model && !effort) return {};
-  try {
-    const offered = await type.models?.(agent);
-    const picked = offered?.models.find((item) => item.id === model);
-    const runs =
-      picked ?? offered?.models.find((item) => item.id === offered.current);
-    return {
-      ...(picked ? { model: picked.id } : {}),
-      ...(effort && runs?.efforts.some((level) => level.id === effort)
-        ? { effort }
-        : {}),
-    };
-  } catch (error) {
-    console.warn(`Agent type ${type.key} could not list its models`, error);
-    return {};
   }
 }
 
@@ -759,51 +691,6 @@ const recordPicture = (value: unknown) => {
 /** The `wss://` URL of a community, as agents and their providers know it. */
 const wssOf = (origin: string) =>
   relayOrigin(origin).replace(/^https:/, "wss:");
-type Job = {
-  work?: ReturnType<LocalAgentActivity["begin"]>;
-  trigger: Trigger;
-  channelId?: string;
-  /** For a watch or timer: the object and attention epoch it was matched or
-   * found due under. It runs only while both are still current, so a watch or
-   * timer edited, disabled, rearmed, replaced or turned off and on again since
-   * then does not run it. */
-  matched?: { object: AttentionObject; epoch: number };
-};
-type WatchTrigger = Extract<Trigger, { type: "watch" }>;
-type CompiledWatch = Omit<WatchTrigger, "type" | "event"> & {
-  filter?: ReturnType<typeof compileFilter>;
-};
-/** One agent's runtime, for as long as its identity exists. Edits do not
- * replace it: each job reads the agent as it is when the job starts, and the
- * watches are recompiled only when its attention changes. */
-type Runner = {
-  readonly pubkey: string;
-  /** The registration whose `run` it calls; a new one aborts the in-flight run. */
-  type: RegisteredAgentType | undefined;
-  controller: AbortController;
-  /** Events waiting to run; due timers are found when a run starts instead. */
-  queue: Job[];
-  running: boolean;
-  windowStart: number;
-  admitted: number;
-  /** Events seen, and events it wrote (so reactions to them reach no watch). */
-  readonly seen: Set<string>;
-  readonly wrote: Set<string>;
-  /** Turns still counted as working, which a change of type waits out. */
-  working: number;
-  /** A provider/config transition owns the idle runner and pauses its queue. */
-  transitioning: boolean;
-  /** Whether native may hold the agent for this copy; true at first, since
-   * native outlives a page reload. */
-  mayHold: boolean;
-  activityClaimed?: boolean;
-  /** Advances each time attention is seen off, which voids queued watch work. */
-  epoch: number;
-  compiled?: {
-    attention: Agent["attention"];
-    watches: readonly CompiledWatch[];
-  };
-};
 
 export class AgentsService extends Service implements Agents {
   private readonly contributions;
@@ -816,9 +703,7 @@ export class AgentsService extends Service implements Agents {
   private state: AgentsSnapshot;
   /** By origin, so each agent listens in its own community, selected or not. */
   private bound = new Map<string, Bound>();
-  /** Agents whose community was live at the last update. */
-  private connected = new Set<string>();
-  private runners = new Map<string, Runner>();
+  private readonly runners: AgentRunners;
   /** Counts list requests, so only the latest one is applied. */
   private listed = 0;
   /** Deleted agents whose community cleanup is running, and whether it was
@@ -850,7 +735,7 @@ export class AgentsService extends Service implements Agents {
       pubkey: string,
       signal: AbortSignal,
     ) => Promise<NipOaAuthorization> = prepareRemoteAgentAuthorization,
-    private readonly localActivity = createLocalAgentActivity(),
+    localActivity = createLocalAgentActivity(),
   ) {
     super(ctx, "agents");
     this.contributions = createContributions<AgentType>(ctx);
@@ -863,6 +748,40 @@ export class AgentsService extends Service implements Agents {
       agents: [],
       running: [],
       teams: this.teamList,
+    });
+    this.runners = new AgentRunners({
+      ready: (pubkey) => this.ready(pubkey),
+      agent: (pubkey) => this.agent(pubkey),
+      find: (pubkey) => this.find(pubkey),
+      member: (agent, event) => this.member(agent, event),
+      scope: (agent) => this.bindingOf(agent)?.scope,
+      saved: (pubkey) => this.records[pubkey],
+      record: (pubkey) => {
+        const identity = this.live(pubkey);
+        if (!identity) throw new Error("No such agent on this device");
+        return this.recordOf(identity);
+      },
+      write: (record) => this.write(record),
+      team: (pubkey) =>
+        teamPrompt(
+          this.teamList,
+          this.identities.filter((identity) => !identity.deleted),
+          pubkey,
+        ),
+      classifier: () => this.classifier(),
+      custody: native,
+      activity: localActivity,
+      typing: (pubkey, event, channel) =>
+        // STOPGAP(agent-local-typing): delete with local-typing.ts.
+        typeLocally(
+          () => {
+            const relay = this.relay(pubkey)?.snapshot();
+            return relay?.status === "ready" ? relay.session : undefined;
+          },
+          pubkey,
+          event,
+          channel,
+        ),
     });
     ctx.effect(() => {
       const stops = [
@@ -879,7 +798,7 @@ export class AgentsService extends Service implements Agents {
       void this.refresh();
       // Wakes each runner, which starts any timer that is due.
       const tick = setInterval(() => {
-        for (const runner of this.runners.values()) void this.drain(runner);
+        this.runners.tick();
         this.reconnect();
       }, TIMER_TICK_MS);
       return () => {
@@ -888,7 +807,6 @@ export class AgentsService extends Service implements Agents {
         this.listed++;
         for (const stop of stops) stop();
         for (const origin of [...this.bound.keys()]) this.unbind(origin);
-        for (const runner of this.runners.values()) this.retire(runner);
         this.runners.clear();
         // Clear what is shown without reconciling, which would make new runners.
         this.state = Object.freeze({
@@ -1194,7 +1112,7 @@ export class AgentsService extends Service implements Agents {
     if (!identity)
       return this.exclusive(pubkey, () => this.saveHosted(pubkey, change));
     if (!this.native) throw new Error("No such agent on this device");
-    if (change.config !== undefined && this.runners.get(pubkey)?.transitioning)
+    if (change.config !== undefined && this.runners.transitioning(pubkey))
       throw new Error(`${identity.name}'s provider is already changing`);
     const name = change.name?.trim();
     if (name === "") throw new Error("Name the agent");
@@ -1310,28 +1228,14 @@ export class AgentsService extends Service implements Agents {
     if (kind.remote)
       throw new Error("A hosted provider cannot take over a local agent key");
     if (type === identity.type) return [];
-    const runner = this.runners.get(pubkey);
-    if (runner?.working)
-      throw new Error(
-        `${identity.name} is answering; change its type when it finishes`,
-      );
-    if (!runner) throw new Error("Change its type on the device that runs it");
-    if (runner.transitioning)
-      throw new Error(`${identity.name}'s provider is already changing`);
-    runner.transitioning = true;
-    try {
-      if (!(await this.claimForRetype(runner)))
-        throw new Error("Change its type on the device that runs it");
-      if (runner.working)
-        throw new Error(
-          `${identity.name} is answering; change its type when it finishes`,
-        );
+    const native = this.native;
+    return this.runners.retype(pubkey, identity.name, async () => {
       const { adopted, preview } = this.retypePlan(
         identity,
         kinds.get(identity.type),
         kind,
       );
-      await this.native.setType(pubkey, type);
+      await native.setType(pubkey, type);
       try {
         const nextRecord = {
           ...this.recordOf(identity),
@@ -1347,7 +1251,7 @@ export class AgentsService extends Service implements Agents {
         this.update();
       } catch (error) {
         try {
-          await this.native.setType(pubkey, identity.type);
+          await native.setType(pubkey, identity.type);
         } catch (rollback) {
           throw new AggregateError(
             [error, rollback],
@@ -1358,10 +1262,7 @@ export class AgentsService extends Service implements Agents {
       }
       await this.refresh();
       return preview.dropped;
-    } finally {
-      runner.transitioning = false;
-      void this.drain(runner);
-    }
+    });
   }
 
   previewRetype(pubkey: string, type: string): RetypePreview {
@@ -1998,7 +1899,7 @@ export class AgentsService extends Service implements Agents {
   private listen(session: RelaySession, origin: string) {
     let connected = session.live.snapshot().status === "connected";
     const stopEvents = session.subscribeLive((batch) =>
-      this.dispatch(batch, origin),
+      this.runners.dispatch(batch, (agent) => originOf(agent.relay) === origin),
     );
     const stopStatus = session.live.subscribe(() => {
       const now = session.live.snapshot().status === "connected";
@@ -2045,32 +1946,10 @@ export class AgentsService extends Service implements Agents {
       ),
       ...this.listedAgents(selected),
     ];
-    const types = new Map(this.types().map((type) => [type.key, type]));
-    for (const [pubkey, runner] of this.runners)
-      if (!identities.some((identity) => identity.pubkey === pubkey)) {
-        this.retire(runner);
-        this.runners.delete(pubkey);
-      }
-    for (const identity of identities) {
-      const type = types.get(identity.type);
-      const runner = this.runners.get(identity.pubkey);
-      // Turning attention off voids the watch work it queued, even if it is
-      // turned on again before that work would run.
-      if (runner && this.records[identity.pubkey]?.attentionEnabled !== true) {
-        runner.epoch++;
-        runner.queue = runner.queue.filter(
-          (job) => job.trigger.type !== "watch",
-        );
-      }
-      if (!runner)
-        this.runners.set(identity.pubkey, this.runner(identity, type));
-      else if (runner.type !== type) {
-        runner.controller.abort();
-        runner.controller = new AbortController();
-        runner.type = type;
-        void this.drain(runner);
-      }
-    }
+    this.runners.reconcile(
+      identities,
+      new Map(this.types().map((type) => [type.key, type])),
+    );
     const same = (next: readonly Agent[], prior: readonly Agent[]) =>
       next.length === prior.length &&
       next.every((agent, index) => agent === prior[index]);
@@ -2085,123 +1964,14 @@ export class AgentsService extends Service implements Agents {
       });
       this.notify();
     }
-    // Resume runners whose queue paused while their community was not live,
-    // and claim or release each agent as its community goes live or not, so a
-    // copy of the app takes over without waiting for an event or tick.
-    const ready = new Set(
-      running.filter((agent) => this.bindingOf(agent)).map((a) => a.pubkey),
+    this.runners.resume(
+      new Set(
+        running.filter((agent) => this.bindingOf(agent)).map((a) => a.pubkey),
+      ),
     );
-    for (const runner of this.runners.values())
-      if (
-        runner.queue.length ||
-        ready.has(runner.pubkey) !== this.connected.has(runner.pubkey)
-      )
-        void this.drain(runner);
-    this.connected = ready;
   }
   private notify() {
     for (const listener of this.listeners) listener();
-  }
-
-  private runner(
-    identity: AgentIdentity,
-    type: RegisteredAgentType | undefined,
-  ): Runner {
-    return {
-      pubkey: identity.pubkey,
-      type,
-      controller: new AbortController(),
-      queue: [],
-      running: false,
-      windowStart: 0,
-      admitted: 0,
-      seen: new Set(),
-      wrote: new Set(),
-      working: 0,
-      transitioning: false,
-      mayHold: true,
-      epoch: 0,
-    };
-  }
-  private retire(runner: Runner) {
-    this.localActivity.clear(undefined, runner.pubkey);
-    runner.queue.length = 0;
-    runner.controller.abort();
-  }
-  /** The runner's event watches for the agent's current attention. */
-  private watches(runner: Runner, agent: Agent) {
-    if (runner.compiled?.attention === agent.attention)
-      return runner.compiled.watches;
-    const watches: CompiledWatch[] = [];
-    for (const object of Object.values(agent.attention)) {
-      const watch = object.value;
-      if (watch.type !== "event" || !watch.enabled) continue;
-      const interest = agent.attention[`interest/${watch.interest_id}`]?.value;
-      watches.push({
-        slug: object.slug,
-        watch,
-        ...(interest?.type === "interest" ? { interest } : {}),
-        // No classifier model runs here yet, so the event passes unclassified.
-        ...(watch.classifier && this.classifier() === "unavailable"
-          ? { classifier: UNAVAILABLE }
-          : {}),
-        ...(watch.filter ? { filter: compileFilter(watch.filter) } : {}),
-      });
-    }
-    runner.compiled = { attention: agent.attention, watches };
-    return watches;
-  }
-
-  /** Gives a community's live events to the agents in it. */
-  private dispatch(batch: LiveBatch, origin: string) {
-    for (const runner of this.runners.values()) {
-      const agent = this.ready(runner.pubkey);
-      if (!agent || originOf(agent.relay) !== origin || !runner.type?.run)
-        continue;
-      for (const event of batch.events) {
-        if (runner.seen.has(event.id)) continue;
-        bounded(runner.seen, event.id);
-        // An agent never hears itself; its own events keep reactions to them
-        // from its watches.
-        if (event.pubkey === agent.pubkey) {
-          bounded(runner.wrote, event.id);
-          continue;
-        }
-        for (const trigger of this.heard(runner, agent, event))
-          this.enqueue(runner, {
-            trigger,
-            ...(batch.channelId ? { channelId: batch.channelId } : {}),
-            ...(trigger.type === "watch"
-              ? {
-                  matched: {
-                    object: agent.attention[trigger.slug] as AttentionObject,
-                    epoch: runner.epoch,
-                  },
-                }
-              : {}),
-          });
-      }
-    }
-  }
-  private heard(runner: Runner, agent: Agent, event: RelayEvent): Trigger[] {
-    const wrote = (id: string) => runner.wrote.has(id);
-    // Another of the owner's agents wakes it only by naming it, wherever: were a
-    // watch enough, two agents replying to each other would never stop. The
-    // claimed owner only narrows this; the type verifies it before answering.
-    if (event.tags.some((tag) => tag[0] === "auth" && tag[1] === agent.owner))
-      return CHAT_KINDS.includes(event.kind) && tagsAgent(event, agent.pubkey)
-        ? [{ type: "mention", event }]
-        : [];
-    // Addressed events never reach a watch. Only conversation starts a run: not a
-    // DM it cannot read yet, nor a reaction to its message.
-    if (addressedTo(event, agent.pubkey, wrote))
-      return CHAT_KINDS.includes(event.kind)
-        ? [{ type: "mention", event }]
-        : [];
-    if (!agent.attentionEnabled || !this.member(agent, event)) return [];
-    return this.watches(runner, agent)
-      .filter(({ watch, filter }) => watchMatches(watch, event, filter))
-      .map(({ filter: _, ...match }) => ({ type: "watch", event, ...match }));
   }
   /** Whether the agent is in the event's channel, by its relay-signed roster.
    * The stream is the owner's, so a watch, even of "all", sees only what the
@@ -2215,426 +1985,5 @@ export class AgentsService extends Service implements Agents {
       channels.list().channels.find((item) => item.id === channel) ??
       channels.get?.(channel);
     return !!summary?.members?.includes(agent.pubkey);
-  }
-  /** The job as it should run now, or undefined when it should not run: a
-   * watch's event is matched again against the agent's current attention, so
-   * one turned off, disabled, removed, replaced or changed since it was
-   * queued wakes nothing, even if it now matches again. */
-  private current(runner: Runner, agent: Agent, job: Job): Job | undefined {
-    const { trigger } = job;
-    if (trigger.type !== "watch") return job;
-    if (!agent.attentionEnabled) return undefined;
-    if (
-      !job.matched ||
-      job.matched.epoch !== runner.epoch ||
-      agent.attention[trigger.slug] !== job.matched.object
-    )
-      return undefined;
-    const match = this.watches(runner, agent).find(
-      ({ slug, watch, filter }) =>
-        slug === trigger.slug && watchMatches(watch, trigger.event, filter),
-    );
-    if (!match) return undefined;
-    const { filter: _, ...rest } = match;
-    return {
-      ...job,
-      trigger: { type: "watch", event: trigger.event, ...rest },
-    };
-  }
-
-  /** Whether `job`, already started, should still run: the rule `current()`
-   * applies to a queued job, asked again for work a type queued itself. */
-  private stillCurrent(runner: Runner, job: Job) {
-    const agent = this.find(runner.pubkey);
-    if (!agent) return false;
-    const { trigger } = job;
-    if (trigger.type === "mention") return true;
-    if (trigger.type === "watch") return !!this.current(runner, agent, job);
-    // A timer occurrence belongs to the object and epoch it fell due under:
-    // attention off and on again, or a disable and rearm, voids it.
-    const object = agent.attention[trigger.slug];
-    return (
-      agent.attentionEnabled &&
-      !!job.matched &&
-      job.matched.epoch === runner.epoch &&
-      object === job.matched.object &&
-      object.value.type === "timer" &&
-      object.value.enabled
-    );
-  }
-
-  // Spec schedule rules: occurrence k is due at armed_at + k × interval, at most one
-  // runs when overdue, then the next is due interval after it ran. A timer with no
-  // saved state counts what was already due as used (see timerState). Checked as a
-  // run starts, so no timer has more than one occurrence waiting, and one removed,
-  // disabled or expired meanwhile never runs. The longest-waiting timer runs first,
-  // so one whose runs outlast its interval cannot hold back the others.
-  private dueTimer(runner: Runner, agent: Agent): Job | undefined {
-    // Off, timers keep their saved state; one overdue runs once when back on.
-    if (!agent.attentionEnabled) return undefined;
-    const now = seconds();
-    const record = this.records[agent.pubkey] ?? blank(agent.pubkey);
-    const prior = record.timers ?? EMPTY;
-    let timers = prior;
-    let next:
-      | {
-          slug: string;
-          timer: TimerWatch;
-          object: AttentionObject;
-          state: TimerState;
-        }
-      | undefined;
-    for (const object of Object.values(agent.attention)) {
-      const timer = object.value;
-      if (timer.type !== "timer" || !timer.enabled) continue;
-      const saved = agent.timers[object.slug];
-      const state = timerState(timer, saved, now);
-      if (state !== saved) timers = { ...timers, [object.slug]: state };
-      if (now < state.nextDue || timerSpent(timer, state, now)) continue;
-      if (!next || state.nextDue < next.state.nextDue)
-        next = { slug: object.slug, timer, object, state };
-    }
-    const ran = next && {
-      ...next.state,
-      used: next.state.used + 1,
-      nextDue: now + next.timer.interval_secs,
-    };
-    if (next && ran) timers = { ...timers, [next.slug]: ran };
-    if (timers !== prior)
-      try {
-        this.write({ ...record, timers });
-      } catch (error) {
-        // Unsaved, it would run again at once; it waits for storage instead.
-        console.warn(`Agent ${agent.name} timer state was not saved`, error);
-        return undefined;
-      }
-    if (!next || !ran) return undefined;
-    const { slug, timer, object } = next;
-    const interest = agent.attention[`interest/${timer.interest_id}`]?.value;
-    return {
-      trigger: {
-        type: "timer",
-        slug,
-        timer,
-        ...(interest?.type === "interest" ? { interest } : {}),
-        spent: timerSpent(timer, ran, ran.nextDue),
-      },
-      matched: { object, epoch: runner.epoch },
-    };
-  }
-
-  private enqueue(runner: Runner, job: Job) {
-    const now = Date.now();
-    if (now - runner.windowStart >= RATE_WINDOW_MS) {
-      runner.windowStart = now;
-      runner.admitted = 0;
-    }
-    if (runner.queue.length >= QUEUE_LIMIT || runner.admitted >= RATE_LIMIT) {
-      if (runner.activityClaimed) {
-        this.showWork(runner, job);
-        job.work?.finish({
-          ok: false,
-          error:
-            "Agent is busy and could not queue this request. Try again when it finishes.",
-        });
-      }
-      console.warn(`Agent ${this.agent(runner.pubkey)?.name} dropped an event`);
-      return;
-    }
-    runner.admitted++;
-    if (runner.activityClaimed) this.showWork(runner, job);
-    runner.queue.push(job);
-    void this.drain(runner);
-  }
-
-  private showWork(runner: Runner, job: Job) {
-    if (job.work || job.trigger.type !== "mention") return;
-    const agent = this.agent(runner.pubkey);
-    const scope = agent && this.bindingOf(agent)?.scope;
-    const event = job.trigger.event;
-    const channelId =
-      job.channelId ?? event.tags.find(([key]) => key === "h")?.[1];
-    if (!scope || !channelId) return;
-    job.work = this.localActivity.begin({
-      scope,
-      agent: runner.pubkey,
-      channelId,
-      messageId: event.id,
-      threadRootId: threadReference(event)?.rootId ?? event.id,
-    });
-  }
-
-  // One run at a time per agent: events in arrival order, then a due timer.
-  // Each job runs the agent as it is when the job starts. While its community's
-  // session is not live the queue pauses and update() resumes it; a type that cannot run drops what is queued. A run that ignores
-  // its deadline stops holding the queue when the deadline passes; it is not
-  // otherwise fenced.
-  private async drain(runner: Runner) {
-    if (runner.running || runner.transitioning) return;
-    runner.running = true;
-    while (this.runners.get(runner.pubkey) === runner) {
-      const agent = this.ready(runner.pubkey);
-      const type = runner.type;
-      const run = type?.run;
-      // An agent this copy cannot run is left to another copy of the app.
-      if (!agent || !type || !run) {
-        if (agent) {
-          this.localActivity.clear(undefined, runner.pubkey);
-          runner.queue.length = 0;
-        }
-        await this.release(runner);
-        // It may have come back into view, or gained its type, meanwhile.
-        if (this.ready(runner.pubkey) !== agent || runner.type !== type)
-          continue;
-        break;
-      }
-      // Every copy of the app on this machine hears the same events; only the
-      // one holding the agent runs them. Asked on every wake too, so a copy
-      // takes over within a tick of the holder quitting or letting go.
-      if (!(await this.claim(runner))) {
-        this.localActivity.clear(undefined, runner.pubkey);
-        runner.activityClaimed = false;
-        runner.queue.length = 0;
-        break;
-      }
-      // Retype may have reserved this idle runner while claim was pending.
-      if (runner.transitioning) break;
-      // The agent or its type may have changed meanwhile.
-      if (this.ready(runner.pubkey) !== agent || runner.type !== type) continue;
-      runner.activityClaimed = true;
-      for (const queued of runner.queue) this.showWork(runner, queued);
-      const queued = runner.queue.shift();
-      const job = queued
-        ? this.current(runner, agent, queued)
-        : this.dueTimer(runner, agent);
-      if (queued && !job) continue;
-      if (!job) break;
-      const lifetime = runner.controller.signal;
-      const signal = AbortSignal.any([
-        lifetime,
-        AbortSignal.timeout(type.timeoutMs ?? 60_000),
-      ]);
-      const handle: AgentHandle = Object.freeze({
-        pubkey: agent.pubkey,
-        name: agent.name,
-        owner: agent.owner,
-        publish: (event: AgentEventTemplate) => this.publish(runner, event),
-        query: (filters: readonly object[]) =>
-          this.require().query(agent.pubkey, filters),
-        upload: (data: string, mime: string) =>
-          this.require().upload(agent.pubkey, data, mime),
-        media: (url: string) => this.require().media(agent.pubkey, url),
-        remember: (slug: string, body: string, after: number) =>
-          this.require().remember(agent.pubkey, slug, body, after),
-        attention: this.attention(agent.pubkey),
-      });
-      const working = this.working(runner, job);
-      const completion = Promise.resolve().then(async () => {
-        const pick = await pickFor(job.trigger, agent, type);
-        const team = teamPrompt(
-          this.teamList,
-          this.identities.filter((identity) => !identity.deleted),
-          agent.pubkey,
-        );
-        signal.throwIfAborted();
-        return run(
-          Object.freeze({
-            trigger: job.trigger,
-            ...(job.channelId ? { channelId: job.channelId } : {}),
-            agent: handle,
-            config: agent.config,
-            ...pick,
-            ...(team ? { team } : {}),
-            signal,
-            workingUntil: working.hold,
-            ignored: () => job.work?.remove(),
-            acknowledged: () => job.work?.started(),
-            superseded: () => job.work?.supersede(),
-            step: (tool: string, target?: string) =>
-              job.work?.step(tool, target),
-            current: () => !lifetime.aborted && this.stillCurrent(runner, job),
-          }),
-        );
-      });
-      // Handover expiry releases the queue, never the actual work's outcome.
-      void completion.then(
-        () => working.release(),
-        (error) => working.release({ ok: false, error: message(error) }),
-      );
-      try {
-        await Promise.race([
-          completion,
-          new Promise<never>((_, reject) => {
-            if (signal.aborted) reject(signal.reason);
-            signal.addEventListener("abort", () => reject(signal.reason), {
-              once: true,
-            });
-          }),
-        ]);
-      } catch (error) {
-        if (!lifetime.aborted)
-          console.error(`Agent run failed: ${agent.name}`, error);
-      }
-    }
-    runner.running = false;
-  }
-
-  /** Counts a run as working until it and everything it handed to
-   * `workingUntil` have settled, however long that takes. A
-   * mention run is shown typing on this device meanwhile; no public
-   * activity is published. */
-  private working(runner: Runner, { trigger, channelId, work }: Job) {
-    work?.started();
-    const event = trigger.type === "mention" ? trigger.event : undefined;
-    const channel =
-      event && (channelId ?? event.tags.find((tag) => tag[0] === "h")?.[1]);
-    const done =
-      event && channel
-        ? [
-            // STOPGAP(agent-local-typing): delete with local-typing.ts.
-            typeLocally(
-              () => {
-                const relay = this.relay(runner.pubkey)?.snapshot();
-                return relay?.status === "ready" ? relay.session : undefined;
-              },
-              runner.pubkey,
-              event,
-              channel,
-            ),
-          ]
-        : [];
-    let holds = 1;
-    let outcome: WorkOutcome = { ok: true };
-    const lifetime = runner.controller.signal;
-    runner.working++;
-    const stop = () => {
-      if (holds < 0) return;
-      holds = -1;
-      lifetime.removeEventListener("abort", abort);
-      runner.working--;
-      for (const end of done) end();
-    };
-    const abort = () => {
-      work?.remove();
-      stop();
-    };
-    lifetime.addEventListener("abort", abort, { once: true });
-    const release = (result?: unknown) => {
-      if (holds <= 0) return;
-      if (
-        result &&
-        typeof result === "object" &&
-        "ok" in result &&
-        result.ok === false
-      ) {
-        outcome = {
-          ok: false,
-          error:
-            "error" in result
-              ? String(result.error)
-              : "Could not finish this request",
-        };
-      }
-      if (--holds === 0) {
-        work?.finish(outcome);
-        stop();
-      }
-    };
-    return {
-      hold(pending: PromiseLike<unknown>) {
-        if (holds <= 0) return;
-        holds++;
-        Promise.resolve(pending).then(release, (error) =>
-          release({ ok: false, error: message(error) }),
-        );
-      },
-      release,
-    };
-  }
-
-  private async claim(runner: Runner) {
-    try {
-      runner.mayHold = (await this.native?.claim(runner.pubkey)) ?? false;
-      return runner.mayHold;
-    } catch (error) {
-      runner.mayHold = true;
-      // Answering twice beats not answering at all.
-      console.warn(
-        `Agent ${this.agent(runner.pubkey)?.name} was not claimed`,
-        error,
-      );
-      return true;
-    }
-  }
-  /** Claims exclusively for a provider migration. Unlike turn execution,
-   * uncertainty is unsafe here because changing native type is destructive. */
-  private async claimForRetype(runner: Runner) {
-    runner.mayHold = (await this.native?.claim(runner.pubkey)) ?? false;
-    return runner.mayHold;
-  }
-  private async release(runner: Runner) {
-    if (!runner.mayHold) return;
-    runner.mayHold = false;
-    await this.native
-      ?.release(runner.pubkey)
-      .catch((error) =>
-        console.warn(`Agent ${runner.pubkey} was not released`, error),
-      );
-  }
-
-  /** The agent's attention as its handle offers it. Reads the saved record
-   * each call, so it is current however long the run lasts. */
-  private attention(pubkey: string): AgentAttention {
-    const record = () => {
-      const identity = this.live(pubkey);
-      if (!identity) throw new Error("No such agent on this device");
-      return this.recordOf(identity);
-    };
-    return Object.freeze({
-      enabled: () => record().attentionEnabled === true,
-      classifier: () => this.classifier(),
-      show: (slug: string, interest?: string) =>
-        show(record(), slug, seconds(), interest),
-      interests: (search?: string) => interestIds(record(), search),
-      watches: (filter: WatchFilter = {}) =>
-        watchSummaries(record(), filter, seconds()),
-      write: async (
-        slug: string,
-        value: AttentionValue | null,
-        options: WriteOptions,
-      ) => {
-        // The token is checked against the record as it is when the write
-        // lands: a write that raced this one makes it check again, a few times.
-        for (let attempt = 0; ; attempt++) {
-          const before = record();
-          const after = await checkedWrite(
-            before,
-            slug,
-            value,
-            options,
-            seconds(),
-          );
-          if (record() !== before) {
-            if (attempt < 3) continue;
-            throw new AttentionError(
-              "conflict",
-              `${slug} is changing; show it again`,
-            );
-          }
-          this.write(after);
-          return show(after, slug, seconds());
-        }
-      },
-    });
-  }
-
-  private require() {
-    if (!this.native) throw new Error("Agents run only in the desktop app");
-    return this.native;
-  }
-  private async publish(runner: Runner, event: AgentEventTemplate) {
-    const signed = await this.require().publish(runner.pubkey, event);
-    bounded(runner.wrote, signed.id);
-    return signed;
   }
 }
