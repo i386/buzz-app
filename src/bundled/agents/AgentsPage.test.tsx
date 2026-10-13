@@ -72,6 +72,7 @@ function setup(saved: Agent[], { shown = true } = {}) {
   let snapshot: AgentsSnapshot = {
     status: "ready",
     classifier: "unavailable",
+    classifierKey: "missing",
     agents: saved,
     running: saved,
     teams: [],

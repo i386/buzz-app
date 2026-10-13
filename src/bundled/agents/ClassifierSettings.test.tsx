@@ -9,17 +9,21 @@ import { ClassifierSettings } from "./ClassifierSettings";
 afterEach(cleanup);
 
 /** Agents as far as the card uses it, with a key store that can fail. */
-function fake(status: AgentsSnapshot["status"] = "ready") {
+function fake(
+  status: AgentsSnapshot["status"] = "ready",
+  classifierKey: AgentsSnapshot["classifierKey"] = "missing",
+) {
   let state: AgentsSnapshot = {
     status,
     classifier: "unavailable",
+    classifierKey,
     agents: [],
     running: [],
     teams: [],
   };
   const listeners = new Set<() => void>();
-  const set = (classifier: AgentsSnapshot["classifier"]) => {
-    state = { ...state, classifier };
+  const set = (classifierKey: AgentsSnapshot["classifierKey"]) => {
+    state = { ...state, classifierKey };
     for (const listener of listeners) listener();
   };
   return {
@@ -28,8 +32,8 @@ function fake(status: AgentsSnapshot["status"] = "ready") {
       listeners.add(listener);
       return () => listeners.delete(listener);
     },
-    setClassifierKey: vi.fn(async (_key: string) => set("available")),
-    clearClassifierKey: vi.fn(async () => set("unavailable")),
+    setClassifierKey: vi.fn(async (_key: string) => set("saved")),
+    clearClassifierKey: vi.fn(async () => set("missing")),
   };
 }
 
@@ -74,4 +78,39 @@ it("keeps the typed key and shows why a save failed", async () => {
     "does not look like",
   );
   expect(screen.getByLabelText("TypeSafe API key")).toHaveValue("bad key");
+});
+
+it("says what each classified event sends to TypeSafe", () => {
+  render(<ClassifierSettings agents={fake()} active={() => true} />);
+  expect(screen.getByText(/api\.typesafe\.ai/)).toHaveTextContent(
+    /whole event.*display name.*channel name.*600 characters.*mentions.*private channels/,
+  );
+});
+
+it("does not call a key missing until its status is read, or when it cannot be", async () => {
+  const user = userEvent.setup();
+  const { rerender } = render(
+    <ClassifierSettings
+      agents={fake("ready", "checking")}
+      active={() => true}
+    />,
+  );
+  expect(screen.getByRole("status")).toHaveTextContent("Checking");
+  expect(screen.queryByRole("button", { name: "Remove key" })).toBeNull();
+  const unreadable = fake("ready", "unreadable");
+  rerender(<ClassifierSettings agents={unreadable} active={() => true} />);
+  expect(screen.getByRole("status")).toHaveTextContent("could not be read");
+  expect(screen.getByRole("button", { name: "Replace key" })).toBeVisible();
+  await user.click(screen.getByRole("button", { name: "Remove key" }));
+  expect(unreadable.clearClassifierKey).toHaveBeenCalledOnce();
+  rerender(
+    <ClassifierSettings
+      agents={fake("ready", "refused")}
+      active={() => true}
+    />,
+  );
+  expect(screen.getByRole("status")).toHaveTextContent(
+    "TypeSafe refused the saved key",
+  );
+  expect(screen.getByRole("button", { name: "Replace key" })).toBeVisible();
 });

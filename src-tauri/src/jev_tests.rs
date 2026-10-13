@@ -147,67 +147,53 @@ async fn set_and_clear_take_effect_without_reading_the_keychain_again() {
 }
 
 #[tokio::test]
-async fn refuses_a_key_that_could_escape_the_keychain_command() {
+async fn refuses_a_key_that_is_not_one_printable_token() {
     let store = Arc::new(FakeStore::default());
     let host = host(&store, "http://127.0.0.1:9/".into(), TIMEOUT);
-    for bad in ["", "a b", "a\"b", "a\\b", "a\nb", &"x".repeat(513)] {
+    for bad in ["", "a b", "a\nb", "a\u{e9}b", &"x".repeat(513)] {
         assert!(host.set(bad).await.is_err(), "{bad:?}");
     }
     assert!(store.key.lock().unwrap().is_none());
 }
 
 #[tokio::test]
-async fn retries_once_on_a_server_error_then_passes_its_answer() {
-    let (url, seen) = server(vec![
-        (503, "retry-after: 0\r\n", String::new()),
-        (200, "", OK.into()),
-    ])
-    .await;
-    let result = host(&keyed("k"), url, TIMEOUT)
-        .classify(serde_json::json!({}), serde_json::json!({}))
+async fn a_failed_call_is_not_retried() {
+    for status in [429, 500, 503] {
+        let (url, seen) = server(vec![
+            (status, "retry-after: 0\r\n", String::new()),
+            (200, "", OK.into()),
+        ])
         .await;
-    assert!(matches!(result, Classified::Answered { .. }));
-    assert_eq!(seen.lock().unwrap().len(), 2);
+        let result = host(&keyed("k"), url, TIMEOUT)
+            .classify(serde_json::json!({}), serde_json::json!({}))
+            .await;
+        assert_eq!(
+            result,
+            Classified::Failed {
+                reason: Failure::ServiceError
+            },
+            "{status}"
+        );
+        assert_eq!(seen.lock().unwrap().len(), 1, "{status}");
+    }
 }
 
 #[tokio::test]
-async fn a_second_failure_or_a_client_error_is_a_service_error() {
-    let (url, _) = server(vec![(500, "", String::new()), (500, "", String::new())]).await;
-    let result = host(&keyed("k"), url, TIMEOUT)
-        .classify(serde_json::json!({}), serde_json::json!({}))
-        .await;
-    assert_eq!(
-        result,
-        Classified::Failed {
-            reason: Failure::ServiceError
-        }
-    );
-    let (url, seen) = server(vec![(401, "", String::new())]).await;
-    let result = host(&keyed("k"), url, TIMEOUT)
-        .classify(serde_json::json!({}), serde_json::json!({}))
-        .await;
-    assert_eq!(
-        result,
-        Classified::Failed {
-            reason: Failure::ServiceError
-        }
-    );
-    assert_eq!(seen.lock().unwrap().len(), 1);
-}
-
-#[tokio::test]
-async fn does_not_retry_when_the_server_asks_to_wait_past_the_deadline() {
-    let (url, seen) = server(vec![(429, "retry-after: 60\r\n", String::new())]).await;
-    let result = host(&keyed("k"), url, Duration::from_secs(5))
-        .classify(serde_json::json!({}), serde_json::json!({}))
-        .await;
-    assert_eq!(
-        result,
-        Classified::Failed {
-            reason: Failure::ServiceError
-        }
-    );
-    assert_eq!(seen.lock().unwrap().len(), 1);
+async fn a_refused_key_is_reported_as_unauthorized() {
+    for status in [401, 403] {
+        let (url, seen) = server(vec![(status, "", String::new())]).await;
+        let result = host(&keyed("k"), url, TIMEOUT)
+            .classify(serde_json::json!({}), serde_json::json!({}))
+            .await;
+        assert_eq!(
+            result,
+            Classified::Failed {
+                reason: Failure::Unauthorized
+            },
+            "{status}"
+        );
+        assert_eq!(seen.lock().unwrap().len(), 1);
+    }
 }
 
 #[tokio::test]
@@ -302,7 +288,7 @@ async fn a_refused_key_is_read_again_so_an_outside_removal_is_seen() {
         host.classify(serde_json::json!({}), serde_json::json!({}))
             .await,
         Classified::Failed {
-            reason: Failure::ServiceError
+            reason: Failure::Unauthorized
         }
     );
     *store.key.lock().unwrap() = None;
@@ -347,6 +333,10 @@ fn failures_serialize_as_janet_reasons() {
     assert_eq!(
         value,
         serde_json::json!({"outcome": "failed", "reason": "missing_credentials"})
+    );
+    assert_eq!(
+        serde_json::to_value(Failure::Unauthorized).unwrap(),
+        serde_json::json!("unauthorized")
     );
 }
 

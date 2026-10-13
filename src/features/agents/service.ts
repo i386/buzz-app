@@ -70,6 +70,7 @@ import {
   show,
   watchSummaries,
   type ClassifierAvailability,
+  type ClassifierKey,
   type Shown,
   type WatchFilter,
   type WatchSummary,
@@ -362,6 +363,8 @@ export type AgentsSnapshot = Readonly<{
   status: "unavailable" | "loading" | "ready" | "error";
   /** Whether a watch's classifier can run on this device now. */
   classifier: ClassifierAvailability;
+  /** What is known about the saved classifier key, for the owner. */
+  classifierKey: ClassifierKey;
   /** The selected community's agents, while it is connected. */
   agents: readonly Agent[];
   /** Every agent kept running here, whichever community is selected: the
@@ -693,9 +696,6 @@ export class AgentsService extends Service implements Agents {
   /** Settles once the saved key's status is known; until then a classified
    * event waits rather than pass unchecked. */
   private jevStatus: Promise<void> | undefined;
-  /** Whether the key's status is known. While it is not (its read failed), a
-   * classified event still calls native, which reports a missing key. */
-  private jevKnown = false;
   private readonly contributions;
   private readonly listeners = new Set<() => void>();
   /** Every saved identity, deleted ones included: native's list is the agent
@@ -752,6 +752,7 @@ export class AgentsService extends Service implements Agents {
     this.state = Object.freeze({
       status: native ? "loading" : "unavailable",
       classifier: "unavailable",
+      classifierKey: "checking",
       agents: [],
       running: [],
       teams: this.teamList,
@@ -771,10 +772,11 @@ export class AgentsService extends Service implements Agents {
       void this.refresh();
       this.jevStatus = this.jev
         ?.status()
-        .then((configured) => this.setAvailability(configured))
-        .catch((error) =>
-          console.warn("The classifier key could not be read", error),
-        );
+        .then((configured) => this.setKey(configured ? "saved" : "missing"))
+        .catch((error) => {
+          console.warn("The classifier key could not be read", error);
+          this.setKey("unreadable");
+        });
       // Wakes each runner, which starts any timer that is due.
       const tick = setInterval(() => {
         for (const runner of this.runners.values()) void this.drain(runner);
@@ -907,19 +909,24 @@ export class AgentsService extends Service implements Agents {
     if (!this.jev)
       throw new Error("The classifier runs only in the desktop app");
     await this.jev.setKey(key);
-    this.setAvailability(true);
+    this.setKey("saved");
   }
   async clearClassifierKey() {
     if (!this.jev)
       throw new Error("The classifier runs only in the desktop app");
     await this.jev.clearKey();
-    this.setAvailability(false);
+    this.setKey("missing");
   }
-  private setAvailability(configured: boolean) {
-    this.jevKnown = true;
-    const classifier = configured ? "available" : "unavailable";
-    if (this.state.classifier === classifier) return;
-    this.state = Object.freeze({ ...this.state, classifier });
+  /** Agents are told a classifier can run only while a key is known to be
+   * saved. A key the service refused still runs, and each event reports why
+   * it passed unchecked. */
+  private setKey(classifierKey: ClassifierKey) {
+    const classifier =
+      classifierKey === "saved" || classifierKey === "refused"
+        ? "available"
+        : "unavailable";
+    if (this.state.classifierKey === classifierKey) return;
+    this.state = Object.freeze({ ...this.state, classifier, classifierKey });
     this.notify();
   }
 
@@ -1963,8 +1970,8 @@ export class AgentsService extends Service implements Agents {
       // A saved key is not known to be missing until its status is read.
       await this.jevStatus;
       const jev = this.jev;
-      if (!jev || (this.jevKnown && this.classifier() === "unavailable"))
-        return notRun();
+      // While the key cannot be read, native is still asked: it may find one.
+      if (!jev || this.state.classifierKey === "missing") return notRun();
       // Only the copy of the app that holds the agent sends its events out.
       if (!(await this.claim(runner)) || !live()) return undefined;
       const context = await this.context(agent, trigger.event);
@@ -1982,10 +1989,11 @@ export class AgentsService extends Service implements Agents {
         },
         context,
       });
-      // The key was removed outside the app since it was read, or native
-      // found one the failed status read could not.
-      if (result.outcome === "not-run") this.setAvailability(false);
-      else if (!this.jevKnown) this.setAvailability(true);
+      // The key was removed outside the app since it was read, the service
+      // refused it, or native found one the failed status read could not.
+      if (result.outcome === "not-run") this.setKey("missing");
+      else if (result.outcome === "passed") this.setKey("saved");
+      else if (result.reason === "unauthorized") this.setKey("refused");
       return pass ? result : undefined;
     })().catch((error) => {
       console.warn(`Agent ${agent.name} could not classify an event`, error);

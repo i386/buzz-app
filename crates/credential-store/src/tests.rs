@@ -296,3 +296,18 @@ fn human_identity_slots_stay_separate() {
     assert_eq!(human_service(false), "dev.local.buzz.foundation.identity");
     assert_eq!(HUMAN_SERVICE, human_service(cfg!(debug_assertions)));
 }
+
+#[test]
+fn replace_overwrites_or_creates_under_the_shared_lock() {
+    let root = tempfile::tempdir().unwrap();
+    let store = Memory::default();
+    replace_entry(&store, root.path(), SERVICE, "setting", b"first").unwrap();
+    replace_entry(&store, root.path(), SERVICE, "setting", b"second").unwrap();
+    assert_eq!(store.read().unwrap().as_slice(), b"second");
+    let _held = acquire(root.path(), SERVICE, "setting").unwrap();
+    assert_eq!(
+        replace_entry(&store, root.path(), SERVICE, "setting", b"third"),
+        Err(Error::Busy)
+    );
+    assert_eq!(store.read().unwrap().as_slice(), b"second");
+}

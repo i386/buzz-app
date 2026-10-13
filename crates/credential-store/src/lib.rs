@@ -110,6 +110,19 @@ pub fn add(service: &str, account: &str, value: &[u8]) -> Result<()> {
     )
 }
 
+/// Write a credential whether or not one is saved, under the same lock as
+/// creates and deletes. For settings a person replaces, never for identities.
+#[cfg(all(not(test), any(target_os = "windows", target_os = "linux")))]
+pub fn replace(service: &str, account: &str, value: &[u8]) -> Result<()> {
+    replace_entry(
+        &entry(service, account)?,
+        &lock_root()?,
+        service,
+        account,
+        value,
+    )
+}
+
 /// Delete only the exact credential, serialized with this app's creates/deletes.
 #[cfg(all(not(test), any(target_os = "windows", target_os = "linux")))]
 pub fn delete(service: &str, account: &str) -> Result<()> {
@@ -131,6 +144,19 @@ fn add_entry(
         Err(Error::Absent) => {}
         Err(error) => return Err(error),
     }
+    entry.write(value)
+}
+
+#[cfg(any(target_os = "windows", target_os = "linux", test))]
+fn replace_entry(
+    entry: &impl Backend,
+    root: &Path,
+    service: &str,
+    account: &str,
+    value: &[u8],
+) -> Result<()> {
+    let value = std::str::from_utf8(value).map_err(|_| Error::Corrupt)?;
+    let _lock = acquire(root, service, account)?;
     entry.write(value)
 }
 

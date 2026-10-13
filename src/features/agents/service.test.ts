@@ -1734,6 +1734,37 @@ it("a key set or cleared takes effect at once, and one removed elsewhere is noti
   expect(service.classifier()).toBe("unavailable");
 });
 
+it("shows a key it cannot read as unreadable, and one the service refuses as refused", async () => {
+  const jev = fakeJev();
+  jev.status.mockRejectedValueOnce(new Error("locked"));
+  const { service, run, emit } = await classifiedAgent(jev);
+  await vi.waitFor(() =>
+    expect(service.snapshot().classifierKey).toBe("unreadable"),
+  );
+  // Unreadable is not missing: native is still asked, and its answer shows
+  // the key is saved.
+  emit({ events: [event("a")] });
+  await vi.waitFor(() => expect(run).toHaveBeenCalledOnce());
+  expect(jev.classify).toHaveBeenCalledOnce();
+  expect(service.snapshot().classifierKey).toBe("saved");
+  jev.classify.mockResolvedValueOnce({
+    outcome: "failed",
+    reason: "unauthorized",
+  });
+  emit({ events: [event("b")] });
+  await vi.waitFor(() => expect(run).toHaveBeenCalledTimes(2));
+  expect(run.mock.calls[1]?.[0].trigger).toMatchObject({
+    classifier: { outcome: "failed", reason: "unauthorized" },
+  });
+  expect(service.snapshot().classifierKey).toBe("refused");
+  expect(service.classifier()).toBe("available");
+  // Another failure does not say whether the key was accepted.
+  jev.classify.mockResolvedValueOnce({ outcome: "failed", reason: "timeout" });
+  emit({ events: [event("c")] });
+  await vi.waitFor(() => expect(run).toHaveBeenCalledTimes(3));
+  expect(service.snapshot().classifierKey).toBe("refused");
+});
+
 it("does not run an event classified against a classifier changed since", async () => {
   const jev = fakeJev();
   let answer!: (
