@@ -13,6 +13,7 @@ import type { MemoryEntry } from "../../features/agents/memory";
 import { type FakeClaude, fakeSpawn, flush } from "./claude-testing";
 import { TOP_LEVEL_PROMPT } from "../../buzz-mcp/prompt";
 import { ClaudeRuntime, DEFAULT_CONFIG, modelName } from "./runtime";
+import { localSessions } from "./sessions";
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -187,6 +188,38 @@ function setup(
     session,
   };
 }
+
+it("names each saved session's channel as the community lists it", () => {
+  const { runtime, data } = setup();
+  const saved = localSessions(
+    {
+      getItem: (key: string) => data.get(key) ?? null,
+      setItem: (key: string, value: string) => void data.set(key, value),
+      removeItem: (key: string) => void data.delete(key),
+    } as Storage,
+    self,
+  );
+  saved.set(channel, { id: "s1", seen: 100, at: 5 });
+  saved.set("chan-gone/root-1", { id: "s2", seen: 100, at: 3 });
+  expect(runtime.conversations(self)).toEqual([
+    {
+      key: channel,
+      agent: self,
+      sessionId: "s1",
+      channelId: channel,
+      name: "general",
+      at: 5,
+    },
+    {
+      key: "chan-gone/root-1",
+      agent: self,
+      sessionId: "s2",
+      channelId: "chan-gone",
+      root: "root-1",
+      at: 3,
+    },
+  ]);
+});
 
 it("hands a mention to its thread's session", async () => {
   const root = message("1", "Build is red");
