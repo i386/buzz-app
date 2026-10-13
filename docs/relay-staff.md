@@ -26,7 +26,9 @@ connection" section of [identity.md](identity.md) for the address rules.
    again. The entries follow the selected community's relay and the signed-in
    identity; changing either one, including an identity switch on the same
    relay, replaces the open screen and probes for the new identity unless its role
-   is already remembered.
+   is already remembered. An open Staff entry is the exception: unless the new
+   identity has a remembered `operator` role, Settings removes the entry before
+   it can probe, and Staff reappears once another entry's probe finds one.
 3. A 401 or 403, from the relay or a gateway in front of it, on any signed request the console sends (reads, writes,
    attachment previews and Save) re-probes in the background. An unchanged
    result keeps the current session so open views do not reload and the
@@ -59,8 +61,9 @@ inside the current entry; Back returns to the list.
   Restrictions (lift a ban, clear a timeout), Members and Actions (ban, timeout,
   delete a message after an event preview).
 - **Staff** (operators only): add, change and remove staff. Staff set in
-  relay configuration can't be changed here, and a read-only relay shows the
-  list without any controls. Changing your own entry re-probes.
+  relay configuration can't be changed here. A read-only relay (admin auth
+  disabled) reports no role, so Staff is hidden there. Changing your own entry
+  re-probes.
 
 A relay that answers a route with a complete, empty 404 or 405 lacks it. The
 console says so in place ("This relay doesn't support community browsing yet.",
