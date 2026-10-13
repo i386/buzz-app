@@ -791,7 +791,8 @@ export class AgentsService extends Service implements Agents {
   private passes = new Map<string, Pass>();
   /** Streams seen off (their watch disabled or the agent's attention off)
    * since the app started. One turned on starts from then, so it wakes
-   * nothing from the time it was off. */
+   * nothing from the time it was off; across a restart, its saved
+   * checkpoint, moved while it was off, does the same. */
   private quiet = new Set<string>();
 
   constructor(
@@ -2144,8 +2145,13 @@ export class AgentsService extends Service implements Agents {
       const on = !!agent?.attentionEnabled && !!runner.type?.run;
       const reading: Stream[] = [];
       for (const stream of agent ? streamsOf(agent) : []) {
-        if (!on || !stream.enabled) this.quiet.add(stream.key);
-        else if (this.quiet.delete(stream.key))
+        if (!on || !stream.enabled) {
+          // Saved too, so one turned on after a restart starts from about
+          // when this copy last saw it off.
+          this.quiet.add(stream.key);
+          if ((this.checkpoints[stream.key]?.through ?? 0) < now)
+            move(stream.key, { through: now });
+        } else if (this.quiet.delete(stream.key))
           move(stream.key, { through: now });
         else reading.push(stream);
       }
@@ -2183,8 +2189,8 @@ export class AgentsService extends Service implements Agents {
     if (changed) this.saveCheckpoints();
   }
   /** Reads each stream's missed events, newest page first, through `upper`,
-   * saving its checkpoint after each page. A page waits until the agent's
-   * queue has room for all of it, so catch-up drops nothing. */
+   * saving its checkpoint after each page. A page is heard only once the
+   * agent's queue has room for all of it, so catch-up drops none of it. */
   private async readMissed(
     runner: Runner,
     pass: Pass,
@@ -2207,7 +2213,11 @@ export class AgentsService extends Service implements Agents {
             fresh: true,
           });
           signal.throwIfAborted();
-          const checkpoint = afterPage(page, events);
+          // Live events may have taken the room during the read.
+          await this.room(runner, signal);
+          // The relay's own page sets the cursor: a read also returns the
+          // owner's messages not yet sent, which can be older than it.
+          const checkpoint = afterPage(page, events.filter(hasEventProof));
           // An edit since starts another pass, which reads it again.
           const agent = this.ready(runner.pubkey);
           if (agent?.attention !== pass.attention) return;

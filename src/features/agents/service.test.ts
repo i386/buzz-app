@@ -2274,6 +2274,76 @@ it("catches a kind 9 watch up on what it missed, a page at a time, and not again
   }
 });
 
+it("takes the next page's cursor from the relay's events, not a local one older than them", async () => {
+  const { service, run, session, history } = await setup({
+    identities: [echo],
+  });
+  const now = nowSeconds();
+  for (let i = 0; i < 20; i++) history.push(said(`m${i}`, now - 100 + i));
+  const read = vi.mocked(session.read);
+  const original = read.getMockImplementation() as NonNullable<
+    ReturnType<typeof read.getMockImplementation>
+  >;
+  let first = true;
+  read.mockImplementation(async (filters, options) => {
+    const events = await original(filters, options);
+    if (!filters[0]?.kinds?.includes(9) || !first) return events;
+    first = false;
+    // The owner's message not yet sent, from before the relay's oldest.
+    return [...events, { ...said("unsent", now - 200) }];
+  });
+  await service.save(bot, { attentionEnabled: true, attention: chat });
+  await vi.waitFor(() => expect(run).toHaveBeenCalledTimes(20), {
+    timeout: 3_000,
+  });
+  expect(new Set(heard(run))).toEqual(
+    new Set(Array.from({ length: 20 }, (_, i) => `m${i}`)),
+  );
+});
+
+it("hears a whole page when live events fill the queue while the page is read", async () => {
+  const { service, run, session, history, emit } = await setup({
+    identities: [echo],
+  });
+  const now = nowSeconds();
+  for (let i = 0; i < 16; i++) history.push(said(`m${i}`, now - 100 + i));
+  let unblock!: () => void;
+  const blocked = new Promise<void>((resolve) => {
+    unblock = resolve;
+  });
+  run.mockImplementation(() => blocked);
+  const read = vi.mocked(session.read);
+  const original = read.getMockImplementation() as NonNullable<
+    ReturnType<typeof read.getMockImplementation>
+  >;
+  let first = true;
+  read.mockImplementation(async (filters, options) => {
+    if (filters[0]?.kinds?.includes(9) && first) {
+      first = false;
+      // Live traffic arrives while the page is on its way.
+      emit({
+        events: Array.from({ length: 20 }, (_, i) =>
+          event(`live${i}x`, { created_at: now }),
+        ),
+      });
+    }
+    return original(filters, options);
+  });
+  await service.save(bot, {
+    attentionEnabled: true,
+    attention: { ...chat, "watch/channel": null },
+  });
+  await vi.waitFor(() => expect(run).toHaveBeenCalled());
+  await settle();
+  unblock();
+  await vi.waitFor(() => expect(run).toHaveBeenCalledTimes(36), {
+    timeout: 5_000,
+  });
+  expect(heard(run).filter((content) => content.startsWith("m"))).toHaveLength(
+    16,
+  );
+});
+
 it("starts catch-up again when its watch is edited while a page is being read", async () => {
   const { service, run, session, history } = await setup({
     identities: [echo],
@@ -2361,6 +2431,46 @@ it("wakes nothing from the time its attention was off", async () => {
     await vi.waitFor(() => expect(run).toHaveBeenCalledTimes(1));
     await settle();
     expect(heard(run)).toEqual(["after"]);
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+it("wakes nothing from the time its watch was off, also when it is turned on after a restart", async () => {
+  vi.useFakeTimers({ toFake: ["Date"] });
+  try {
+    const start = nowSeconds();
+    const storage = memoryStorage();
+    const first = await setup({ storage, identities: [echo] });
+    await first.service.save(bot, {
+      attentionEnabled: true,
+      attention: { ...chat, "watch/channel": null },
+    });
+    await settle();
+    await first.service.save(bot, {
+      attention: { "watch/chat": { ...chat["watch/chat"], enabled: false } },
+    });
+    first.history.push(said("while off", start + 10));
+    // Still off a while later, then the app quits.
+    vi.setSystemTime((start + 20) * 1000);
+    first.recover();
+    await settle();
+    first.connect(false);
+    // Turned on again elsewhere while this copy was closed.
+    const saved = storage.getItem("buzz.agents.v1") ?? "";
+    storage.setItem(
+      "buzz.agents.v1",
+      saved.replace('"enabled":false', '"enabled":true'),
+    );
+    vi.setSystemTime((start + 60) * 1000);
+    const second = await setup({
+      storage,
+      identities: [echo],
+      history: [...first.history, said("after", start + 30)],
+    });
+    await vi.waitFor(() => expect(second.run).toHaveBeenCalledTimes(1));
+    await settle();
+    expect(heard(second.run)).toEqual(["after"]);
   } finally {
     vi.useRealTimers();
   }
