@@ -1,7 +1,15 @@
-import type { Host, HostResponse } from "../../../features/host/service";
+import type {
+  Host,
+  HostResponse,
+  NipOaAuthorization,
+} from "../../../features/host/service";
 import { oauthTarget, type Credential } from "../oauth/browser";
 import type { OAuthSession } from "../oauth/session";
-import { clearRegistration, registrationIntent } from "./registration";
+import {
+  clearRegistration,
+  registrationIntent,
+  type RegistrationIntent,
+} from "./registration";
 
 export type RemoteAgent = Readonly<{
   id: string;
@@ -39,11 +47,7 @@ function agentStatus(value: unknown): RemoteAgent["status"] {
   return "Unknown";
 }
 
-export function createAgentClient(
-  host: Host,
-  session: OAuthSession,
-  communityUrl: () => string | undefined,
-) {
+export function createAgentClient(host: Host, session: OAuthSession) {
   function check(credential: Credential, signal: AbortSignal) {
     signal.throwIfAborted();
     if (
@@ -102,7 +106,26 @@ export function createAgentClient(
       throw new Error("Builderlab returned an invalid response.");
     }
   }
+  async function activate(
+    pubkey: string,
+    auth: NipOaAuthorization,
+    community: string | undefined,
+    signal: AbortSignal,
+  ): Promise<void> {
+    const result = await request(
+      "attest-agent",
+      {
+        agent_pubkey: pubkey,
+        owner_auth_tag_json: JSON.stringify(auth),
+        ...(community ? { community_url: community } : {}),
+      },
+      signal,
+    );
+    if (![1, "ACTIVE"].includes(resultStatus(result.status)))
+      throw new Error("Agent setup was not confirmed. Retry setup in Agents.");
+  }
   return {
+    activate,
     async updateInstructions(
       agent: RemoteAgent,
       instructions: string,
@@ -122,7 +145,10 @@ export function createAgentClient(
         signal,
       );
     },
-    async delete(agent: RemoteAgent, signal: AbortSignal): Promise<void> {
+    async delete(
+      agent: Pick<RemoteAgent, "id">,
+      signal: AbortSignal,
+    ): Promise<void> {
       if (!agent.id.trim()) throw new Error("Agent ID is unavailable.");
       const result = await request(
         "delete-agent",
@@ -138,14 +164,24 @@ export function createAgentClient(
           : "Agent deletion was not confirmed. Retry Delete.",
       );
     },
-    async register(name: string, signal: AbortSignal): Promise<RemoteAgent> {
+    async register(
+      name: string,
+      signal: AbortSignal,
+      /** Retains the provisioned identity and owns completion of its replay
+       * intent. A throw leaves the UUID available for retry. */
+      retainRegistration: (
+        agent: RemoteAgent,
+        intent: RegistrationIntent,
+      ) => void,
+    ): Promise<RemoteAgent> {
       signal.throwIfAborted();
       const agentName = name.trim();
       if (!/^[\w .-]{1,64}$/.test(agentName))
         throw new Error(
           "Use 1–64 letters, numbers, spaces, dots, hyphens or underscores for the agent name.",
         );
-      const { account } = session.credential();
+      const credential = session.credential();
+      const { account } = credential;
       const intent = registrationIntent(
         oauthTarget(),
         account.subject,
@@ -203,56 +239,16 @@ export function createAgentClient(
         throw new Error(
           "Creation was not confirmed. Retry the same name to recover the original request.",
         );
-      clearRegistration(intent);
-      return {
+      const agent: RemoteAgent = {
         id: result.agent_id,
         name: agentName,
         pubkey: result.agent_pubkey,
         status: "Unattested",
       };
-    },
-    async attest(
-      agent: RemoteAgent,
-      signal: AbortSignal,
-      active: () => boolean,
-      owner?: string,
-    ): Promise<RemoteAgent> {
-      signal.throwIfAborted();
-      if (!active())
-        throw new DOMException("Builderlab card is inactive.", "AbortError");
-      const credential = session.credential();
-      const community = communityUrl();
-      if (!host.prepareRemoteAgentAuthorization)
-        throw new Error(
-          "Remote agent authorization is unavailable in this Buzz build.",
-        );
-      const tag = await host.prepareRemoteAgentAuthorization(
-        agent.pubkey,
-        signal,
-      );
+      // Hosted provisioning keeps replay until Agents has durably saved setup.
       check(credential, signal);
-      if (!active())
-        throw new DOMException("Builderlab card is inactive.", "AbortError");
-      if (communityUrl() !== community)
-        throw new Error("Community changed. Use Finish setup to try again.");
-      if (owner && tag[1] !== owner)
-        throw new Error(
-          "Agent authorization and community identities differ. Retry with the same Buzz identity.",
-        );
-      const result = await request(
-        "attest-agent",
-        {
-          agent_pubkey: agent.pubkey,
-          owner_auth_tag_json: JSON.stringify(tag),
-          ...(community ? { community_url: community } : {}),
-        },
-        signal,
-      );
-      if (![1, "ACTIVE"].includes(resultStatus(result.status)))
-        throw new Error(
-          "Agent setup was not confirmed. Use Finish setup to try again.",
-        );
-      return { ...agent, status: "Active" };
+      retainRegistration(agent, intent);
+      return agent;
     },
     async list(signal: AbortSignal): Promise<readonly RemoteAgent[]> {
       const result = await request(

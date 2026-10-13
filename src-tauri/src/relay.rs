@@ -23,7 +23,6 @@ pub(crate) use channel_writes::{
     relay_channel_publish, relay_channel_sign, relay_direct_message, relay_kit_decode,
     relay_kit_prepare,
 };
-pub(crate) use kit::current_team_members;
 pub(crate) use kit::relay_kit_sign;
 mod media_blocks;
 mod media_preparation;
@@ -1601,24 +1600,6 @@ pub(crate) async fn media_download<R: tauri::Runtime>(
         .await
         .map_err(|_| "Media download interrupted".to_owned())??;
     Ok(())
-}
-
-/// Read a snapshot into the trusted renderer through the existing authenticated
-/// media path. The caller may tighten, but never raise, the host's snapshot cap.
-#[tauri::command]
-pub(crate) async fn media_snapshot_read(
-    host: tauri::State<'_, IdentityHost>,
-    source: String,
-    max_bytes: usize,
-) -> Result<Vec<u8>> {
-    if max_bytes == 0 || max_bytes > 16 * 1024 * 1024 {
-        return Err("Invalid snapshot size limit".into());
-    }
-    let url = download_target(&source).ok_or("Invalid media URL")?;
-    fetch_media_bounded(host.inner(), url, None, max_bytes)
-        .await
-        .map(tauri::http::Response::into_body)
-        .map_err(|status| format!("Snapshot media read failed ({status})"))
 }
 
 /// `buzz-media://localhost/<percent-encoded relay media URL>`, the shape of

@@ -268,3 +268,59 @@ it("Enter selects a valid URL without submitting the enclosing form", async () =
   expect(screen.getByLabelText("Draft picture")).toHaveTextContent(next);
   expect(save).not.toHaveBeenCalled();
 });
+
+it("opens the shared image flow from a text trigger and applies its URL", async () => {
+  const onChange = vi.fn();
+  render(
+    <AvatarEditor
+      triggerLabel="Use image"
+      value=""
+      name="Agent"
+      community={community}
+      onChange={onChange}
+    />,
+  );
+  fireEvent.click(screen.getByRole("button", { name: "Use image" }));
+  const input = await screen.findByLabelText("Picture URL (optional)");
+  fireEvent.change(input, { target: { value: next } });
+  fireEvent.keyDown(input, { key: "Enter" });
+  expect(onChange).toHaveBeenCalledWith(next);
+});
+
+it("previews an inline agent emoji and its background with Done in the form footer", async () => {
+  const footer = document.createElement("div");
+  document.body.append(footer);
+  const change = vi.fn();
+  const view = render(
+    <AvatarEditor
+      triggerStyle="dotted-squircle"
+      inlinePicker
+      actionTarget={footer}
+      value=""
+      name="Agent"
+      community={community}
+      onChange={change}
+    />,
+  );
+  fireEvent.click(screen.getByRole("tab", { name: "Emoji" }));
+  expect(
+    screen.getByRole("img", { name: "Emoji avatar preview" }),
+  ).toBeVisible();
+  fireEvent.click(screen.getByRole("tab", { name: "Background" }));
+  fireEvent.click(
+    screen.getByRole("button", { name: "Use #476CFF background" }),
+  );
+  expect(screen.getByRole("img", { name: "Emoji avatar preview" })).toHaveStyle(
+    {
+      backgroundColor: "#476CFF",
+    },
+  );
+  expect(footer).toContainElement(screen.getByRole("button", { name: "Done" }));
+  expect(
+    screen.queryByRole("button", { name: "Remove avatar" }),
+  ).not.toBeInTheDocument();
+  expect(uploadAvatar).not.toHaveBeenCalled();
+  expect(change).not.toHaveBeenCalled();
+  view.unmount();
+  footer.remove();
+});

@@ -48,6 +48,7 @@ const SIZE_ROLES = [
   "body-lg",
   "body-sm",
   "body",
+  "message",
   "mono-lg",
   "mono-sm",
   "mono",

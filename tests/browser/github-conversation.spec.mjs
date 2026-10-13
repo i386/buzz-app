@@ -916,7 +916,7 @@ test("PR conversation hierarchy and disclosures survive themes, narrow panes and
     path: testInfo.outputPath("conversation-narrow-200.png"),
   });
   await expectReviewContained();
-  await comment.click();
+  await comment.locator(":scope > svg").click();
   await copyAction.scrollIntoViewIfNeeded();
   await expect(copyAction).toBeVisible();
   await copyAction.tap();

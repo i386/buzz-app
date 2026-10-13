@@ -1,7 +1,6 @@
 // @vitest-environment jsdom
 import "@testing-library/jest-dom/vitest";
 import {
-  act,
   cleanup,
   fireEvent,
   render,
@@ -22,23 +21,11 @@ vi.mock("../../features/messages/ThreadPanel", () => ({
   ThreadPanel: ({
     active,
     replyRequest,
-    personalConversation,
-    activityClickOpensPanel,
-    disabled,
   }: {
     active: boolean;
     replyRequest?: number;
-    personalConversation?: boolean;
-    activityClickOpensPanel?: boolean;
-    disabled?: boolean;
   }) => (
-    <aside
-      data-active={active}
-      data-reply-request={replyRequest}
-      data-personal={personalConversation}
-      data-direct-activity={activityClickOpensPanel}
-      data-disabled={disabled}
-    >
+    <aside data-active={active} data-reply-request={replyRequest}>
       Thread content
     </aside>
   ),
@@ -47,23 +34,7 @@ vi.mock("./ChannelBody", () => ({
   ChannelBody: () => <div>Conversation content</div>,
 }));
 vi.mock("../../features/messages/MessageComposer", () => ({
-  MessageComposer: ({
-    personalConversation,
-    activityClickOpensPanel,
-    disabled,
-  }: {
-    personalConversation?: boolean;
-    activityClickOpensPanel?: boolean;
-    disabled?: boolean;
-  }) => (
-    <div
-      data-personal={personalConversation}
-      data-direct-activity={activityClickOpensPanel}
-      data-disabled={disabled}
-    >
-      Composer content
-    </div>
-  ),
+  MessageComposer: () => <div>Composer content</div>,
 }));
 const owners: ReturnType<typeof createOutbox>[] = [];
 afterEach(() => {
@@ -263,66 +234,5 @@ it.each([false, true])(
     // A non-Reply opening resets the sequence; a later Reply may reuse number 1.
     mounted.rerender(<ConversationTab {...props} tab={{ ...tab }} />);
     expect(thread).toHaveAttribute("data-reply-request", "1");
-  },
-);
-
-it.each(["thread", "conversation"] as const)(
-  "Me %s tabs wait for placement and follow its recipient policy",
-  (kind) => {
-    const channel = { id: "beta", name: "Beta" };
-    const channels = { status: "ready", channels: [channel] };
-    const listeners = new Set<() => void>();
-    let placement = { status: "loading", entries: [] as unknown[] };
-    const session = {
-      channels: { list: () => channels, subscribeList: () => () => {} },
-      mePlacement: {
-        snapshot: () => placement,
-        subscribe: (listener: () => void) => {
-          listeners.add(listener);
-          return () => {
-            listeners.delete(listener);
-          };
-        },
-        ensure() {},
-      },
-    } as unknown as RelaySession;
-    render(
-      <ConversationTab
-        personalWorkspace
-        active
-        tab={{ id: "tab", kind, channelId: "beta", messageId: "a".repeat(64) }}
-        channel={channel}
-        session={session}
-        scope="me-test"
-        openLink={() => false}
-        canOpenLink={() => false}
-        openThread={() => {}}
-        close={() => {}}
-      />,
-    );
-    const composer = screen.getByText(
-      kind === "thread" ? "Thread content" : "Composer content",
-    );
-    expect(composer).toHaveAttribute("data-disabled", "true");
-    expect(composer).toHaveAttribute("data-personal", "true");
-    expect(composer).toHaveAttribute("data-direct-activity", "true");
-    act(() => {
-      placement = {
-        status: "ready",
-        entries: [
-          {
-            record: { value: { type: "groups", id: "me", channels: ["beta"] } },
-          },
-        ],
-      };
-      for (const listener of listeners) listener();
-    });
-    expect(composer).toHaveAttribute("data-disabled", "false");
-    expect(composer).toHaveAttribute("data-personal", "true");
-    act(() => {
-      placement = { status: "ready", entries: [] };
-      for (const listener of listeners) listener();
-    });
-    expect(composer).toHaveAttribute("data-personal", "false");
   },
 );

@@ -16,8 +16,6 @@ import { renderToStaticMarkup } from "react-dom/server";
 import type { Contribution } from "../../plugins/contributions";
 import type { LinkRenderer } from "./contracts";
 import { MessageLink, resolveLink } from "./MessageLink";
-import { subscribeSnapshotPreview } from "../agents/snapshot-preview";
-import type { RelaySession } from "../relay/session";
 import { ConversationPresentation } from "./ConversationPresentation";
 
 afterEach(() => {
@@ -289,44 +287,4 @@ it("does not present or replay copy feedback completed in an inactive conversati
   expect(screen.queryByText("Link copied")).not.toBeInTheDocument();
   view.rerender(tree(true));
   expect(screen.queryByText("Link copied")).not.toBeInTheDocument();
-});
-
-it("keeps copied-media links externally openable and offers a separate snapshot preview action", async () => {
-  const user = userEvent.setup();
-  const target = `https://relay.test/media/${"a".repeat(64)}.png`;
-  const session = {
-    media: (url: string) => `buzz-media://localhost/${encodeURIComponent(url)}`,
-  } as unknown as RelaySession;
-  const receive = vi.fn();
-  const stop = subscribeSnapshotPreview(session, receive);
-  const onOpenLink = vi.fn(() => true);
-  try {
-    render(
-      <ToastProvider>
-        <MessageLink
-          url={target}
-          session={session}
-          registry={undefined}
-          onOpenLink={onOpenLink}
-        />
-      </ToastProvider>,
-    );
-    const anchor = screen.getByRole("link");
-    fireEvent.click(anchor);
-    expect(onOpenLink).toHaveBeenCalledExactlyOnceWith(target);
-    expect(receive).not.toHaveBeenCalled();
-    fireEvent.contextMenu(anchor);
-    const external = await screen.findByRole("menuitem", {
-      name: "Open in browser",
-    });
-    expect(external).toHaveAttribute("href", target);
-    await user.click(
-      screen.getByRole("menuitem", { name: "Preview snapshot" }),
-    );
-    expect(receive).toHaveBeenCalledExactlyOnceWith({
-      attachment: { url: target, kind: "file" },
-    });
-  } finally {
-    stop();
-  }
 });

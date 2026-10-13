@@ -247,11 +247,12 @@ bin/pnpm exec vitest run src/features/identity-names/policy.test.ts
 ## Desktop adapter (informative, not an authority protocol)
 
 At the extraction baseline, [directory.ts](../../features/identity-names/directory.ts)
-constructs facts from public profiles, ready agent-library records, ready native
-configuration in the current community, and view-local display facts. Native
-non-empty names take precedence over library names in that community. The first
+constructs facts from public profiles, ready agent-library records, the
+viewer's local agents in the current community, and view-local display
+facts. Local non-empty names take precedence over library names in that
+community. The first
 library record per key uses its trimmed name, then the profile name, then
-`Agent`. Library/native naming records are classified as agents but do not by
+`Agent`. Library/local naming records are classified as agents but do not by
 themselves invent an owner key. Explicit display facts replace that key's normal
 fact and can carry multiple aliases. The requested key is added to an explicit
 candidate set.

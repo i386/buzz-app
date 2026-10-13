@@ -108,9 +108,12 @@ for (const scenario of [
     const retainedEditor = await editor.elementHandle();
     if (!retainedThread || !retainedEditor)
       throw new Error("Missing admitted reader");
-    const sender = inbox.getByRole("combobox", { name: "Sender" });
-    await sender.focus();
-    await expect(sender).toBeFocused();
+    const unread = inbox.getByRole("button", {
+      name: "Unread only",
+      exact: true,
+    });
+    await unread.focus();
+    await expect(unread).toBeFocused();
 
     const closure = (fail = false) => ({
       ...Promise.withResolvers(),
@@ -206,11 +209,11 @@ for (const scenario of [
     };
     try {
       if (scenario === "outside focus and portals") {
-        // Preserve the original outside-Sender focus path, without an open modal.
+        // Preserve the outside-toolbar focus path, without an open modal.
         await reconnect();
         await expect(detail.getByText("Preview updating…")).toBeVisible();
         await expectWithheld();
-        await expect(sender).toBeFocused();
+        await expect(unread).toBeFocused();
         outsideClosure.resolve();
         await expect(detail.getByText("Preview updating…")).toHaveCount(0);
         await expect(thread).toBeVisible();
@@ -218,7 +221,7 @@ for (const scenario of [
         await expect(editor).toHaveText(draft);
         await expectRetained();
         await finishPresentation();
-        await expect(sender).toBeFocused();
+        await expect(unread).toBeFocused();
 
         const mediaOpener = detail.getByRole("button", {
           name: "Open video fullscreen",
@@ -270,7 +273,10 @@ for (const scenario of [
         ).toBeVisible();
         await expectWithheld();
         await expectNoViewer();
-        const activity = inbox.getByRole("combobox", { name: "Activity type" });
+        const activity = inbox.getByRole("button", {
+          name: "Inbox filters",
+          exact: true,
+        });
         const retry = inbox.getByRole("button", { name: "Retry inbox" });
         await activity.focus();
         await page.keyboard.press("Shift+Tab");
@@ -286,7 +292,7 @@ for (const scenario of [
         await page.keyboard.press("Tab");
         await expect(activity).toBeFocused();
         await page.keyboard.press("Tab");
-        await expect(sender).toBeFocused();
+        await expect(unread).toBeFocused();
         retryClosure.resolve();
         await expect(retry).toHaveCount(0);
         await expect(detail.getByText("Preview updating…")).toHaveCount(0);
@@ -297,7 +303,7 @@ for (const scenario of [
         await finishPresentation();
         // Recovery exposes the same reader/editor, not the dismissed viewer, and
         // must not replay its entry focus or late modal-opener restoration.
-        await expect(sender).toBeFocused();
+        await expect(unread).toBeFocused();
         await expect(target).not.toBeFocused();
         await expect(editor).not.toBeFocused();
         await expect(
@@ -462,12 +468,12 @@ for (const scenario of [
         await expect(closeDetail).toBeVisible();
         await expect(closeDetail).toBeFocused();
         await expectWithheld();
-        await sender.focus();
-        await expect(sender).toBeFocused();
+        await unread.focus();
+        await expect(unread).toBeFocused();
         movedClosure.resolve();
         await expect(thread).toBeVisible();
         await finishPresentation();
-        await expect(sender).toBeFocused();
+        await expect(unread).toBeFocused();
         await expect(editor).not.toBeFocused();
         await expect(editor).toHaveText(recoveredDraft);
         await expectRetained();

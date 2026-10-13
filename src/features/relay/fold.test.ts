@@ -696,9 +696,13 @@ describe("profiles", () => {
       signed(relay, { kind: 0, content: "broken", tags: [] }),
     ]);
     expect(profiles.get(alice.pubkey)).toEqual({ name: "Alice" });
-    expect(profiles.get(bob.pubkey)).toEqual({ name: bob.pubkey.slice(0, 10) });
+    expect(profiles.get(bob.pubkey)).toEqual({
+      name: bob.pubkey.slice(0, 10),
+      nameIsFallback: true,
+    });
     expect(profiles.get(relay.pubkey)).toEqual({
       name: relay.pubkey.slice(0, 10),
+      nameIsFallback: true,
     });
   });
 });

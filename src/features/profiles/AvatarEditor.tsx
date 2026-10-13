@@ -1,3 +1,4 @@
+import { createPortal } from "react-dom";
 import { Popover } from "@base-ui/react/popover";
 import { useEffect, useLayoutEffect, useId, useRef, useState } from "react";
 import {
@@ -26,6 +27,12 @@ import { AvatarCustomColor } from "./AvatarCustomColor";
 import type { EmojiSearchSelection } from "../../bundled/emoji/emoji-mart";
 
 type Props = {
+  triggerStyle?: "dotted-squircle";
+  inlinePicker?: boolean;
+  /** Offers only an uploaded image, not an emoji avatar. */
+  imageOnly?: boolean;
+  triggerLabel?: string;
+  actionTarget?: HTMLElement | null | undefined;
   value: string;
   name: string;
   community?: string | undefined;
@@ -71,7 +78,7 @@ const colors = [
 
 /** One draft editor for humans and agents; the enclosing form owns profile Save. */
 export function AvatarEditor(props: Props) {
-  const [open, setOpen] = useState(false);
+  const [open, setOpen] = useState(!!props.inlinePicker);
   const [draftPreview, setDraftPreview] = useState<DraftPreview | null>(null);
   const preview = useAvatarPreview(
     draftPreview?.picture ?? props.value,
@@ -85,106 +92,174 @@ export function AvatarEditor(props: Props) {
     callback.current?.(open);
     return () => callback.current?.(false);
   }, [open]);
+  const draft = open && (
+    <AvatarDraft
+      key={props.community ?? "local"}
+      {...props}
+      onPreview={setDraftPreview}
+      done={(value) => {
+        props.onChange(value);
+        setOpen(false);
+      }}
+    />
+  );
   return (
-    <Popover.Root open={open} onOpenChange={setOpen}>
-      <div
-        className={styles.avatarFrame}
-        data-shape={props.shape ?? "circle"}
-        data-size={props.size}
+    <div
+      className={props.inlinePicker ? styles.inlineEditor : undefined}
+      data-editing={open || undefined}
+    >
+      <Popover.Root
+        open={open}
+        onOpenChange={(next) => {
+          if (!props.inlinePicker || next) setOpen(next);
+        }}
       >
-        <div
-          className={styles.avatarArtwork}
-          data-shape={props.shape ?? "circle"}
-        >
-          {draftPreview?.emoji ? (
-            <div
-              role="img"
-              aria-label="Emoji avatar preview"
-              data-avatar-shape={props.shape ?? "circle"}
-              className={styles.emojiPreview}
-              style={{ backgroundColor: draftPreview.color }}
-            >
-              <EmojiArtwork
-                key={`${draftPreview.emoji}-${draftPreview.pulse}`}
-                emoji={draftPreview.emoji}
-                animate={!!draftPreview.pulse}
-              />
-            </div>
-          ) : (
-            <Avatar
-              src={preview}
-              alt={open ? "Avatar preview" : "Avatar"}
-              fallback={props.name}
-              size="fill"
-              shape={props.shape ?? "circle"}
-            />
-          )}
-        </div>
-        <div className={styles.editBadge}>
+        {props.triggerStyle === "dotted-squircle" ? (
           <Popover.Trigger
             render={
-              <IconButton
-                variant="solid"
-                shape="round"
-                style={{
-                  width: "100%",
-                  height: "100%",
-                  minWidth: 0,
-                  minHeight: 0,
-                }}
+              <button
+                type="button"
+                className={styles.dottedTrigger}
                 aria-label="Edit avatar"
-                aria-describedby={pictureError ? errorId : undefined}
-                icon={
-                  props.value ? (
-                    <PencilSimpleIcon size={16} />
-                  ) : (
-                    <PlusIcon size={16} />
-                  )
-                }
                 disabled={props.disabled}
               />
             }
-          />
-        </div>
-      </div>
-      {pictureError && (
-        <p id={errorId} role="alert" className="text-body-sm text-danger">
-          {pictureError}
-        </p>
-      )}
-      <Popover.Portal>
-        <Popover.Positioner
-          side="bottom"
-          align="center"
-          sideOffset={8}
-          collisionPadding={12}
-          collisionAvoidance={{
-            side: "shift",
-            align: "shift",
-            fallbackAxisSide: "none",
-          }}
-          style={{ zIndex: "var(--layer-popover)" }}
-        >
-          <Popover.Popup
-            data-buzz-ui=""
-            className={`popover-surface ${styles.popup}`}
           >
-            <Popover.Title className="sr-only">Edit avatar</Popover.Title>
-            {open && (
-              <AvatarDraft
-                key={props.community ?? "local"}
-                {...props}
-                onPreview={setDraftPreview}
-                done={(value) => {
-                  props.onChange(value);
-                  setOpen(false);
-                }}
+            <svg
+              className={styles.dottedOutline}
+              viewBox="0 0 100 100"
+              aria-hidden="true"
+            >
+              <path d="M 50 1 C 92.14 1 99 7.86 99 50 C 99 92.14 92.14 99 50 99 C 7.86 99 1 92.14 1 50 C 1 7.86 7.86 1 50 1 Z" />
+            </svg>
+            {draftPreview?.emoji ? (
+              <div
+                role="img"
+                aria-label="Emoji avatar preview"
+                data-avatar-shape="squircle"
+                className={styles.emojiPreview}
+                style={{ backgroundColor: draftPreview.color }}
+              >
+                <EmojiArtwork
+                  key={`${draftPreview.emoji}-${draftPreview.pulse}`}
+                  emoji={draftPreview.emoji}
+                  animate={!!draftPreview.pulse}
+                />
+              </div>
+            ) : preview ? (
+              <img
+                src={preview}
+                alt="Avatar preview"
+                data-avatar-shape="squircle"
               />
+            ) : (
+              <PlusIcon size={28} aria-hidden="true" />
             )}
-          </Popover.Popup>
-        </Popover.Positioner>
-      </Popover.Portal>
-    </Popover.Root>
+          </Popover.Trigger>
+        ) : props.triggerLabel ? (
+          <Popover.Trigger
+            render={
+              <Button size="compact" disabled={props.disabled}>
+                {props.triggerLabel}
+              </Button>
+            }
+          />
+        ) : (
+          <div
+            className={styles.avatarFrame}
+            data-shape={props.shape ?? "circle"}
+            data-size={props.size}
+          >
+            <div
+              className={styles.avatarArtwork}
+              data-shape={props.shape ?? "circle"}
+            >
+              {draftPreview?.emoji ? (
+                <div
+                  role="img"
+                  aria-label="Emoji avatar preview"
+                  data-avatar-shape={props.shape ?? "circle"}
+                  className={styles.emojiPreview}
+                  style={{ backgroundColor: draftPreview.color }}
+                >
+                  <EmojiArtwork
+                    key={`${draftPreview.emoji}-${draftPreview.pulse}`}
+                    emoji={draftPreview.emoji}
+                    animate={!!draftPreview.pulse}
+                  />
+                </div>
+              ) : (
+                <Avatar
+                  src={preview}
+                  alt={open ? "Avatar preview" : "Avatar"}
+                  fallback={props.name}
+                  size="fill"
+                  shape={props.shape ?? "circle"}
+                />
+              )}
+            </div>
+            <div className={styles.editBadge}>
+              <Popover.Trigger
+                render={
+                  <IconButton
+                    variant="solid"
+                    size="md"
+                    shape="round"
+                    style={{
+                      width: "100%",
+                      height: "100%",
+                      minWidth: 0,
+                      minHeight: 0,
+                    }}
+                    aria-label="Edit avatar"
+                    aria-describedby={pictureError ? errorId : undefined}
+                    icon={
+                      props.value ? (
+                        <PencilSimpleIcon size={16} />
+                      ) : (
+                        <PlusIcon size={16} />
+                      )
+                    }
+                    disabled={props.disabled}
+                  />
+                }
+              />
+            </div>
+          </div>
+        )}
+        {pictureError && (
+          <p id={errorId} role="alert" className="text-body-sm text-danger">
+            {pictureError}
+          </p>
+        )}
+        {props.inlinePicker ? (
+          draft
+        ) : (
+          <Popover.Portal>
+            <Popover.Positioner
+              side="bottom"
+              align="center"
+              sideOffset={8}
+              collisionPadding={12}
+              collisionAvoidance={{
+                side: "shift",
+                align: "shift",
+                fallbackAxisSide: "none",
+              }}
+              style={{ zIndex: "var(--layer-popover)" }}
+            >
+              <Popover.Popup
+                data-buzz-ui=""
+                className={`popover-surface ${styles.popup}`}
+              >
+                <Popover.Title className="sr-only">Edit avatar</Popover.Title>
+                {draft}
+              </Popover.Popup>
+            </Popover.Positioner>
+          </Popover.Portal>
+        )}
+      </Popover.Root>
+    </div>
   );
 }
 
@@ -207,6 +282,9 @@ function EmojiArtwork({ emoji, animate }: { emoji: string; animate: boolean }) {
 }
 
 function AvatarDraft({
+  actionTarget,
+  inlinePicker,
+  imageOnly = false,
   value,
   community,
   onPreview,
@@ -289,6 +367,128 @@ function AvatarDraft({
     }
   }
   const pictureError = avatarPictureError(picture);
+  const doneButton = (
+    <Button
+      variant="prominent"
+      disabled={
+        disabled ||
+        busy ||
+        (mode !== "image" ? !community || !emoji.trim() : !!pictureError)
+      }
+      onClick={() => {
+        if (mode !== "image")
+          void upload(() => emojiAvatar(emoji, color), true);
+        else done(picture);
+      }}
+    >
+      Done
+    </Button>
+  );
+
+  const renderPanel = (tab: string) =>
+    tab === "image" ? (
+      <div className={styles.imagePanel}>
+        <button
+          type="button"
+          className={styles.dropzone}
+          disabled={disabled || busy || !community}
+          onClick={() => input.current?.click()}
+        >
+          <CloudUploadIcon size={24} aria-hidden="true" />
+          <span>
+            {busy
+              ? "Uploading…"
+              : dragging
+                ? "Drop image here"
+                : "Drop or browse"}
+          </span>
+        </button>
+        <input
+          ref={input}
+          type="file"
+          className="sr-only"
+          tabIndex={-1}
+          aria-label="Upload an image"
+          accept="image/png,image/jpeg,image/gif,image/webp,image/heic,image/heif"
+          disabled={disabled || busy || !community}
+          onChange={(event) => {
+            const file = event.target.files?.[0];
+            event.target.value = "";
+            if (file) void upload(async () => file);
+          }}
+        />
+        <Field
+          label="Picture URL (optional)"
+          labelVisibility="hidden"
+          error={pictureError}
+        >
+          <InputGroup leading={<LinkIcon size={18} aria-hidden="true" />}>
+            <Input
+              type="url"
+              placeholder="Paste an image URL"
+              maxLength={2048}
+              disabled={disabled || busy}
+              value={picture}
+              onKeyDown={(event) => {
+                if (event.key === "Enter") {
+                  event.preventDefault();
+                  if (!disabled && !busy && !pictureError) done(picture);
+                }
+              }}
+              onChange={(event) => {
+                setPicture(event.target.value);
+                setError("");
+              }}
+            />
+          </InputGroup>
+        </Field>
+      </div>
+    ) : tab === "emoji" ? (
+      <div className={styles.emojiPanel}>
+        <AvatarEmojiPicker
+          disabled={disabled || busy}
+          onSelect={(value, animate) => {
+            setEmoji(value);
+            setPulse((current) => (animate ? current + 1 : 0));
+          }}
+        />
+      </div>
+    ) : (
+      <div className={styles.backgroundPanel}>
+        {customColorOpen ? (
+          <AvatarCustomColor
+            color={color}
+            disabled={disabled || busy}
+            onChange={setColor}
+            onClose={() => setCustomColorOpen(false)}
+          />
+        ) : (
+          <fieldset className={styles.swatches} aria-label="Avatar background">
+            {colors.map((swatch) => (
+              <button
+                key={swatch}
+                type="button"
+                className={styles.swatch}
+                aria-label={`Use ${swatch} background`}
+                aria-pressed={color.toUpperCase() === swatch}
+                disabled={disabled || busy}
+                style={{ backgroundColor: swatch }}
+                onClick={() => setColor(swatch)}
+              />
+            ))}
+            <button
+              ref={customColorTrigger}
+              type="button"
+              className={styles.customColor}
+              aria-label="Custom background color"
+              aria-pressed={!colors.includes(color.toUpperCase())}
+              disabled={disabled || busy}
+              onClick={() => setCustomColorOpen(true)}
+            />
+          </fieldset>
+        )}
+      </div>
+    );
   return (
     <div className={styles.panelViewport} style={{ height: panelHeight }}>
       <fieldset
@@ -331,134 +531,28 @@ function AvatarDraft({
           }
         }}
       >
-        <Tabs
-          value={mode}
-          label="Avatar source"
-          variant="panel"
-          items={[
-            { value: "image", label: "Image" },
-            { value: "emoji", label: "Emoji" },
-            { value: "background", label: "Background" },
-          ]}
-          onValueChange={(next) => {
-            if (!busy && !disabled) {
-              setMode(next);
-              setCustomColorOpen(false);
-              setError("");
-            }
-          }}
-          renderPanel={(tab) =>
-            tab === "image" ? (
-              <div className={styles.imagePanel}>
-                <button
-                  type="button"
-                  className={styles.dropzone}
-                  disabled={disabled || busy || !community}
-                  onClick={() => input.current?.click()}
-                >
-                  <CloudUploadIcon size={24} aria-hidden="true" />
-                  <span>
-                    {busy
-                      ? "Uploading…"
-                      : dragging
-                        ? "Drop image here"
-                        : "Drop or browse"}
-                  </span>
-                </button>
-                <input
-                  ref={input}
-                  type="file"
-                  className="sr-only"
-                  tabIndex={-1}
-                  aria-label="Upload an image"
-                  accept="image/png,image/jpeg,image/gif,image/webp,image/heic,image/heif"
-                  disabled={disabled || busy || !community}
-                  onChange={(event) => {
-                    const file = event.target.files?.[0];
-                    event.target.value = "";
-                    if (file) void upload(async () => file);
-                  }}
-                />
-                <Field
-                  label="Picture URL (optional)"
-                  labelVisibility="hidden"
-                  error={pictureError}
-                >
-                  <InputGroup
-                    leading={<LinkIcon size={18} aria-hidden="true" />}
-                  >
-                    <Input
-                      type="url"
-                      placeholder="Paste an image URL"
-                      maxLength={2048}
-                      disabled={disabled || busy}
-                      value={picture}
-                      onKeyDown={(event) => {
-                        if (event.key === "Enter") {
-                          event.preventDefault();
-                          if (!disabled && !busy && !pictureError)
-                            done(picture);
-                        }
-                      }}
-                      onChange={(event) => {
-                        setPicture(event.target.value);
-                        setError("");
-                      }}
-                    />
-                  </InputGroup>
-                </Field>
-              </div>
-            ) : tab === "emoji" ? (
-              <div className={styles.emojiPanel}>
-                <AvatarEmojiPicker
-                  disabled={disabled || busy}
-                  onSelect={(value, animate) => {
-                    setEmoji(value);
-                    setPulse((current) => (animate ? current + 1 : 0));
-                  }}
-                />
-              </div>
-            ) : (
-              <div className={styles.backgroundPanel}>
-                {customColorOpen ? (
-                  <AvatarCustomColor
-                    color={color}
-                    disabled={disabled || busy}
-                    onChange={setColor}
-                    onClose={() => setCustomColorOpen(false)}
-                  />
-                ) : (
-                  <fieldset
-                    className={styles.swatches}
-                    aria-label="Avatar background"
-                  >
-                    {colors.map((swatch) => (
-                      <button
-                        key={swatch}
-                        type="button"
-                        className={styles.swatch}
-                        aria-label={`Use ${swatch} background`}
-                        aria-pressed={color.toUpperCase() === swatch}
-                        disabled={disabled || busy}
-                        style={{ backgroundColor: swatch }}
-                        onClick={() => setColor(swatch)}
-                      />
-                    ))}
-                    <button
-                      ref={customColorTrigger}
-                      type="button"
-                      className={styles.customColor}
-                      aria-label="Custom background color"
-                      aria-pressed={!colors.includes(color.toUpperCase())}
-                      disabled={disabled || busy}
-                      onClick={() => setCustomColorOpen(true)}
-                    />
-                  </fieldset>
-                )}
-              </div>
-            )
-          }
-        />
+        {imageOnly ? (
+          renderPanel("image")
+        ) : (
+          <Tabs
+            value={mode}
+            label="Avatar source"
+            variant="panel"
+            items={[
+              { value: "image", label: "Image" },
+              { value: "emoji", label: "Emoji" },
+              { value: "background", label: "Background" },
+            ]}
+            onValueChange={(next) => {
+              if (!busy && !disabled) {
+                setMode(next);
+                setCustomColorOpen(false);
+                setError("");
+              }
+            }}
+            renderPanel={renderPanel}
+          />
+        )}
         {busy && (
           <p role="status" className="text-body-sm">
             Uploading avatar…
@@ -477,30 +571,16 @@ function AvatarDraft({
         )}
         {!(mode === "background" && customColorOpen) && (
           <div className="flex flex-wrap justify-between gap-2">
-            <Button
-              variant="destructive"
-              disabled={(!value && !picture) || disabled || busy}
-              onClick={() => done("")}
-            >
-              Remove avatar
-            </Button>
-            <Button
-              variant="prominent"
-              disabled={
-                disabled ||
-                busy ||
-                (mode !== "image"
-                  ? !community || !emoji.trim()
-                  : !!pictureError)
-              }
-              onClick={() => {
-                if (mode !== "image")
-                  void upload(() => emojiAvatar(emoji, color), true);
-                else done(picture);
-              }}
-            >
-              Done
-            </Button>
+            {!imageOnly && !inlinePicker && (
+              <Button
+                variant="destructive"
+                disabled={(!value && !picture) || disabled || busy}
+                onClick={() => done("")}
+              >
+                Remove avatar
+              </Button>
+            )}
+            {actionTarget ? createPortal(doneButton, actionTarget) : doneButton}
           </div>
         )}
       </fieldset>

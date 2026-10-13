@@ -315,7 +315,7 @@ it.each([
 it.each([500])(
   "keeps the PR title and prominent external recovery action usable after API failure %s",
   async (status) => {
-    const target = "https://github.com/block/buzz-app/pull/629#discussion_r1";
+    const target = "https://github.com/block/buzz-app/pull/629#issuecomment-1";
     let finish!: (response: Response) => void;
     const response = new Promise<Response>((resolve) => {
       finish = resolve;

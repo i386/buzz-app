@@ -1,5 +1,3 @@
-import type { AgentControl } from "../../features/agents/control";
-import { ProfileAddChannel } from "./ProfileAddChannel";
 import type { Navigation } from "../../features/navigation/controller";
 import { useChannelList } from "../../features/relay/react";
 import type { RelaySession } from "../../features/relay/session";
@@ -15,16 +13,12 @@ export function ProfileChannels({
   communityOrigin,
   viewer,
   navigation,
-  control,
-  scope,
 }: {
   session: RelaySession;
   pubkey: string;
   communityOrigin: string | undefined;
   viewer: string | undefined;
   navigation: Navigation | undefined;
-  control: AgentControl | undefined;
-  scope: string | undefined;
 }) {
   const list = useChannelList(session.channels);
   const channels = (
@@ -48,15 +42,6 @@ export function ProfileChannels({
   return (
     <section aria-label="Channels" className="flex flex-col gap-2">
       <div className={styles.channelList}>
-        {control && scope && (
-          <ProfileAddChannel
-            session={session}
-            pubkey={pubkey}
-            scope={scope}
-            control={control}
-            list={list}
-          />
-        )}
         {(list.status === "idle" || list.status === "loading") && (
           <p className={styles.channelNote} role="status">
             Loading channels…

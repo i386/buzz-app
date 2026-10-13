@@ -1,5 +1,39 @@
 import { test, expect } from "./source-fixture.mjs";
 
+// Real browser image readiness and computed visibility cannot be proved in jsdom.
+test("cached agent artwork is visible immediately when avatars remount", async ({
+  page,
+}) => {
+  await page.goto("/tests/fixtures/agent-avatar.html");
+  await page.getByRole("button", { name: "Load cached picture" }).click();
+  await expect(page.locator('section img[data-loaded="true"]')).toHaveCount(2);
+  for (const width of [390, 800, 1280]) {
+    await page.setViewportSize({ width, height: 900 });
+    for (const theme of ["light", "dark"]) {
+      await page.evaluate((theme) => {
+        document.documentElement.classList.toggle("dark", theme === "dark");
+        document.documentElement.style.fontSize = "24px";
+      }, theme);
+      const remount = page.getByRole("button", { name: "Remount avatars" });
+      await remount.focus();
+      await page.keyboard.press("Enter");
+      await expect(
+        page.getByLabel("Avatars immediately after remount"),
+      ).toHaveText(
+        JSON.stringify([
+          { complete: true, opacity: "1" },
+          { complete: true, opacity: "1" },
+        ]),
+      );
+      await expect(remount).toBeFocused();
+      await remount.click();
+      await expect(page.locator('section img[data-loaded="true"]')).toHaveCount(
+        2,
+      );
+    }
+  }
+});
+
 // Compare rendered glyphs: computed font-size alone cannot detect an ancestor scale.
 test("agent initials retain shared avatar typography at DM and chat sizes", async ({
   page,

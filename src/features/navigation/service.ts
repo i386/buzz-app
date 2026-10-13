@@ -4,6 +4,7 @@ import {
   type Navigation,
   type OpenAttempt,
   type OpenResult,
+  type NavigationFocus,
 } from "./controller";
 import { createBrowserHistory } from "./browser-history";
 import { createMemoryHistory } from "./history";
@@ -14,6 +15,8 @@ export type PageNavigation = Readonly<{
   entryId: string;
   target: OpenTarget;
   signal: AbortSignal;
+  /** Suppress destination autofocus when the opening control retains focus. */
+  focus?: NavigationFocus;
   /** Bind a domain subtree to the exact connection it renders, without another visit. */
   forSession(relay: RelayData, connection: RelaySnapshot): PageNavigation;
   /** Resolve the pending visit's default destination without replacing its caller. */
@@ -60,6 +63,7 @@ export function provideNavigation(
           entryId: attempt.entry.id,
           target: attempt.entry.target,
           signal: attempt.signal,
+          focus: attempt.focus ?? "content",
           resolve: (target) => controller.resolve(attempt, target),
           complete: (result) => controller.complete(attempt, result),
         },
@@ -116,6 +120,7 @@ function bindPresentation(
     entryId: parent.entryId,
     target: parent.target,
     signal: lifetime.signal,
+    focus: parent.focus ?? "content",
     resolve: (target) => valid() && parent.resolve(target),
     complete: (result) => valid() && parent.complete(result),
     forSession(relay, connection) {

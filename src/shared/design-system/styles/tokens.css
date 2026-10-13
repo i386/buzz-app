@@ -534,6 +534,8 @@
   --text-danger: var(--red-12);
   --text-warning: var(--amber-12);
   --text-success: var(--green-12);
+  --icon-status-progress: var(--amber-10);
+  --icon-status-complete: var(--green-10);
   --status-online: var(--green-11);
   --status-availability-online: var(--green-10);
   --status-avatar-online: var(--green-10);
@@ -605,6 +607,8 @@
   --text-danger: var(--red-12);
   --text-warning: var(--amber-12);
   --text-success: var(--green-12);
+  --icon-status-progress: var(--amber-10);
+  --icon-status-complete: var(--green-10);
   --status-online: var(--green-11);
   --status-availability-online: var(--green-10);
   --status-avatar-online: var(--green-10);

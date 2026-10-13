@@ -1,15 +1,14 @@
 # Shared observed community presence
 
-Profiles show presence through the avatar badge plus compact Active, Away, or
-Offline text beside the name, without a separate status row in Info. Both cues
-remain across profile tabs and use the same observed value. Pending, failed,
-stale, or unavailable evidence renders no status; it is not relabeled Offline.
+Avatars show presence through a badge that uses the observed value. Pending,
+failed, stale, or unavailable evidence renders no status; it is not relabeled
+Offline.
 People's message and thread bylines omit presence badges and custom status symbols.
-One-to-one DM avatars and profiles retain them. Agent message avatars retain presence
+One-to-one DM avatars retain them. Agent message avatars retain presence
 badges and demand presence when mounted. Their online badge morphs into a centered
 three-dot pill while the existing agent activity feed reports working or typing;
 activity is scoped to the displayed conversation when one is supplied. The same
-indicator is used in DM rows and agent profiles. It publishes no presence changes.
+indicator is used in DM rows. It publishes no presence changes.
 Visible member/invitation rows in Channel members also demand presence and display
 the shared avatar status badges for people and agents.
 This describes recent Buzz session status in this community, not proof that a
@@ -21,7 +20,7 @@ seconds; refreshing the snapshot does not prove that the session is still alive.
 
 ## Your status
 
-The account avatar, message/thread bylines, profiles and one-to-one DM avatars
+The account avatar, message/thread bylines and one-to-one DM avatars
 consume the selected community session's observed directory. A menu choice is a
 command, not evidence: only accepted publication, verified live events, or a
 verified complete snapshot changes badges. Pending/unavailable status has no
@@ -99,18 +98,16 @@ or imply confirmed delivery. There is no durable invisible policy on the relay.
   Unsupported platforms and command failures fall back to Buzz input. No
   cross-device arbitration is added.
 - Each retained connected session owns one volatile presence directory. Mounted
-  profiles, message bylines, one-to-one DM sidebar rows and mounted channel-member
+  message bylines, one-to-one DM sidebar rows and mounted channel-member
   rows demand authors. At
   most 256 unique authors are selected; the demanded viewer takes first priority,
-  then profiles, then existing
-  selections and stable acquisition order. Overflow has no visible status.
+  then existing selections and stable acquisition order. Overflow has no visible status.
 - Initial/new demand coalesces for 100ms, waiting at least five seconds after the
   previous read settles so transit cannot race the broker’s start gate. Successful
   views refresh after 60–65 seconds. Evidence expires 75 seconds after request start.
   An owner may request an earlier read that keeps current evidence and still
-  waits for the start gate; managed agent cards do so every five seconds, for up
-  to thirty seconds, while native process status and the badge disagree (for
-  example, just after start or stop).
+  waits for the start gate; input-activity changes do, and no agent surface does
+  now.
   Empty demand makes no request; removed authors lose their evidence. Hidden views,
   disconnect, access/cache invalidation and disposal invalidate observations.
 - One demand-scoped kind:20001 live-only route shares the authenticated socket.

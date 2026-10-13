@@ -4,6 +4,7 @@ import { MessageProjection } from "./message-projection";
 import { createRelayProfiler, type RelayProfiler } from "./profiling";
 import { ReadError, readErrorKind } from "./errors";
 import type {
+  ChannelReference,
   ChannelList,
   ChannelReadOptions,
   ChannelMessage,
@@ -82,6 +83,10 @@ const PUBLIC_CHANNEL_PAGE = 500;
 /** How long name search reuses one page of public channel metadata. Typing
  * reads it once; a channel created meanwhile shows up after this. */
 const PUBLIC_CHANNEL_PAGE_TTL = 30_000;
+/** How long a channel link keeps a `withheld` answer before rechecking it. */
+const REFERENCE_TTL = 5 * 60_000;
+/** The least wait before a failed channel-link lookup is tried again. */
+const REFERENCE_RETRY = 30_000;
 /** Exact omission confirmations use the relay's explicit channel-ID cap. */
 const DISCOVERY_CONFIRM_LIMIT = 128;
 const UNAVAILABLE: ChannelList = Object.freeze({
@@ -1649,6 +1654,7 @@ export function createChannelStore(
     heads.clear();
     tails.clear();
     if (discovery) setList({ ...list, channels: discovery.channels() });
+    resetReferences();
     await persistence?.clear().catch(() => {});
   }
   /** One background head read at a time; warm never competes with demand reads
@@ -1696,6 +1702,183 @@ export function createChannelStore(
       warming = false;
     }
   }
+  /** Channel-link lookups. `withheld` answers are kept for a while (and
+   * shown while rechecked); failures back off. Both reset with the epoch.
+   * `demand` counts mounted links per channel; a timer rechecks them when
+   * their answer expires or their backoff ends. */
+  const references = {
+    generation: -1,
+    withheld: new Map<string, number>(),
+    retryAt: new Map<string, number>(),
+    queue: new Set<string>(),
+    pending: new Set<string>(),
+    scheduled: false,
+  };
+  const demand = new Map<string, number>();
+  let referenceWake:
+    | { at: number; timer: ReturnType<typeof setTimeout> }
+    | undefined;
+  function currentReferences() {
+    if (references.generation !== epoch) {
+      references.generation = epoch;
+      references.withheld.clear();
+      references.retryAt.clear();
+      references.queue.clear();
+      references.pending.clear();
+      // A queued microtask from the old epoch drops its batch.
+      references.scheduled = false;
+    }
+    return references;
+  }
+  /** Cache and access resets drop every answer. Mounted links still show the
+   * old one until notified, and an in-flight lookup's reply is dropped, so
+   * notify them and look their channels up again. */
+  function resetReferences() {
+    currentReferences();
+    if (referenceWake) clearTimeout(referenceWake.timer);
+    referenceWake = undefined;
+    setList(list, true);
+    for (const id of demand.keys()) lookUpReference(id);
+    wakeReferences();
+  }
+  function describeReference(id: string): ChannelReference {
+    const channel = discovery?.get(id);
+    if (channel) {
+      const joined = !!discovery && channel.members?.includes(discovery.viewer);
+      return {
+        state: "found",
+        name: channel.name,
+        ...(channel.description ? { description: channel.description } : {}),
+        ...(channel.channelType ? { channelType: channel.channelType } : {}),
+        private: !!channel.private,
+        hidden: !!channel.hidden,
+        archived: !!channel.archived,
+        joined: !!joined,
+        ...(channel.members?.length ? { members: channel.members.length } : {}),
+      };
+    }
+    // A public channel the viewer has left: its signed open metadata stays
+    // public even while discovery denies reading it as a member.
+    const event = discovery?.metadataVersion(id);
+    const name = event && openMetadata(event) && metadataName(event);
+    if (event && name) {
+      const type = tag(event, "t");
+      const about = tag(event, "about");
+      return {
+        state: "found",
+        name,
+        ...(about ? { description: about } : {}),
+        ...(type === "stream" || type === "forum" ? { channelType: type } : {}),
+        private: false,
+        hidden: false,
+        archived: hasTag(event, "archived", "true"),
+        joined: false,
+      };
+    }
+    return currentReferences().withheld.has(id)
+      ? { state: "withheld" }
+      : { state: "unknown" };
+  }
+  /** When a demanded reference may be looked up again: its withheld answer
+   * expires, or its backoff ends. */
+  function referenceDue(id: string) {
+    const state = currentReferences();
+    const checked = state.withheld.get(id);
+    return Math.max(
+      checked === undefined ? 0 : checked + REFERENCE_TTL,
+      state.retryAt.get(id) ?? 0,
+    );
+  }
+  /** One timer for the earliest demanded recheck. */
+  function wakeReferences() {
+    if (disposed) return;
+    let at = Number.POSITIVE_INFINITY;
+    for (const id of demand.keys()) {
+      const due = referenceDue(id);
+      if (due > now()) at = Math.min(at, due);
+    }
+    if (referenceWake && referenceWake.at <= at) return;
+    if (referenceWake) clearTimeout(referenceWake.timer);
+    referenceWake = undefined;
+    if (at === Number.POSITIVE_INFINITY) return;
+    referenceWake = {
+      at,
+      timer: setTimeout(() => {
+        referenceWake = undefined;
+        for (const id of demand.keys()) lookUpReference(id);
+        wakeReferences();
+      }, at - now()),
+    };
+  }
+  function lookUpReference(id: string) {
+    if (disposed || !transport || !discovery || options.cachedOnly) return;
+    if (list.status !== "ready" || describeReference(id).state === "found")
+      return;
+    const state = currentReferences();
+    if (
+      state.queue.has(id) ||
+      state.pending.has(id) ||
+      now() < referenceDue(id)
+    )
+      return;
+    state.queue.add(id);
+    if (state.scheduled) return;
+    state.scheduled = true;
+    // `state` is shared across epochs; this batch belongs to this one.
+    const generation = epoch;
+    queueMicrotask(() => {
+      if (generation !== epoch) return;
+      state.scheduled = false;
+      const ids = [...state.queue];
+      state.queue.clear();
+      // `resolve` bounds one exact read to 128 channels.
+      for (let start = 0; start < ids.length; start += 128) {
+        const batch = ids.slice(start, start + 128);
+        for (const id of batch) state.pending.add(id);
+        resolve(batch, { priority: "background" }).then(
+          () => {
+            if (generation !== epoch) return;
+            for (const id of batch) {
+              state.pending.delete(id);
+              state.retryAt.delete(id);
+              if (describeReference(id).state === "found")
+                state.withheld.delete(id);
+              else state.withheld.set(id, now());
+            }
+            setList(list, true);
+            wakeReferences();
+          },
+          (error: unknown) => {
+            if (generation !== epoch) return;
+            const wait = Math.max(
+              REFERENCE_RETRY,
+              error instanceof ReadError ? (error.retryAfterMs ?? 0) : 0,
+            );
+            for (const id of batch) {
+              state.pending.delete(id);
+              state.retryAt.set(id, now() + wait);
+            }
+            wakeReferences();
+          },
+        );
+      }
+    });
+  }
+  function referChannel(id: string) {
+    demand.set(id, (demand.get(id) ?? 0) + 1);
+    lookUpReference(id);
+    // A link remounted during a backoff or a withheld answer's lifetime is
+    // suppressed above; it still needs the wake-up at that deadline.
+    wakeReferences();
+    let released = false;
+    return () => {
+      if (released) return;
+      released = true;
+      const count = (demand.get(id) ?? 1) - 1;
+      if (count) demand.set(id, count);
+      else demand.delete(id);
+    };
+  }
   function restore() {
     if (!prepared || !persistence?.readStartup) return Promise.resolve();
     startup ??= restoreStartup();
@@ -1707,6 +1890,8 @@ export function createChannelStore(
     resolve,
     searchPublic,
     matchPublic,
+    describe: describeReference,
+    refer: referChannel,
     refreshRoster,
     subscribeList: (listener: Listener) => subscribe(listListeners, listener),
     window: (channelId: string) =>
@@ -2146,9 +2331,12 @@ export function createChannelStore(
     // this disposable cache conservatively; pending writes use separate storage.
     if (hadHydration) void persistence?.retain([]).catch(() => {});
     setList(list);
+    resetReferences();
   }
   function dispose() {
     disposed = true;
+    if (referenceWake) clearTimeout(referenceWake.timer);
+    referenceWake = undefined;
     unsubscribeLocal?.();
     unsubscribeProfiles();
     epoch++;

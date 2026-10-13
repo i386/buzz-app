@@ -1,6 +1,11 @@
 // Ported from Buzz desktop desktop/src/shared/lib/datetime.test.mjs.
-import { expect, it as test } from "vitest";
-import { formatDayGroupLabel, formatItemTimestamp } from "./datetime";
+import { expect, it as test, vi } from "vitest";
+import {
+  formatDayGroupLabel,
+  formatItemTimestamp,
+  formatFullTimestamp,
+  formatCompactTime,
+} from "./datetime";
 
 const assert = {
   equal: (actual: unknown, expected: unknown, message?: string) =>
@@ -22,6 +27,29 @@ function at(
 }
 
 const NOW = at(2026, 6, 30, 14, 30); // Thu Jul 30 2026, 2:30 PM local
+
+test("shares one settings lookup across timestamp styles and rechecks after yielding", async () => {
+  await Promise.resolve();
+  const settings = vi.spyOn(Intl.DateTimeFormat.prototype, "resolvedOptions");
+  const timestamp = at(2026, 6, 30, 9, 5);
+  const formatRows = () => {
+    for (let i = 0; i < 100; i++) {
+      formatDayGroupLabel(timestamp + i, NOW);
+      formatItemTimestamp(timestamp + i, { nowSeconds: NOW });
+      formatCompactTime(timestamp + i);
+      formatFullTimestamp(timestamp + i);
+    }
+  };
+  try {
+    formatRows();
+    expect(settings).toHaveBeenCalledTimes(1);
+    await Promise.resolve();
+    formatRows();
+    expect(settings).toHaveBeenCalledTimes(2);
+  } finally {
+    settings.mockRestore();
+  }
+});
 
 test("the same calendar day reads Today", () => {
   assert.equal(formatDayGroupLabel(at(2026, 6, 30, 9, 5), NOW), "Today");

@@ -18,6 +18,7 @@ import {
   value,
   values,
   type Entity,
+  type ProjectHome,
 } from "../../features/projects/destinations";
 import {
   entityDtag,
@@ -38,8 +39,12 @@ type Item = {
 type Items =
   | { status: "loading" | "error" }
   | { status: "ready"; items: Item[]; truncated: boolean };
+type Home =
+  | { status: "loading"; cached: ProjectHome | undefined }
+  | { status: "error" }
+  | ProjectHome;
 
-/** Mounted per destination, so it owns the channel→project mapping and list reads.
+/** Mounted per destination; the session retains the channel→project mapping.
  * The composer owns the inserted link; this tool only proposes a verified one. */
 export function ResourcePicker({
   session,
@@ -48,9 +53,10 @@ export function ResourcePicker({
   insertResource,
 }: ComposerToolProps) {
   const [attempt, setAttempt] = useState(0);
-  const [home, setHome] = useState<
-    "loading" | "none" | "ambiguous" | "error" | Entity
-  >("loading");
+  const [home, setHome] = useState<Home>(() => ({
+    status: "loading",
+    cached: session.projects.peekHome(channelId),
+  }));
   const [open, setOpen] = useState(false);
   const [opening, setOpening] = useState(0);
   const [search, setSearch] = useState("");
@@ -62,18 +68,21 @@ export function ResourcePicker({
   const trigger = useRef<HTMLButtonElement>(null);
   const controls = useRef<HTMLFieldSetElement>(null);
   const searchInput = useRef<HTMLElement>(null);
-  const project = typeof home === "object" ? home : undefined;
-  // biome-ignore lint/correctness/useExhaustiveDependencies: attempt is explicit retry.
+  const pending = home.status === "loading";
+  const visibleHome = home.status === "loading" ? home.cached : home;
+  const project = home.status === "home" ? home.project : undefined;
   useEffect(() => {
     const controller = new AbortController();
-    setHome("loading");
+    setHome({
+      status: "loading",
+      cached: attempt === 0 ? session.projects.peekHome(channelId) : undefined,
+    });
     session.projects.home(channelId, controller.signal).then(
       (result) => {
-        if (!controller.signal.aborted)
-          setHome(result.status === "home" ? result.project : result.status);
+        if (!controller.signal.aborted) setHome(result);
       },
       () => {
-        if (!controller.signal.aborted) setHome("error");
+        if (!controller.signal.aborted) setHome({ status: "error" });
       },
     );
     return () => controller.abort();
@@ -178,7 +187,7 @@ export function ResourcePicker({
     wrap: true,
   });
   const highlighted = shown.find(({ item }) => item.id === highlight.active);
-  if (home === "none") return null;
+  if (visibleHome?.status === "none") return null;
   // A deleted or retargeted item must not become an accepted link.
   const choose = (item: Item) => {
     validation.current?.abort();
@@ -221,7 +230,7 @@ export function ResourcePicker({
   const label = "Add issue or pull request";
   return (
     <PopoverRoot
-      open={open && !disabled && home !== "loading"}
+      open={open && !disabled && !pending}
       onOpenChange={(next) => {
         setOpen(next);
         validation.current?.abort();
@@ -233,40 +242,44 @@ export function ResourcePicker({
         }
       }}
     >
+      {pending && (
+        <span role="status" className="sr-only">
+          Loading project…
+        </span>
+      )}
       <fieldset
         ref={controls}
         disabled={disabled}
+        hidden={!visibleHome}
         className={styles.controls}
         aria-label="Issue and pull request controls"
       >
         <PopoverTrigger
-          disabled={disabled || home === "loading"}
+          disabled={disabled || pending}
           render={
             <IconButton
-              disabled={disabled || home === "loading"}
+              disabled={disabled || pending}
               size="toolbar"
               ref={trigger}
               type="button"
               aria-label={label}
               title={
-                home === "loading"
+                pending
                   ? "Loading project…"
                   : project
                     ? label
                     : `${label} (unavailable)`
               }
               data-unavailable={
-                home === "ambiguous" || home === "error" ? "" : undefined
+                visibleHome?.status === "ambiguous" ||
+                visibleHome?.status === "error"
+                  ? ""
+                  : undefined
               }
               icon={<GitPullRequestIcon size={20} aria-hidden="true" />}
             />
           }
         />
-        {home === "loading" && (
-          <span role="status" className="sr-only">
-            Loading project…
-          </span>
-        )}
         <PopoverPopup
           side="top"
           sideOffset={4}
@@ -286,7 +299,7 @@ export function ResourcePicker({
             {!project ? (
               <>
                 <p role="status">
-                  {home === "ambiguous"
+                  {home.status === "ambiguous"
                     ? "This channel belongs to more than one project, so issues and pull requests can't be chosen here."
                     : "Could not load this channel's project."}
                 </p>

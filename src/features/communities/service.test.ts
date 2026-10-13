@@ -133,6 +133,28 @@ it("restores only the selected membership on launch", async () => {
   ]);
 });
 
+it("opens a joined community without selecting it, and never one that is not joined", async () => {
+  const client = setup({
+    profile: { name: "Local", picture: "" },
+    memberships: [
+      { id: "primary", name: "Primary" },
+      { id: "secondary", name: "Secondary" },
+    ],
+    selected: "secondary",
+  });
+  await flush();
+  await flush();
+  const primary = client.open("primary");
+  await flush();
+  expect(client.snapshot().selected).toBe("secondary");
+  expect(primary?.snapshot().status).toBe("ready");
+  expect(client.open("primary")).toBe(primary);
+  expect(client.open("https://unjoined.example.test")).toBeUndefined();
+  expect(requests.filter((url) => url.endsWith("/session"))).toEqual([
+    "/api/relay/secondary/session",
+    "/api/relay/primary/session",
+  ]);
+});
 it("a failing community does not replace its healthy sibling or the local profile", async () => {
   const client = setup();
   await flush();

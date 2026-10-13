@@ -17,6 +17,43 @@ stricter review. Escalate needed changes rather than editing without authorizati
 When reviewing CI or test-cost changes, inspect job-summary counts, elapsed wall
 time, summed test execution time, and slowest-test/file evidence for regressions.
 
+## UI and design-system work
+
+For any Buzz UI change—including features, shell, bundled plugins, and fixes to
+existing screens—read the [design guide](src/shared/design-system/DESIGN.md)
+before editing, starting with its screen-building decision table and
+[whole-surface recipes](src/shared/design-system/DESIGN.md#compose-the-whole-surface).
+For plugin UI, identify [what the host supplies](src/shared/design-system/DESIGN.md#plugin-contribution-boundaries)
+before adding framing, navigation, scrolling, or overlays.
+It applies to consumers throughout the repository, not only files
+inside the design-system directory. Use the
+[adoption map](docs/design-system-adoption.md) to find existing shared owners and
+feature-owned behavior. For changes to shared tokens, recipes, or components,
+also read [Maintaining the design system](src/shared/design-system/MAINTAINING_DESIGN_SYSTEM.md)
+and the [local agent guide](src/shared/design-system/AGENTS.md).
+
+- In the scope checkpoint, name the existing component/recipe to reuse and the
+  guide sections governing the change. Read its implementation and current uses
+  before introducing a replacement or variant.
+- Use shared components, semantic color roles, complete type roles, and spacing,
+  shape, and motion tokens. Features own layout and product behavior; do not
+  repaint shared controls or recreate their interaction states locally. Preserve
+  the guide's explicit renderer exceptions and ownership boundaries.
+- If the system cannot express the requested design, explain the concrete gap
+  and smallest owner-level change before expanding scope. Do not silently promote
+  proposed guidance, broaden guard exceptions, or weaken checks to pass a local
+  treatment. Follow the existing FOUNDATION and scope-approval rules.
+- Review the affected UI against the relevant guide sections, including component
+  choice, surface, hierarchy, nesting, focus, and applicable interaction states.
+  Inspect it in the app in both themes, at narrow and wide widths, and with enlarged
+  text; exercise keyboard and pointer behavior. Shared specimens supplement this
+  check but do not establish correct host integration. Follow the contribution
+  workflow's iteration gates and record checks deferred during human feedback.
+- Use the existing design hook/CI checks; do not duplicate them on each feedback
+  round. `design:check` provides static evidence, not full design conformance.
+  At handoff, name the shared owners used, the rendered/interaction checks actually
+  performed, and any remaining design gaps or approved exceptions.
+
 ## Worktree creation
 
 Before creating a worktree, run `git worktree list` and choose the existing
@@ -156,15 +193,11 @@ Tests must control the ordering they assert, not depend on runner speed.
 
 ## Commit attribution and DCO
 
-Every PR commit requires `Signed-off-by`. Use `git commit --signoff` with your
-verified effective `git config user.name` / `user.email`; stop if missing or
-incorrect. Preserve actual authorship; requesting or reviewing work does not
-justify substituting the human's identity or adding their sign-off.
-
-DCO, cryptographic signing, and co-author credit are separate; hooks do not supply
-DCO. Audit **every commit against the PR base**, including after rebases or
-cherry-picks. Preserve valid trailers; add only certifications you can make.
-After repairs, verify the hosted **DCO Check** at the new head.
+Every PR commit needs a `Signed-off-by` (the hosted **DCO Check** fails without
+one, and hooks do not add it): commit with `git commit --signoff`, which signs
+off as your effective git identity. Credit the other party with a
+`Co-authored-by` trailer: an agent committing as its human credits itself, and
+an agent committing as itself credits its human.
 
 ## Before opening a PR
 
@@ -193,6 +226,11 @@ confirmation, not app runs.
 
 ## Reviewing
 
+- For UI changes, apply [UI and design-system work](#ui-and-design-system-work)
+  to feature consumers as well as shared components. Cite the applicable design
+  rule and concrete mismatch in findings; distinguish adopted requirements from
+  proposals and optional visual preferences. Passing token guards alone does not
+  establish conformance.
 - Before reviewing, read block/buzz's [`VISION.md` and `VISION_*.md` docs](https://github.com/block/buzz) for the affected surface, the relevant design docs under `docs/`, and the PR's stated goal and linked
   issue. Review the change against what it is trying to do.
 - Judge the change against the 9/10 bar in [Engineering standard](#engineering-standard). A score below 9 names the concrete defect and the fix.
@@ -225,3 +263,23 @@ confirmation, not app runs.
   and code-owner approval. This preflight is not automatic permission to merge.
 
 Icons use Tabler only, through `src/shared/design-system/icons`. Add individual exports as needed; icon and weight choices belong to the designer. The local lint and design checks enforce this import boundary.
+
+## Arjun's desktop acceptance setup
+
+When launching Buzz desktop builds for Arjun's acceptance testing, use his existing
+configured identity through the established local setup and verify that his
+communities load. Do not expose credentials in logs or responses. If the identity
+or community loading cannot be verified, report that limitation before presenting
+the build as ready to test. Follow the worktree bootstrap instructions above;
+do not hardcode identity values into tracked files.
+
+## Inspect a live agent session
+
+When asked to inspect or debug an Agent conversation, open its live session viewer
+for the human:
+
+```sh
+bin/node scripts/session-debug.mjs '<Buzz thread ID or link>'
+```
+
+Keep it running for live updates. See [details](docs/session-debugging.md) if needed.

@@ -35,10 +35,13 @@ newImage.lockFocus()
 // Draw the original icon
 iconImage.draw(in: NSRect(origin: .zero, size: size))
 
-// Configure badge
-let singleLineHeight = size.height * 0.22
-let padding = size.width * 0.03
-let maxBadgeWidth = size.width * 0.9
+// The bundled macOS artwork is inset 100px on its 1024px canvas.
+// Size and place the badge within that tile, preserving the transparent margin.
+let artworkBounds = NSRect(origin: .zero, size: size).insetBy(
+    dx: size.width * 100 / 1024, dy: size.height * 100 / 1024)
+let singleLineHeight = artworkBounds.height * 0.22
+let padding = artworkBounds.width * 0.03
+let maxBadgeWidth = artworkBounds.width * 0.9
 
 // Text attributes - calculate font size to fit
 let maxFontSize = singleLineHeight * 0.65
@@ -102,8 +105,8 @@ let maxLineWidth = lines.map { ($0 as NSString).size(withAttributes: attributes)
 let badgeHeight = textHeight + padding * 2
 let cornerRadius = badgeHeight * 0.2
 let badgeWidth = maxLineWidth + padding * 4
-let badgeX = (size.width - badgeWidth) / 2
-let badgeY = size.height - badgeHeight - padding - size.height * 0.05
+let badgeX = artworkBounds.midX - badgeWidth / 2
+let badgeY = artworkBounds.maxY - badgeHeight - padding - artworkBounds.height * 0.05
 
 // Draw badge background (light blue semi-transparent)
 let badgePath = NSBezierPath(roundedRect: NSRect(x: badgeX, y: badgeY, width: badgeWidth, height: badgeHeight),

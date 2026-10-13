@@ -204,7 +204,7 @@ test("compact sidenav keeps its geometry across persistent page navigation", asy
     .first()
     .click();
   await expect(
-    page.getByRole("heading", { name: "Agents", exact: true }),
+    page.getByRole("region", { name: "Agents", exact: true }),
   ).toBeVisible();
   await expect(sidebar).toBeVisible();
   expect(await node.evaluate((element) => element.isConnected)).toBe(true);
@@ -308,6 +308,31 @@ test("top bar uses consistent square controls and translucent ghost fills", asyn
       await expect(overflow).toBeHidden();
       await expect(topbarPages).toBeVisible();
     }
+    // The icon default is compact, but community identities keep their larger
+    // targets. Host CSS must not accidentally erase those explicit exceptions.
+    const rail = page.getByRole("navigation", {
+      name: "Communities",
+      exact: true,
+    });
+    for (const control of await rail.getByRole("button").all()) {
+      const box = await control.boundingBox();
+      expect([box.width, box.height]).toEqual([40, 40]);
+    }
+    await header
+      .getByRole("button", { name: "Your profile", exact: true })
+      .click();
+    const profileMenu = page.locator(".buzz-menu-popup[data-profile-menu]");
+    const profileAvatar = profileMenu.getByRole("menuitem", {
+      name: "View your profile",
+    });
+    await expect(profileAvatar).toBeVisible();
+    // The popup enters through a translate transition; Chromium's transformed
+    // client rects carry float error, so measure the settled menu.
+    await expect(profileMenu).toHaveCSS("transform", "none");
+    const avatarBox = await profileAvatar.boundingBox();
+    expect([avatarBox.width, avatarBox.height]).toEqual([40, 40]);
+    await page.keyboard.press("Escape");
+    await expect(profileAvatar).toHaveCount(0);
     expect(await controls.count()).toBeGreaterThanOrEqual(5);
     for (const control of await controls.all()) {
       const box = await control.boundingBox();
@@ -391,7 +416,7 @@ test("Settings retains the sidebar toggle across desktop and narrow layouts", as
   });
   const toggle = page.locator("[data-shell-sidebar-toggle]");
   await expect(toggle).toHaveCount(1);
-  await expect(toggle).toHaveAccessibleName("Show Channel sidebar");
+  await expect(toggle).toHaveAccessibleName("Show sidebar");
   await expect(sidebar).not.toBeVisible();
   await toggle.click();
   await expect(sidebar).toBeVisible();
@@ -411,7 +436,7 @@ test("Settings retains the sidebar toggle across desktop and narrow layouts", as
   await expect(sidebar).not.toBeVisible();
   await expect(toggle).toBeFocused();
   await page.setViewportSize({ width: 1440, height: 950 });
-  await expect(toggle).toHaveAccessibleName("Show Channel sidebar");
+  await expect(toggle).toHaveAccessibleName("Show sidebar");
   await toggle.click();
   await expect(sidebar).toBeVisible();
 });
@@ -655,13 +680,13 @@ test("shell toggle restores the shared sidebar for Channels and Agents", async (
 
   await sidebar.getByRole("button", { name: "Agents", exact: true }).click();
   await expect(
-    page.getByRole("heading", { name: "Agents", exact: true }),
+    page.getByRole("region", { name: "Agents", exact: true }),
   ).toBeVisible();
   await page.getByRole("button", { name: "Hide Channel sidebar" }).click();
   await expect(sidebar).not.toBeVisible();
   await expect(rail).toBeVisible();
   await expect(
-    page.getByRole("heading", { name: "Agents", exact: true }),
+    page.getByRole("region", { name: "Agents", exact: true }),
   ).toBeVisible();
 
   await page.getByRole("button", { name: "Show Channel sidebar" }).click();
@@ -736,7 +761,9 @@ test.extend({ companionFixture: true })(
       await pages.getByRole("button", { name, exact: true }).click();
       const body = page.getByRole("region", { name, exact: true });
       await expect(
-        body.getByRole("heading", { name, exact: true }),
+        name === "Inbox"
+          ? body.getByRole("button", { name: "Inbox filters", exact: true })
+          : body.getByRole("heading", { name, exact: true }),
       ).toBeVisible();
       return body;
     };

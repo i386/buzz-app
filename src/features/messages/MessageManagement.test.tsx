@@ -15,6 +15,7 @@ import {
   waitFor,
 } from "@testing-library/react";
 import { useSyncExternalStore } from "react";
+import { ConversationPresentation } from "../conversation/ConversationPresentation";
 import {
   MenuRoot,
   MenuTrigger,
@@ -236,41 +237,45 @@ async function fixture(
       ),
     );
   }
-  function Surface() {
+  function Surface({ presented = true }: { presented?: boolean }) {
     const snapshot = useSyncExternalStore(
       (listener) => owner.session.channels.subscribeWindow("room", listener),
       () => owner.session.channels.window("room"),
     );
     return (
-      <MessageManagement session={owner.session} channelId="room">
-        <MessageManagementStatus />
-        {snapshot.rows.map((row) => (
-          <div key={row.id}>
-            <p>{row.content}</p>
-            <MenuRoot>
-              <MenuTrigger>Message actions</MenuTrigger>
-              <MenuPopup>
-                <MessageReadStateItem row={row} session={owner.session} />
-                <MessageManagementItems row={row} session={owner.session} />
-              </MenuPopup>
-            </MenuRoot>
-          </div>
-        ))}
-        <MessageComposer
-          session={owner.session}
-          scope="management-test"
-          channelId="room"
-          channelName="Room"
-        />
-      </MessageManagement>
+      <ConversationPresentation value={presented}>
+        <MessageManagement session={owner.session} channelId="room">
+          <MessageManagementStatus />
+          {snapshot.rows.map((row) => (
+            <div key={row.id}>
+              <p>{row.content}</p>
+              <MenuRoot>
+                <MenuTrigger>Message actions</MenuTrigger>
+                <MenuPopup>
+                  <MessageReadStateItem row={row} session={owner.session} />
+                  <MessageManagementItems row={row} session={owner.session} />
+                </MenuPopup>
+              </MenuRoot>
+            </div>
+          ))}
+          <MessageComposer
+            session={owner.session}
+            scope="management-test"
+            channelId="room"
+            channelName="Room"
+          />
+        </MessageManagement>
+      </ConversationPresentation>
     );
   }
-  render(<Surface />);
+  const view = render(<Surface />);
   fireEvent.click(screen.getByRole("button", { name: "Message actions" }));
   return {
     owner,
     original,
     publications,
+    present: (presented: boolean) =>
+      view.rerender(<Surface presented={presented} />),
     publication(index: number) {
       const item = publications[index];
       assert.exists(item);
@@ -990,4 +995,35 @@ it("keeps one unread visit until the last channel or thread view closes", async 
   expect(enterChannel).toHaveBeenCalledTimes(2);
   revisit.unmount();
   expect(leaveChannel).toHaveBeenCalledTimes(2);
+});
+
+it("keeps a withheld empty-edit deletion recoverable and restores the draft only after retry succeeds", async () => {
+  const h = await fixture();
+  fireEvent.keyDown(screen.getByRole("menuitem", { name: "Edit message" }), {
+    key: "Escape",
+  });
+  fill("Unsent reply draft");
+  fireEvent.click(screen.getByRole("button", { name: "Message actions" }));
+  await edit();
+  fill("");
+  submit();
+  fireEvent.click(await screen.findByRole("button", { name: "Delete" }));
+  await waitFor(() => expect(h.publications).toHaveLength(1));
+  h.present(false);
+  expect(screen.queryByRole("alertdialog")).toBeNull();
+  await act(async () =>
+    h.publication(0).result.reject(new PublishRejected("Deletion refused")),
+  );
+  expect(editor()).toHaveValue("");
+  expect(screen.getByText("Message deletion: Deletion refused")).toBeVisible();
+  h.present(true);
+  expect(screen.queryByRole("alertdialog")).toBeNull();
+  fireEvent.click(screen.getByRole("button", { name: "Retry message update" }));
+  await waitFor(() => expect(h.publications).toHaveLength(2));
+  expect(h.publication(1).event.id).toBe(h.publication(0).event.id);
+  expect(editor()).toHaveValue("");
+  await act(async () => h.publication(1).result.resolve());
+  await waitFor(() => expect(screen.queryByText("Editing message")).toBeNull());
+  expect(screen.getByRole("textbox")).toHaveValue("Unsent reply draft");
+  expect(screen.queryByRole("alertdialog")).toBeNull();
 });

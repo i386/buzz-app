@@ -215,7 +215,7 @@ test("interface zoom preserves an open emoji search and scales its controls", as
     exact: true,
   });
   await composer.fill("Keep this draft ");
-  await button(page, "Insert emoji").click();
+  await button(page, "Emoji and GIFS").click();
   const search = page.getByRole("searchbox", { name: "Search emoji" });
   await expect(search).toBeFocused();
   await search.fill("grinning");
@@ -260,7 +260,7 @@ test("interface zoom preserves an open emoji search and scales its controls", as
   await search.press("Enter");
   await expect(composer).toHaveJSProperty("value", `Keep this draft ${chosen}`);
   await expect(composer).toBeFocused();
-  await button(page, "Insert emoji").click();
+  await button(page, "Emoji and GIFS").click();
   await search.fill("grinning");
   // Establish a selected query range; Mart owns arrow keys for result navigation.
   await search.evaluate((input) => {

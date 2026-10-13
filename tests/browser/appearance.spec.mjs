@@ -201,7 +201,7 @@ test("storage denial is visible and retryable; another window updates a live con
   await composer.fill("Unsent appearance draft");
   const before = await anchor(page);
   const node = await composer.elementHandle();
-  await button(page, "Insert emoji").click();
+  await button(page, "Emoji and GIFS").click();
   const emojiSearch = page.getByRole("searchbox", {
     name: "Search emoji",
     exact: true,

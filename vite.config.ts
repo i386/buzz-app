@@ -75,7 +75,7 @@ export default defineConfig(async ({ command, mode }) => {
       ),
     },
     clearScreen: false,
-    // Runtime preparation checks out the Buzz and Goose web UIs under target/.
+    // Keep build artifacts and coverage pages out of dependency discovery.
     optimizeDeps: {
       entries: ["**/*.html", "!**/target/**", "!**/coverage/**"],
     },

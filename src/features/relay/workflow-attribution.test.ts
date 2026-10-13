@@ -5,7 +5,7 @@ import { foldMessages } from "./fold";
 import { rowProfileIds } from "./membership";
 import { projectEvents } from "./projection";
 import { keypair, signed } from "./testing";
-import { workflowOwner } from "./workflow-attribution";
+import { workflowOwner, workflowMentionOwner } from "./workflow-attribution";
 
 vi.mock("nostr-tools", { spy: true });
 
@@ -45,6 +45,60 @@ it("recognizes the bounded HTTP verifier's proof too", () => {
   const event = sample();
   expect(workflowOwner(read(event), relay.pubkey)).toBe(owner.pubkey);
   expect(workflowOwner(read(event), relay.pubkey)).toBe(owner.pubkey);
+});
+it("delegates only to explicit canonical workflow targets", () => {
+  const nextTags = [
+    ...tags,
+    ["buzz:workflow-mention", other.pubkey],
+    ["buzz:workflow-mention", owner.pubkey],
+  ];
+  const event = eventDto(sample(nextTags));
+  expect(workflowMentionOwner(event, relay.pubkey, other.pubkey)).toBe(
+    owner.pubkey,
+  );
+  expect(
+    workflowMentionOwner(event, relay.pubkey, relay.pubkey),
+  ).toBeUndefined();
+  expect(workflowMentionOwner(event, undefined, other.pubkey)).toBeUndefined();
+  expect(
+    workflowMentionOwner(event, other.pubkey, other.pubkey),
+  ).toBeUndefined();
+  expect(
+    workflowMentionOwner({ ...event }, relay.pubkey, other.pubkey),
+  ).toBeUndefined();
+  expect(
+    workflowMentionOwner(
+      eventDto(sample(nextTags, other)),
+      relay.pubkey,
+      other.pubkey,
+    ),
+  ).toBeUndefined();
+});
+it.each(
+  [
+    [],
+    [["p", other.pubkey]],
+    [["buzz:workflow-mention", owner.pubkey]],
+    [["buzz:workflow-mention", other.pubkey, "extra"]],
+    [["buzz:workflow-mention", other.pubkey.toUpperCase()]],
+    [
+      ["buzz:workflow-mention", other.pubkey],
+      ["buzz:workflow-mention", other.pubkey],
+    ],
+    [["buzz:workflow-mention", other.pubkey], ["buzz:workflow-mention"]],
+    [
+      ["buzz:workflow-mention", other.pubkey],
+      ["buzz:workflow-mention", "bad"],
+    ],
+  ].map((mentions) => ({ mentions })),
+)("rejects missing or ambiguous workflow targets %#", ({ mentions }) => {
+  expect(
+    workflowMentionOwner(
+      eventDto(sample([...tags, ...mentions])),
+      relay.pubkey,
+      other.pubkey,
+    ),
+  ).toBeUndefined();
 });
 it("rejects unsigned intent, caller proof symbols, copied and tampered records", () => {
   const raw = sample();

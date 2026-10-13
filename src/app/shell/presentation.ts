@@ -70,3 +70,27 @@ export function pagePresentation(page: RegisteredPage): PagePresentation {
     ...(page.icon === undefined ? {} : { image: page.icon }),
   };
 }
+
+// Header selection describes the area; sidebar selection and routes stay exact.
+export function headerPageSelection(
+  pages: readonly RegisteredPage[],
+  selected: string,
+): string {
+  const page = pages.find((page) => page.key === selected);
+  if (
+    selected !== "buzz.me/me" &&
+    page &&
+    // Placement applies only to primary pages.
+    (!page.primary ||
+      page.placement === undefined ||
+      page.placement === "sidebar") &&
+    pages.some(
+      (page) =>
+        page.key === "buzz.channels/channels" &&
+        page.primary &&
+        page.placement === "topbar",
+    )
+  )
+    return "buzz.channels/channels";
+  return selected;
+}

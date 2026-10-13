@@ -152,7 +152,7 @@ it.each([true, false])(
   },
 );
 
-it("keeps both preference recovery paths scoped to the visible section", () => {
+it("keeps both preference recovery paths scoped to the visible section", async () => {
   const ctx = new Context();
   contexts.push(ctx);
   const runtime = new PluginRuntime(ctx, async () => ({ apply() {} }));
@@ -190,7 +190,7 @@ it("keeps both preference recovery paths scoped to the visible section", () => {
     </ToastProvider>,
   );
   expect(
-    screen.getByRole("button", { name: "Retry saving choices" }),
+    await screen.findByRole("button", { name: "Retry saving choices" }),
   ).toBeEnabled();
   expect(
     screen.getByRole("button", { name: "Reload saved choices" }),
@@ -202,7 +202,9 @@ it("keeps both preference recovery paths scoped to the visible section", () => {
     service.updatePreferences({ enabled: true });
   });
   write.mockRestore();
-  fireEvent.click(screen.getByRole("button", { name: "Retry saving choices" }));
+  fireEvent.click(
+    await screen.findByRole("button", { name: "Retry saving choices" }),
+  );
   expect(service.snapshot().preferencesError).toBeNull();
   expect(service.snapshot().preferences.enabled).toBe(true);
 });
@@ -344,6 +346,7 @@ it("repeated identical permission failures retain feedback without leaving Setti
   render(<NotificationSettings notifications={service} />, {
     wrapper: ToastProvider,
   });
+  await act(() => vi.advanceTimersByTimeAsync(0));
   const notice = () =>
     screen.getByRole("dialog", {
       name: "Buzz couldn’t send the notification",

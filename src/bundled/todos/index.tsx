@@ -23,11 +23,12 @@ export const apply: PluginModule["apply"] = (ctx) => {
     return (
       <IconButton
         size="sm"
-        variant={pressed ? "tint" : "ghost"}
+        variant="ghost"
+        data-channel-panel-toggle=""
         icon={<ListChecksIcon size={16} aria-hidden="true" />}
         aria-label="Toggle channel todos"
         title="Todos"
-        aria-pressed={pressed}
+        aria-expanded={pressed}
         onClick={(event) => {
           event.currentTarget.focus();
           if (active && available()) toggle(context.channelId);

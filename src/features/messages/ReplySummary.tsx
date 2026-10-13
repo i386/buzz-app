@@ -1,4 +1,4 @@
-import { Avatar } from "../../shared/design-system/ui/Avatar";
+import { AvatarStack } from "../../shared/design-system/ui/AvatarStack";
 import type { Profile } from "../relay/contracts";
 import styles from "./Messages.module.css";
 
@@ -24,40 +24,18 @@ export function ReplySummary({
 }) {
   return (
     <>
-      {participants.length > 0 && (
-        <span className={styles.threadAvatars} aria-hidden="true">
-          {participants.slice(0, 3).map((id) => {
-            const profile = profiles?.get(id);
-            const name = resolveName(id, profile?.name ?? id.slice(0, 10));
-            const shape = agentPubkeys?.has(id) ? "squircle" : "circle";
-            return (
-              <span
-                key={id}
-                className={styles.threadAvatar}
-                data-avatar-shape={shape}
-                title={name}
-              >
-                <Avatar
-                  src={
-                    profile?.picture
-                      ? media(profile.picture, "small")
-                      : undefined
-                  }
-                  alt=""
-                  fallback={name}
-                  size="fill"
-                  shape={shape}
-                />
-              </span>
-            );
-          })}
-          {participants.length > 3 && (
-            <span className={styles.threadAvatarCount}>
-              +{participants.length - 3}
-            </span>
-          )}
-        </span>
-      )}
+      <AvatarStack
+        size="small"
+        items={participants.map((id) => {
+          const profile = profiles?.get(id);
+          return {
+            id,
+            name: resolveName(id, profile?.name ?? id.slice(0, 10)),
+            src: profile?.picture ? media(profile.picture, "small") : undefined,
+            shape: agentPubkeys?.has(id) ? "squircle" : "circle",
+          };
+        })}
+      />
       <span>
         {count} {count === 1 ? "reply" : "replies"}
       </span>

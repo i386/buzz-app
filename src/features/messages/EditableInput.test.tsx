@@ -227,6 +227,58 @@ describe("Mac WebKit line breaks", () => {
     expect(clear).not.toHaveBeenCalled();
   });
 
+  it("returning focus resumes and repaints the editor's caret; a pointer places its own", () => {
+    const text = "here is a message";
+    const h = mount(text);
+    act(() => h.input.setSelectionRange(2, 2));
+    const stale = () => {
+      act(() => h.input.blur());
+      // While hidden, the native caret drifted from the editor's caret.
+      const node = h.input.querySelector("p")?.firstChild;
+      if (!node) throw new Error("Editor text unavailable");
+      document.getSelection()?.collapse(node, 0);
+      clear.mockClear();
+    };
+    // Browsers keep a selection already inside the focused editing root;
+    // jsdom then collapses it to the start regardless, so observe it here.
+    let painted: unknown[] = [];
+    const observe = () => {
+      painted = native();
+    };
+    document.addEventListener("focusin", observe);
+    stale();
+    act(() => h.input.focus());
+    document.removeEventListener("focusin", observe);
+    expect(clear).toHaveBeenCalledTimes(1);
+    expect(h.input.selectionStart).toBe(2);
+    expect(painted).toEqual([1, true, text, 2]);
+
+    stale();
+    act(() => {
+      fireEvent.pointerDown(h.input);
+      h.input.focus();
+      fireEvent.pointerUp(h.input);
+    });
+    expect(clear).not.toHaveBeenCalled();
+  });
+
+  it.each(["pointerUp", "pointerCancel"] as const)(
+    "%s outside the editor retires pointer placement before returning focus",
+    (release) => {
+      const h = mount("message");
+      act(() => h.input.setSelectionRange(2, 2));
+      act(() => {
+        fireEvent.pointerDown(h.input);
+        fireEvent[release](document.body);
+        h.input.blur();
+      });
+      clear.mockClear();
+      act(() => h.input.focus());
+      expect(clear).toHaveBeenCalledOnce();
+      expect(h.input.selectionStart).toBe(2);
+    },
+  );
+
   it("leaves Chromium alone", () => {
     vi.spyOn(navigator, "vendor", "get").mockReturnValue("Google Inc.");
     const h = mount("ab");

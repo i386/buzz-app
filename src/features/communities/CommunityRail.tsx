@@ -193,6 +193,7 @@ export function CommunityRail({
         <Tooltip content="Personal space" side="right">
           <IconButton
             ref={personalRef}
+            size="md"
             aria-label="Personal space"
             aria-current={client.selected === null ? "true" : undefined}
             data-selected={client.selected === null || undefined}
@@ -232,6 +233,7 @@ export function CommunityRail({
         <Tooltip content="Add a community" side="right">
           <IconButton
             ref={addRef}
+            size="md"
             aria-label="Add a community"
             icon={<PlusIcon size={22} aria-hidden="true" />}
             onClick={() => setJoining(true)}

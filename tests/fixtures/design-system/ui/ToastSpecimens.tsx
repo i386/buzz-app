@@ -1,3 +1,4 @@
+import { ToastPlayground } from "./ToastPlayground";
 import { ExamplePreview } from "./ExamplePreview";
 import { useRef, useState } from "react";
 import {
@@ -75,61 +76,66 @@ export function ToastSpecimens() {
       {(visible) =>
         visible && (
           <ToastProvider>
-            <div className="flex max-w-sm flex-wrap gap-3">
-              <Button onClick={() => setSaved(true)}>Show confirmation</Button>
-              <Button onClick={() => setFailed(true)}>Show recovery</Button>
-              <Button onClick={() => setRecoveries([1, 2, 3, 4, 5, 6])}>
-                Show recovery stack
-              </Button>
-              <Button ref={modalTrigger} onClick={() => setModal(true)}>
-                Open example dialog
-              </Button>
-            </div>
-            {saved && (
-              <ToastNotice
-                title="Changes saved"
-                tone="success"
-                timeout={5000}
-                onDismiss={() => setSaved(false)}
-              />
-            )}
-            {failed && (
-              <ToastNotice
-                title="Changes weren’t saved"
-                description="Your choices still apply for this session. Retry to save them on this device."
-              >
-                <Button size="sm" onClick={() => setFailed(false)}>
-                  Retry saving
+            <div className="min-w-0 w-full">
+              <div className="flex max-w-sm flex-wrap gap-3">
+                <Button onClick={() => setSaved(true)}>
+                  Show confirmation
                 </Button>
-              </ToastNotice>
-            )}
-            {recoveries.map((id) => (
-              <ToastNotice
-                key={id}
-                title={`Recovery ${id}`}
-                description="This action remains available until its source resolves."
-              >
-                <Button
-                  size="sm"
-                  onClick={() =>
-                    setRecoveries((current) =>
-                      current.filter((item) => item !== id),
-                    )
-                  }
+                <Button onClick={() => setFailed(true)}>Show recovery</Button>
+                <Button onClick={() => setRecoveries([1, 2, 3, 4, 5, 6])}>
+                  Show recovery stack
+                </Button>
+                <Button ref={modalTrigger} onClick={() => setModal(true)}>
+                  Open example dialog
+                </Button>
+              </div>
+              <ToastPlayground />
+              {saved && (
+                <ToastNotice
+                  title="Changes saved"
+                  tone="success"
+                  timeout={5000}
+                  onDismiss={() => setSaved(false)}
+                />
+              )}
+              {failed && (
+                <ToastNotice
+                  title="Changes weren’t saved"
+                  description="Your choices still apply for this session. Retry to save them on this device."
                 >
-                  Resolve {id}
-                </Button>
-              </ToastNotice>
-            ))}
-            <Dialog
-              open={modal}
-              onOpenChange={setModal}
-              title="Example dialog"
-              finalFocus={modalTrigger}
-            >
-              Recovery notifications wait behind the modal without interrupting
-              its controls.
-            </Dialog>
+                  <Button size="sm" onClick={() => setFailed(false)}>
+                    Retry saving
+                  </Button>
+                </ToastNotice>
+              )}
+              {recoveries.map((id) => (
+                <ToastNotice
+                  key={id}
+                  title={`Recovery ${id}`}
+                  description="This action remains available until its source resolves."
+                >
+                  <Button
+                    size="sm"
+                    onClick={() =>
+                      setRecoveries((current) =>
+                        current.filter((item) => item !== id),
+                      )
+                    }
+                  >
+                    Resolve {id}
+                  </Button>
+                </ToastNotice>
+              ))}
+              <Dialog
+                open={modal}
+                onOpenChange={setModal}
+                title="Example dialog"
+                finalFocus={modalTrigger}
+              >
+                Recovery notifications wait behind the modal without
+                interrupting its controls.
+              </Dialog>
+            </div>
           </ToastProvider>
         )
       }

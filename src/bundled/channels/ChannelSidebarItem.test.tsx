@@ -135,7 +135,9 @@ it("keeps the DM identity avatar and shows only a separate thinking badge", () =
   ).toBeNull();
   const badge = document.querySelector("[data-channel-working]");
   expect(badge).toHaveAttribute("aria-label", "Buzzy working in Buzzy");
-  expect(badge?.querySelectorAll("i")).toHaveLength(3);
+  expect(badge?.querySelectorAll("[data-state=working] > span")).toHaveLength(
+    3,
+  );
   expect(badge?.closest("[data-dm-identity]")).toBeNull();
 });
 

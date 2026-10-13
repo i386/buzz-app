@@ -288,6 +288,25 @@
     outline: 2px solid var(--border-focus);
     outline-offset: 2px;
   }
+  /* An inset ring must paint above opaque children, not reserve layout space. */
+  .buzz-tabs-panel[data-focus-inset] {
+    position: relative;
+    isolation: isolate;
+  }
+  html[data-keyboard-navigation]
+    .buzz-tabs-panel[data-focus-inset]:focus-visible {
+    outline-offset: -2px;
+  }
+  html[data-keyboard-navigation]
+    .buzz-tabs-panel[data-focus-inset]:focus-visible::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    outline: inherit;
+    outline-offset: inherit;
+    z-index: var(--layer-popover);
+    pointer-events: none;
+  }
   .navigation-item[data-variant="pill"] {
     width: auto;
     flex-shrink: 0;
@@ -325,81 +344,92 @@
   z-index: var(--layer-popover);
 }
 
+/* Sonner injects unlayered positioning CSS. Keep its integration unlayered too.
+   Use normal flow for the expanded recovery stack so every action remains
+   scrollable, including after text-size changes. Sonner still owns placement,
+   announcements, expiry and swipe dismissal. */
+.buzz-toast-viewport[data-sonner-toaster] {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  width: min(24rem, calc(100vw - 2 * var(--space-4)));
+  max-height: min(40dvh, calc(100dvh - 2 * var(--space-6)));
+  overflow-y: auto;
+  /* Leave room for floating-surface elevation inside the scroll boundary. */
+  padding: var(--space-3);
+  z-index: calc(var(--layer-dialog-backdrop) - 1);
+  font-family: inherit;
+  pointer-events: none;
+}
+.buzz-toast-viewport[data-sonner-toaster][data-x-position="right"] {
+  left: auto;
+  right: max(var(--space-4), env(safe-area-inset-right));
+}
+.buzz-toast-viewport[data-sonner-toaster] [data-sonner-toast] {
+  position: relative;
+  flex-shrink: 0;
+  width: 100%;
+  pointer-events: auto;
+  touch-action: pan-y;
+  transition:
+    transform var(--duration-state) var(--easing-state),
+    opacity var(--duration-state) var(--easing-state);
+}
+.buzz-toast-viewport
+  [data-sonner-toast][data-mounted="true"][data-expanded="true"] {
+  --y: translateY(0);
+}
+.buzz-toast-viewport [data-sonner-toast][data-removed="true"] {
+  visibility: hidden;
+  pointer-events: none;
+}
+.buzz-toast-viewport [data-sonner-toast]:focus-visible {
+  box-shadow: none;
+}
+html[data-keyboard-navigation]
+  .buzz-toast-viewport
+  [data-sonner-toast]:focus-visible {
+  outline: 2px solid var(--border-focus);
+  outline-offset: 2px;
+}
+.buzz-toast.floating-surface {
+  --floating-inset: var(--space-3);
+  display: grid;
+  gap: var(--space-3);
+  padding: var(--space-3);
+  overflow-wrap: anywhere;
+}
 @layer components {
-  .buzz-toast-viewport {
-    /* Keep shell navigation, conversation tools and the composer outside the stack. */
-    --toast-top: 8rem;
-    position: fixed;
-    top: calc(var(--toast-top) + env(safe-area-inset-top));
-    right: max(var(--space-4), env(safe-area-inset-right));
-    z-index: calc(var(--layer-dialog-backdrop) - 1);
-    display: flex;
-    flex-direction: column;
-    gap: var(--space-3);
-    width: min(24rem, calc(100vw - 2 * var(--space-4)));
-    max-height: min(
-      40dvh,
-      calc(
-        100dvh -
-        var(--toast-top) -
-        min(10rem, 25dvh) -
-        env(safe-area-inset-top)
-      )
-    );
-    overflow-y: auto;
-    padding: var(--space-1);
-    /* Only toast cards intercept clicks, not the empty viewport or its gaps. */
-    pointer-events: none;
-  }
-  @media (max-width: 43.75rem) {
-    .buzz-toast-viewport {
-      --toast-top: 12rem;
-    }
-  }
-  .buzz-toast {
-    flex-shrink: 0;
-    display: grid;
-    gap: var(--space-2);
-    padding: var(--space-4);
-    overflow-wrap: anywhere;
-    pointer-events: auto;
-    transition: opacity var(--duration-state) var(--easing-state);
-  }
-  .buzz-toast[data-starting-style],
-  .buzz-toast[data-ending-style] {
-    opacity: 0;
-  }
-  .buzz-toast[data-ending-style] {
-    pointer-events: none;
-  }
   .buzz-toast-heading {
     display: flex;
     align-items: start;
-    justify-content: space-between;
     gap: var(--space-2);
   }
-  .buzz-toast-heading > :first-child,
-  .buzz-toast > p {
-    margin: 0;
+  .buzz-toast-message {
+    display: grid;
+    flex: 1;
+    min-width: 0;
+    align-self: center;
+    gap: var(--space-1);
   }
-  .buzz-toast[data-type="error"] .buzz-toast-heading > :first-child {
+  .buzz-toast-dismiss {
+    flex-shrink: 0;
+    margin-block: calc(-1 * var(--space-1));
+    margin-inline-end: calc(-1 * var(--space-2));
+  }
+  .buzz-toast-message > p {
+    margin: 0;
+    color: var(--text-subtle);
+  }
+  .buzz-toast[data-type="error"] .buzz-toast-title {
     color: var(--text-danger);
   }
-  .buzz-toast[data-type="warning"] .buzz-toast-heading > :first-child {
+  .buzz-toast[data-type="warning"] .buzz-toast-title {
     color: var(--text-warning);
   }
   .buzz-toast-actions {
     display: flex;
     flex-wrap: wrap;
     gap: var(--space-2);
-  }
-  html[data-keyboard-navigation] .buzz-toast:focus-visible {
-    outline: 2px solid var(--border-focus);
-    outline-offset: 2px;
-  }
-  @media (prefers-reduced-motion: reduce) {
-    .buzz-toast {
-      transition: none;
-    }
   }
 }

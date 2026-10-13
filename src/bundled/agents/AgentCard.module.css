@@ -1,51 +1,162 @@
-.card {
-  display: flex;
-  flex-direction: column;
-  border: 1px solid var(--border-standard);
-  border-radius: var(--radius-container);
-  min-height: 15.25rem;
+/* Cards share one grid; each is a soft control surface. */
+.grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: var(--space-2);
+  outline: none;
 }
-.content {
+.card {
   position: relative;
   display: flex;
-  flex: 1;
-  width: 100%;
-  min-width: 0;
   flex-direction: column;
   align-items: center;
   justify-content: center;
   gap: var(--space-3);
-  padding: var(--space-8) var(--space-3);
+  min-width: 0;
+  min-height: 15.25rem;
+  padding: var(--space-8) var(--space-3) var(--space-4);
+  border: 1px solid transparent;
+  border-radius: var(--radius-container);
+  background: var(--surface-control);
   text-align: center;
-  border-radius: var(--radius-container);
+  user-select: none;
 }
-.open {
-  position: absolute;
-  inset: 0;
-  width: 100%;
-  border: 0;
-  border-radius: var(--radius-container);
-  padding: 0;
-  background: transparent;
-  color: inherit;
+.card[role="option"] {
   cursor: pointer;
 }
-.open:hover,
-.open:active {
-  background: transparent;
-}
-.content:has(.open:hover),
-.content:has(.open:focus-visible) {
+.card[role="option"]:hover {
   background: var(--surface-hover);
 }
-.portrait {
-  width: 5rem;
-  height: 5rem;
-  flex-shrink: 0;
+.card[aria-selected="true"] {
+  border-color: var(--border-focus);
 }
-.model {
-  margin-top: var(--space-1);
+.card:focus-visible {
+  outline: 2px solid var(--border-focus);
+  outline-offset: 2px;
+}
+.portrait {
+  flex-shrink: 0;
+  width: 6rem;
+  height: 6rem;
+}
+.portrait[data-animated] {
+  width: 8rem;
+  height: 8rem;
+}
+.card[data-unavailable] .portrait {
+  opacity: 0.5;
+}
+.portrait :is(img, video) {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+.name {
+  max-width: 100%;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+.detail {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  max-width: 100%;
+  color: var(--text-secondary);
+  font-size: var(--text-body-sm-size, 0.8125rem);
+}
+.detailText {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: var(--space-2);
+}
+
+/* The New agent tile: a scatter of pack avatars behind one label. */
+.newTile {
+  position: relative;
+  isolation: isolate;
+  min-height: 15.25rem;
+  overflow: hidden;
+  border: 1px solid var(--border-standard);
+  border-radius: var(--radius-container);
+  background: var(--surface);
+  cursor: pointer;
+}
+.newTile:hover {
+  background: var(--surface-hover);
+}
+.newTile:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+.newArtwork {
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+}
+.newArtwork img {
+  position: absolute;
+  width: 4.5rem;
+  height: 4.5rem;
+  object-fit: contain;
+}
+.newArtwork img:nth-child(1) {
+  left: -8%;
+  top: 12%;
+  transform: rotate(-12deg);
+}
+.newArtwork img:nth-child(2) {
+  right: -9%;
+  top: 8%;
+  transform: rotate(12deg);
+}
+.newArtwork img:nth-child(3) {
+  left: 34%;
+  top: 0;
+}
+.newArtwork img:nth-child(4) {
+  left: 35%;
+  bottom: 0;
+  transform: rotate(-10deg);
+}
+.newArtwork img:nth-child(5) {
+  left: -10%;
+  bottom: 10%;
+}
+.newArtwork img:nth-child(6) {
+  right: -8%;
+  bottom: 0;
+}
+.newArtwork img:nth-child(7) {
+  right: -20%;
+  top: 43%;
+}
+.newArtwork img:nth-child(8) {
+  left: -24%;
+  top: 45%;
+}
+.newLabel {
+  display: inline-block;
+  padding: var(--space-2) var(--space-4);
+  border-radius: var(--radius-pill);
+  color: var(--text-inverse);
+  background: var(--text-standard);
+}
+
+@media (max-width: 560px) {
+  .grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+@media (max-width: 360px) {
+  .grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
 }

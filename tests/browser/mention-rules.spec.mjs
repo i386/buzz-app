@@ -13,22 +13,23 @@ test("Space commits a unique exact identity but leaves namesakes as prose", asyn
   await input.press("Space");
   await expect(input).toHaveJSProperty("value", "`@Mary Jane `");
   await expect(input.locator(".inline-chip")).toHaveCount(0);
+  // A member's exact name selects without waiting for the directory search
+  // (README section 5), so typing straight on cannot race it.
+  await page.evaluate(() => window.mentionFixture.holdSearches());
   await input.fill("@Mary Jane");
   await expect(page.getByRole("option", { name: /^Mary Jane / })).toBeVisible();
-  // Space selects only after the directory search settles (README section 5).
   await expect
     .poll(() =>
-      page.evaluate(() => ({
-        searched: window.mentionFixture
-          .searches()
+      page.evaluate(() =>
+        window.mentionFixture
+          .heldSearches()
           .some((s) => s.toLowerCase() === "mary jane"),
-        pending: window.mentionFixture.reads().pending,
-      })),
+      ),
     )
-    .toEqual({ searched: true, pending: 0 });
-  await expect(page.getByText("Searching community…")).toHaveCount(0);
+    .toBe(true);
   await input.press("Space");
   await expect(input.locator(".inline-chip")).toHaveText("@Mary Jane");
+  await page.evaluate(() => window.mentionFixture.releaseSearches());
   await input.pressSequentially("hello");
   await page.getByRole("button", { name: "Send message", exact: true }).click();
   await expect

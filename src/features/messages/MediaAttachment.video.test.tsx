@@ -391,3 +391,36 @@ it.each(["while withheld", "after recovery"])(
     expect(video.currentTime).toBe(12);
   },
 );
+
+it("keeps fallback or valid geometry when decoded video dimensions are unavailable", () => {
+  const { container } = render(
+    <MediaAttachment attachment={videoAttachment} media={media} />,
+  );
+  const video = container.querySelector("video");
+  if (!video) throw new Error("Missing video");
+  Object.defineProperty(video, "currentTime", { configurable: true, value: 1 });
+  const dimensions = (width: number, height: number) => {
+    Object.defineProperty(video, "videoWidth", {
+      configurable: true,
+      value: width,
+    });
+    Object.defineProperty(video, "videoHeight", {
+      configurable: true,
+      value: height,
+    });
+    fireEvent.loadedData(video);
+  };
+  dimensions(0, 0);
+  expect(video.style.getPropertyValue("--media-ratio")).toBe("");
+  dimensions(640, 360);
+  expect(video.style.getPropertyValue("--media-ratio")).toBe("640 / 360");
+  for (const [width, height] of [
+    [0, 0],
+    [640, 0],
+    [NaN, 360],
+    [640, Infinity],
+  ] as const) {
+    dimensions(width, height);
+    expect(video.style.getPropertyValue("--media-ratio")).toBe("640 / 360");
+  }
+});

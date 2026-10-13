@@ -156,21 +156,6 @@ exec -a "buzz-foundation" "$here/buzz-foundation.bin" "$@"
 SHIM
 chmod +x "$APP_BIN"
 
-# linuxdeploy rewrites RPATH on every dynamic ELF under usr/lib, including our
-# tools. Restore the original, hash-verified payload after its ELF processing;
-# never regenerate the manifest to bless transformed bytes.
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-RUNTIME_SOURCE="$SCRIPT_DIR/../src-tauri/resources/agent-runtime"
-RUNTIME_DEST="$LIBDIR/Buzz Foundation/agent-runtime"
-if [[ ! -f "$RUNTIME_DEST/manifest.json" || -L "$RUNTIME_DEST" ]]; then
-  echo "Error: expected runtime resource directory missing or symlinked" >&2
-  exit 1
-fi
-node "$SCRIPT_DIR/verify-runtime-bundle.mjs" "$RUNTIME_SOURCE" x86_64-unknown-linux-gnu
-cmp "$RUNTIME_SOURCE/manifest.json" "$RUNTIME_DEST/manifest.json"
-rm -rf "$RUNTIME_DEST"
-cp -a "$RUNTIME_SOURCE" "$RUNTIME_DEST"
-
 echo "==> Repacking AppImage"
 : "${APPIMAGETOOL_RUNTIME_FILE:?Set a checksum-verified AppImage type2 runtime}"
 APPIMAGE_EXTRACT_AND_RUN=1 ARCH="$(uname -m)" appimagetool \

@@ -257,6 +257,37 @@ test("a restored workspace leaves existing focus alone but fresh selections and 
   expect(tab("Harness log")).toHaveFocus();
 });
 
+test("choosing a tab with the pointer resumes its composer; the keyboard stays in the tabs", async () => {
+  const user = userEvent.setup();
+  function Harness() {
+    const [value, select] = useState("One");
+    return (
+      <PanelWorkspace
+        value={value}
+        select={select}
+        items={["One", "Two"].map((id) => ({
+          id,
+          label: id,
+          content: (
+            <>
+              <button type="button">{`${id} action`}</button>
+              <input aria-label={`${id} reply`} data-tab-focus="" />
+            </>
+          ),
+        }))}
+      />
+    );
+  }
+  render(<Harness />);
+  await user.click(tab("Two"));
+  expect(screen.getByRole("textbox", { name: "Two reply" })).toHaveFocus();
+  await user.click(tab("One"));
+  expect(screen.getByRole("textbox", { name: "One reply" })).toHaveFocus();
+  act(() => tab("One").focus());
+  await user.keyboard("{ArrowRight}{Enter}");
+  expect(tab("Two")).toHaveFocus();
+});
+
 test("Escape cancelling IME composition does not close the tab", () => {
   render(<Fixture />);
   const draft = screen.getByRole("textbox", { name: "Thread draft" });
@@ -377,4 +408,45 @@ test("a consumed native Close request cannot close another workspace", () => {
   act(() => expect(requestClose()).toBe("handled"));
   expect(screen.getAllByRole("tab", { name: "Thread" })).toHaveLength(1);
   expect(screen.getAllByRole("tab", { name: "Ada" })).toHaveLength(2);
+});
+
+test("background tab selection does not take focus from a modal", () => {
+  const view = render(
+    <>
+      <div role="dialog" aria-modal="true">
+        <input aria-label="Modal search" />
+      </div>
+      <PanelWorkspace
+        value="one"
+        select={() => {}}
+        focusOnMount={false}
+        items={["one", "two"].map((id) => ({
+          id,
+          label: id,
+          content: <p>{id} body</p>,
+        }))}
+      />
+    </>,
+  );
+  const search = screen.getByRole("textbox", { name: "Modal search" });
+  act(() => search.focus());
+  view.rerender(
+    <>
+      <div role="dialog" aria-modal="true">
+        <input aria-label="Modal search" />
+      </div>
+      <PanelWorkspace
+        value="two"
+        select={() => {}}
+        focusOnMount={false}
+        items={["one", "two"].map((id) => ({
+          id,
+          label: id,
+          content: <p>{id} body</p>,
+        }))}
+      />
+    </>,
+  );
+  expect(search).toHaveFocus();
+  expect(tab("two")).toHaveAttribute("aria-selected", "true");
 });

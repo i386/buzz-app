@@ -1,8 +1,14 @@
 // The Buzz tools as an MCP server inside the host process: answers one
-// JSON-RPC message at a time, as Claude Code sends them over its stream-json
+// JSON-RPC message at a time, as Claude sends them over its stream-json
 // pipe to an in-process (`sdk`) server. Holds no state between messages.
+import type { AgentAttention } from "../features/agents/service";
+import {
+  ATTENTION_TOOLS,
+  callAttentionTool,
+  isAttentionTool,
+} from "./attention";
 import type { BuzzClient, Context } from "./client";
-import { callTool, TOOLS } from "./tools";
+import { callTool, type Reply, TOOLS } from "./tools";
 
 type Message = Readonly<{
   id?: string | number | null;
@@ -10,11 +16,21 @@ type Message = Readonly<{
   params?: Readonly<Record<string, unknown>>;
 }>;
 
-/** Answers `input`. Without a client, tools are listed but cannot be called. */
+/** The attention tool set for one session. `offered` decides the tool list,
+ * which a session reads once, so it is fixed when the session starts; `api` is
+ * the agent's attention once a delivery has given the session a handle. */
+export type AttentionTools = Readonly<{
+  offered: boolean;
+  api?: AgentAttention;
+}>;
+
+/** Answers `input`. Without a client, tools are listed but cannot be called.
+ * Attention tools are listed only when `attention` offers them. */
 export async function respond(
   client: BuzzClient | undefined,
   context: Context,
   input: unknown,
+  attention?: AttentionTools,
 ) {
   const { id, method, params = {} } = (input ?? {}) as Message;
   // A notification needs no answer, but the pipe expects one.
@@ -31,17 +47,28 @@ export async function respond(
     case "ping":
       return result({});
     case "tools/list":
-      return result({ tools: TOOLS });
+      return result({
+        tools: attention?.offered ? [...TOOLS, ...ATTENTION_TOOLS] : TOOLS,
+      });
     case "tools/call":
       try {
-        if (!client) throw new Error("Buzz is not ready yet. Try again.");
-        const text = await callTool(
-          client,
-          context,
-          String(params.name),
-          (params.arguments ?? {}) as Record<string, unknown>,
-        );
-        return result({ content: [{ type: "text", text }] });
+        const name = String(params.name);
+        const args = (params.arguments ?? {}) as Record<string, unknown>;
+        let reply: Reply;
+        if (attention?.offered && isAttentionTool(name)) {
+          const api = attention.api;
+          if (!api) throw new Error("Buzz is not ready yet. Try again.");
+          // The owner can turn attention off while this session runs.
+          if (!api.enabled())
+            throw new Error(
+              `Attention is off for you: your owner turned it off, so these tools do nothing now.\n(classifier: ${api.classifier()})`,
+            );
+          reply = await callAttentionTool(api, name, args);
+        } else {
+          if (!client) throw new Error("Buzz is not ready yet. Try again.");
+          reply = await callTool(client, context, name, args);
+        }
+        return result({ content: content(reply) });
       } catch (error) {
         return result({
           content: [{ type: "text", text: errorText(error) }],
@@ -56,6 +83,12 @@ export async function respond(
       };
   }
 }
+
+/** A tool's answer as MCP content. */
+export const content = (reply: Reply) =>
+  typeof reply === "string"
+    ? [{ type: "text" as const, text: reply }]
+    : [{ type: "image" as const, data: reply.data, mimeType: reply.type }];
 
 export const errorText = (error: unknown) =>
   error instanceof Error ? error.message : String(error);

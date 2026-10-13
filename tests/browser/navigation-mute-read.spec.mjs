@@ -52,6 +52,7 @@ test("channel menu mute/read persist without selecting the row; failed mute rema
     "Move channel",
     "Mute",
     "Mark as Read",
+    "Copy link",
     "Retry channel permissions",
   ]);
   await expect(menu.getByRole("separator")).toHaveCount(0);
@@ -301,6 +302,7 @@ test("channel menu mute/read persist without selecting the row; failed mute rema
     "Move channel",
     "Mute",
     "Mark as Unread",
+    "Copy link",
     "Retry channel permissions",
   ]);
   await expect(menu.getByRole("separator")).toHaveCount(0);

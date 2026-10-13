@@ -14,8 +14,8 @@ import { ChannelLifecycleMenu } from "../../bundled/channels/ChannelLifecycleMen
 import type { ChannelLifecycleAction } from "../relay/channel-lifecycle-protocol";
 import { useMePlacement } from "../sessions/personal";
 import { personalGroups } from "../channel-templates/setup";
-import type { TemplateProviders } from "../channel-templates/provider";
 import type { RelayData } from "../relay/service";
+import type { Agents } from "../agents/service";
 import type { RelaySession } from "../relay/session";
 import { useChannelList, useRelayConnection } from "../relay/react";
 import type { Navigation } from "../navigation/controller";
@@ -47,6 +47,7 @@ import {
   PlusIcon,
 } from "../../shared/design-system/icons";
 import { ChannelReadMenuItem } from "../../bundled/channels/ChannelReadMenuItem";
+import { ChannelCopyLinkMenuItem } from "../../bundled/channels/ChannelCopyLinkMenuItem";
 import { useOptimisticMute } from "../../bundled/channels/useOptimisticMute";
 import { ChannelSidebarItem } from "../../bundled/channels/ChannelSidebarItem";
 import {
@@ -70,6 +71,7 @@ import { useSidebarView } from "../../bundled/channels/useSidebarView";
 import {
   sidebarSections,
   isChannelSectionKey,
+  isChannelDropSectionKey,
 } from "../../bundled/channels/sidebar-sections";
 import {
   CreateChannelDialog,
@@ -88,7 +90,8 @@ import styles from "../../bundled/channels/Channels.module.css";
 type Props = {
   relay: RelayData;
   navigator: Navigation;
-  providers: TemplateProviders;
+  /** For channel templates, which start a channel with the owner's teams. */
+  agents?: Agents | undefined;
   target: OpenTarget;
   sessionsEnabled: boolean;
   meEnabled?: boolean;
@@ -186,7 +189,7 @@ class SidebarBoundary extends Component<
 function ReadySidebar({
   relay,
   navigator,
-  providers,
+  agents,
   target,
   children,
   queries,
@@ -756,6 +759,9 @@ function ReadySidebar({
           }
         />,
       );
+    actions.push(
+      <ChannelCopyLinkMenuItem key="copy-link" channelId={channel.id} />,
+    );
     if (!surface && !channel.archived) {
       actions.push(
         <ChannelLifecycleMenu
@@ -1042,12 +1048,14 @@ function ReadySidebar({
             <ChannelSidebarDnd
               writable={placementWritable}
               onMove={(channelId, sectionKey) =>
-                assignGroup(
-                  channelId,
-                  sectionKey.startsWith("group:")
-                    ? sectionKey.slice("group:".length)
-                    : undefined,
-                )
+                sectionKey === "starred"
+                  ? setChannelStar(channelId, true)
+                  : assignGroup(
+                      channelId,
+                      sectionKey.startsWith("group:")
+                        ? sectionKey.slice("group:".length)
+                        : undefined,
+                    )
               }
               overlay={(channelId) => {
                 const channel = sidebarChannels.find(
@@ -1067,7 +1075,7 @@ function ReadySidebar({
                 <DroppableSidebarSection
                   key={section.key}
                   disabled={
-                    !placementWritable || !isChannelSectionKey(section.key)
+                    !placementWritable || !isChannelDropSectionKey(section.key)
                   }
                   sectionKey={section.key}
                   title={section.title}
@@ -1179,7 +1187,7 @@ function ReadySidebar({
                         sectionKey={section.key}
                         selectFrame={
                           channel.channelType !== "dm" &&
-                          isChannelSectionKey(section.key)
+                          isChannelDropSectionKey(section.key)
                             ? DraggableChannel
                             : undefined
                         }
@@ -1368,7 +1376,7 @@ function ReadySidebar({
           pending={pendingChannelCreation}
           finalFocus={createChannelTrigger}
           session={queries}
-          providers={providers}
+          agents={agents}
           groups={groups}
           destinations={displayedPreferences?.sections ?? []}
           {...(preferences.data?.groupSource !== "personal"

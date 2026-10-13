@@ -6,7 +6,6 @@ import { ChannelsPage } from "../../src/bundled/channels/ChannelsPage";
 import type { RelayData } from "../../src/features/relay/service";
 import type { Panels } from "../../src/features/panels/service";
 import type { PagesReader } from "../../src/features/pages/service";
-import type { TemplateProviders } from "../../src/features/channel-templates/provider";
 import type {
   PageNavigation,
   provideNavigation,
@@ -16,13 +15,11 @@ export function ChannelWorkspaceFixture({
   relay,
   panels,
   pages,
-  providers,
   host,
 }: {
   relay: RelayData;
   panels: Panels;
   pages: PagesReader;
-  providers: TemplateProviders;
   host: ReturnType<typeof provideNavigation>;
 }) {
   const state = useSyncExternalStore(
@@ -48,7 +45,6 @@ export function ChannelWorkspaceFixture({
       <div style={{ display: "flex", height: "100%", minWidth: 0 }}>
         <ChannelSidebar
           relay={relay}
-          providers={providers}
           navigator={host.navigation}
           target={state.entry.target}
           sessionsEnabled={false}
@@ -58,7 +54,6 @@ export function ChannelWorkspaceFixture({
         <div style={{ flex: 1, minWidth: 0 }}>
           <ChannelsPage
             relay={relay}
-            providers={providers}
             panels={panels}
             pages={pages}
             navigator={host.navigation}

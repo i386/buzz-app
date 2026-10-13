@@ -50,18 +50,20 @@ export function extendsName(name: string, query: string) {
  * The one item whose name is exactly `query`, for Space to complete. There is
  * none when two items have that name or any item has a longer name that
  * continues it (`Avery` waits while `Avery Chen` exists). Only items that
- * `canComplete` allows can be chosen, but every item's names can block one.
+ * `canComplete` allows can be chosen, but every item's `longer` names (by
+ * default its names) can block one.
  */
 export function exactName<T>(
   items: readonly T[],
   names: (item: T) => readonly string[],
   query: string,
   canComplete: (item: T) => boolean = () => true,
+  longer: (item: T) => readonly string[] = names,
 ): T | undefined {
   const needle = normalizeName(query);
   if (!needle) return undefined;
   if (
-    items.some((item) => names(item).some((name) => extendsName(name, needle)))
+    items.some((item) => longer(item).some((name) => extendsName(name, needle)))
   )
     return undefined;
   const exact = items.filter(

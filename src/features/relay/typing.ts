@@ -1,4 +1,4 @@
-import type { RelayEvent } from "./events";
+import type { EventData, RelayEvent } from "./events";
 import { threadReference } from "./thread-reference";
 
 const ACTIVITY_LIFETIME_MS = 8_000;
@@ -15,6 +15,9 @@ type ParticipantActivity = {
   lastMessageAt: number;
   visibleUntil: number;
   quietUntil: number;
+  // STOPGAP(agent-local-typing): delete with agents/local-typing.ts.
+  /** Driven by this app's own pulses, which end only with a local end. */
+  local?: boolean;
 };
 
 /** Session-owned activity from verified events; no event payloads or persistence. */
@@ -86,7 +89,7 @@ export function createTyping(
     record.visibleUntil = 0;
     record.quietUntil = now + POST_MESSAGE_QUIET_MS;
   }
-  function receive(event: RelayEvent, now: number) {
+  function receive(event: RelayEvent, now: number, local = false) {
     const typing = event.kind === 20002;
     if (event.pubkey === viewer || !/^[0-9a-f]{64}$/.test(event.pubkey)) return;
     const at = event.created_at * 1000;
@@ -139,10 +142,19 @@ export function createTyping(
       };
       records.set(key, record);
     }
+    // STOPGAP(agent-local-typing): an agent's progress posts would hide its
+    // typing between pulses; the local end says when the turn is over.
+    if (local) record.local = typing;
+    else if (!typing && record.local) return;
     if (typing) receiveActivity(record, at, now);
     else recordCompletion(record, at, now);
   }
-  function accept(events: readonly RelayEvent[], live = false) {
+  function accept(
+    events: readonly RelayEvent[],
+    live = false,
+    // STOPGAP(agent-local-typing)
+    local = false,
+  ) {
     if (closed) return;
     const now = Date.now();
     // Keep completion evidence until old pulses can no longer be current.
@@ -150,12 +162,12 @@ export function createTyping(
     expireSilence(now);
     for (const event of events) {
       if (event.kind === 9 || event.kind === 40002 || event.kind === 40008)
-        receive(event, now);
+        receive(event, now, local);
     }
     // Completion wins even when activity came first in the batch.
     if (live) {
       for (const event of events) {
-        if (event.kind === 20002) receive(event, now);
+        if (event.kind === 20002) receive(event, now, local);
       }
     }
     publish();
@@ -167,6 +179,15 @@ export function createTyping(
   return {
     capability: Object.freeze({
       snapshot: () => snapshot,
+      // STOPGAP(agent-local-typing): delete with agents/local-typing.ts.
+      /** Takes a pulse (20002) this app made for an agent it runs, or the
+       * end of its turn (9, as if the agent had replied), on this device only,
+       * as if it came live, until agents' pulses reach the relay. Until that
+       * end, the agent's own posts there leave it typing. */
+      local(event: EventData) {
+        if (event.kind === 20002 || event.kind === 9)
+          accept([event as RelayEvent], true, true);
+      },
       subscribe(listener: () => void) {
         if (closed) return () => {};
         listeners.add(listener);

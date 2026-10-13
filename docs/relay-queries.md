@@ -270,6 +270,24 @@ inserting isolated rows into channel history. Explicit denial revokes the owning
 channel; access loss, cache clear and disposal purge the view. There is no separate
 reader owner, subscription or persistence.
 
+An open thread can call `view.retarget(messageId, signal)` to select another
+message without reallocating its reader. The same bounded exact-read path verifies
+the candidate's signed ancestry against the already-known root; navigation hints
+never establish identity. A same-root selection preserves traversal rows/cursors
+and publishes only after its overlays are complete. A different root, unavailable
+message or read failure leaves the prior selection intact. Selection requests
+supersede each other independently of history paging and repair; cancellation,
+access loss, cache clear and disposal fence late results. All evidence remains
+inside the existing view budget and session authority.
+
+Channel thread panels opt into this retained lifetime. Same-thread links preserve
+the mounted editor, reply target and expansion state; a different verified thread
+still replaces the current view. Failed link selection keeps the existing reply and
+shows one notice in the thread's status area. A message that no longer exists has
+no retry; other failures offer Try again, which stays focused while a fresh
+navigation request runs. Other embedded/preview consumers
+retain their previous lifetime. This does not yet add main-pane tabs or dragging.
+
 ## Global message search and public previews
 
 Global message searches (`kinds: [9, 40002]`, no `#h`) keep the relay's order.
@@ -329,6 +347,26 @@ metadata may be joined. Success is the viewer in a fresh relay-signed `39002`
 roster, applied through shared discovery. That makes the channel a sidebar
 member and enables the composer, which then receives focus. An accepted but
 unconfirmed join reports that it may have taken effect and stays retryable.
+
+### Channel links
+
+A channel-only link (`buzz://channel/<id>`) shows what the reader may see about
+that channel. `channels.describe(id)` answers from local evidence and never
+reads: `found` with the name and flags, `withheld`, or `unknown`. `joined`
+comes from the viewer in the roster, so a channel restored from cache counts.
+A public channel the viewer left is `found` from its signed open metadata; that
+names it but does not restore member reads. `channels.refer(id)` demands a
+background lookup once the list is ready, until the returned release; a
+mounted link holds that demand, and the store rechecks demanded links itself
+when an answer expires or a backoff ends. The store coalesces lookups into
+exact `resolve` reads of at most 128 channels. A completed read that admits
+nothing is `withheld`: the relay hides a private channel's metadata from
+non-members, so private, deleted and invalid channels look the same. A
+`withheld` answer is kept for five minutes and stays shown while it is
+rechecked. A failed read is never `withheld`; it waits at least 30 seconds (or
+the relay's `retryAfterMs`) before another try. Clearing the cache or
+losing access forgets every answer and drops replies still in flight; mounted
+links are notified and looked up again. Composer decorations never ask.
 
 ## Ownership and reconciliation
 

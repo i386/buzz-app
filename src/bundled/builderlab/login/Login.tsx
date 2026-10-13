@@ -1,4 +1,5 @@
 import { useEffect, useSyncExternalStore } from "react";
+import { Header } from "../../../shared/design-system/ui/Header";
 import { Button } from "../../../shared/design-system/ui/Button";
 import type { OAuthSession } from "../oauth/session";
 
@@ -26,13 +27,10 @@ export function Login({
   );
   return (
     <div data-buzz-ui="" className="flex flex-col items-start gap-4">
-      <div>
-        <h2 className="text-heading text-primary">Builderlab</h2>
-        <p className="mt-2 text-body-sm text-secondary">
-          Connect your Builderlab account. Your credential stays in memory until
-          you sign out or close Buzz.
-        </p>
-      </div>
+      <Header
+        title="Builderlab"
+        subtitle="Connect your Builderlab account. Your credential stays in memory until you sign out or close Buzz."
+      />
       {!available ? (
         <p role="status" className="text-body-sm text-secondary">
           {unavailableReason}

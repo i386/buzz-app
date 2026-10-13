@@ -56,6 +56,7 @@ export function createProfileDirectory(
       const old = snapshot.get(id);
       if (
         old?.name === value.name &&
+        old?.nameIsFallback === value.nameIsFallback &&
         old?.picture === value.picture &&
         old?.about === value.about &&
         old?.nip05 === value.nip05 &&
@@ -75,17 +76,18 @@ export function createProfileDirectory(
   async function ensure(
     ids: readonly string[],
     priority: Priority = "foreground",
+    refresh = false,
   ) {
     if (closed) throw new DOMException("Session closed", "AbortError");
     const unique = [...new Set(ids)];
-    if (unique.length > 1024)
+    if (!refresh && unique.length > 1024)
       throw new Error("Profile request exceeds the directory budget");
     const signal = controller.signal;
     const waiting = new Set<Promise<void>>();
     const missing = unique.filter((id) => {
       const work = pending.get(id);
       if (work) waiting.add(work);
-      return !work && !snapshot.has(id);
+      return !work && (refresh || !snapshot.has(id));
     });
     for (let offset = 0; offset < missing.length; offset += 500) {
       const authors = missing.slice(offset, offset + 500);
@@ -139,6 +141,14 @@ export function createProfileDirectory(
     ensure,
     accept,
     clear,
+    reconnect() {
+      // Keep winning signed heads: a lagging or failed read must not roll them back.
+      const ids = [...new Set([...events.keys(), ...pending.keys()])];
+      controller.abort();
+      controller = new AbortController();
+      pending.clear();
+      return ensure(ids, "background", true);
+    },
     event: (id: string) => events.peek(id),
     stats: () => events.stats(),
     dispose() {

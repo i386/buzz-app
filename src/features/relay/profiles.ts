@@ -44,6 +44,7 @@ export function foldProfiles(
         pubkey,
         Object.freeze({
           name: name ?? pubkey.slice(0, 10),
+          ...(!name ? { nameIsFallback: true as const } : {}),
           ...agent,
           ...(picture ? { picture } : {}),
           ...(typeof body.about === "string" && body.about.trim()
@@ -60,7 +61,11 @@ export function foldProfiles(
     } catch {
       profiles.set(
         pubkey,
-        Object.freeze({ name: pubkey.slice(0, 10), ...agent }),
+        Object.freeze({
+          name: pubkey.slice(0, 10),
+          nameIsFallback: true,
+          ...agent,
+        }),
       );
     }
   }

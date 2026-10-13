@@ -145,6 +145,17 @@ test("channel usage opens a separate tab and leaves thread history usable", asyn
   await expect(
     pane.getByRole("textbox", { name: "Reply to thread" }),
   ).toHaveCount(0);
+  // A timeline detail replaces transient panels, not retained channel tools.
+  // This contract used to run through the removed Todos tab-picker path.
+  await row
+    .getByRole("button", { name: /View .* profile/ })
+    .first()
+    .click();
+  await expect(
+    page.getByRole("complementary", { name: "Profile", exact: true }),
+  ).toBeVisible();
+  await page.getByRole("tab", { name: "Usage", exact: true }).click();
+  await expect(details).toBeVisible();
 });
 
 test("disabling the Channel Usage plugin retires the tab and re-enabling does not revive it", async ({

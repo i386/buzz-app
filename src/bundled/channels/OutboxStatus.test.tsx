@@ -14,10 +14,6 @@ import {
   type OutgoingEvent,
 } from "../../features/relay/outbox";
 import { keypair, signed } from "../../features/relay/testing";
-import {
-  snapshotRecoveryKey,
-  snapshotRecoveryValue,
-} from "../../features/agents/snapshot-recovery";
 import type { RelayWriter } from "../../features/relay/transport";
 import { createRelayProfiler } from "../../features/relay/profiling";
 import { sessionLinkMessage } from "../../features/sessions/share";
@@ -133,14 +129,15 @@ it.each(["agent", "team", "session"] as const)(
           key:
             kind === "session"
               ? "session-share-link:deleted-source:dm"
-              : snapshotRecoveryKey(kind, "deleted-source"),
+              : // Shares queued by the removed snapshot dialog.
+                `snapshot-share:${kind}:deleted-source`,
           value:
             kind === "session"
               ? "1"
-              : snapshotRecoveryValue(
-                  [{ pubkey: "b".repeat(64), name: "Recipient" }],
-                  "none",
-                ),
+              : JSON.stringify({
+                  people: [{ pubkey: "b".repeat(64), name: "Recipient" }],
+                  level: "none",
+                }),
         },
       );
       await waitFor(() => expect(records[0]?.delivery).toBe("unknown"));

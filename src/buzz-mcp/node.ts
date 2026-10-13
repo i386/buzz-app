@@ -14,6 +14,9 @@ import type { BuzzClient, BuzzEvent, Memory, Template, Upload } from "./client";
 const sha256 = (data: Uint8Array | string) =>
   createHash("sha256").update(data).digest("hex");
 const now = () => Math.floor(Date.now() / 1000);
+/** The largest image an agent is shown. Claude takes 5 MiB of base64 on its
+ * strictest hosts, and base64 is 4 characters per 3 bytes. */
+const MEDIA_LIMIT = (5 * 1024 * 1024 * 3) / 4;
 
 export function nodeClient(
   options: Readonly<{
@@ -132,6 +135,48 @@ export function nodeClient(
           `Upload failed: ${response.status} ${text.slice(0, 300)}`,
         );
       return JSON.parse(text) as Upload;
+    },
+    async media(input) {
+      // Only the community's own media, so the signature goes nowhere else.
+      const prefix = `${base}/media/`;
+      const name = input.trim().startsWith(prefix)
+        ? input.trim().slice(prefix.length)
+        : input.trim();
+      if (!/^[0-9a-f]{64}(\.[a-z0-9]{1,8}|\.thumb\.jpg)?$/.test(name))
+        throw new Error("Agents fetch only their community's media");
+      const blossom = sign({
+        kind: 24242,
+        content: "Get media",
+        tags: [
+          ["t", "get"],
+          ["expiration", String(now() + 60)],
+          ["server", new URL(base).host],
+        ],
+      });
+      const response = await fetch(`${base}/media/${name}`, {
+        headers: {
+          authorization: header(blossom, "base64url"),
+          ...(options.auth ? { "x-auth-tag": options.auth } : {}),
+        },
+        redirect: "error",
+      });
+      // Read within the limit before the status, so no body is unbounded.
+      const chunks: Uint8Array[] = [];
+      let size = 0;
+      for await (const chunk of response.body ?? []) {
+        size += chunk.length;
+        if (size > MEDIA_LIMIT)
+          throw new Error("Media over 3.75 MiB cannot be shown");
+        chunks.push(chunk);
+      }
+      const bytes = Buffer.concat(chunks);
+      if (!response.ok)
+        throw new Error(
+          `Media failed: ${response.status} ${bytes.subarray(0, 300).toString()}`,
+        );
+      if (!name.endsWith(".thumb.jpg") && sha256(bytes) !== name.slice(0, 64))
+        throw new Error("Media did not match its SHA-256");
+      return bytes.toString("base64");
     },
     async read(path) {
       const full = await realpath(resolve(options.root, path));

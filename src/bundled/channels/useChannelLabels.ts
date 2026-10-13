@@ -21,12 +21,14 @@ export function useChannelLabels(
       ),
     [roster],
   );
-  const key = [
-    ...new Set(channels.flatMap((channel) => channel.participants ?? [])),
-  ]
-    .sort()
-    .slice(0, 1024)
-    .join(":");
+  const key = useMemo(
+    () =>
+      [...new Set(channels.flatMap((channel) => channel.participants ?? []))]
+        .sort()
+        .slice(0, 1024)
+        .join(":"),
+    [channels],
+  );
   const ids = useMemo(() => (key ? key.split(":") : []), [key]);
   const selection = useMemo(() => selectProfiles(queries, ids), [queries, ids]);
   const profiles = useSyncExternalStore(
@@ -37,10 +39,14 @@ export function useChannelLabels(
   // Access loss can purge loaded names or abort a cold fetch without changing
   // DM participants. Retry for missing names or changed channel membership,
   // not for message previews/renders; keep enrichment in the background.
-  const membership = roster
-    .map((channel) => channel.id)
-    .sort()
-    .join(":");
+  const membership = useMemo(
+    () =>
+      roster
+        .map((channel) => channel.id)
+        .sort()
+        .join(":"),
+    [roster],
+  );
   const missing = ids.filter((id) => !profiles.has(id)).join(":");
   useEffect(() => {
     if (membership && missing)

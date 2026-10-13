@@ -580,3 +580,34 @@ test("compact footer spacing is opt-in and resets when leaving confirmation", ()
     "default",
   );
 });
+
+test("selected tab reactivation is opt-in and distinct from value changes", async () => {
+  const user = userEvent.setup();
+  const change = vi.fn();
+  const reselect = vi.fn();
+  const props = {
+    label: "Area",
+    value: "one",
+    onValueChange: change,
+    items: [
+      { value: "one", label: "One" },
+      { value: "two", label: "Two" },
+    ],
+  };
+  const { rerender } = render(<Tabs {...props} />);
+  const one = screen.getByRole("tab", { name: "One" });
+  await user.click(one);
+  expect(change).not.toHaveBeenCalled();
+  rerender(<Tabs {...props} onReselect={reselect} />);
+  await user.click(one);
+  await user.keyboard("{Enter} ");
+  expect(reselect).toHaveBeenCalledTimes(3);
+  expect(reselect).toHaveBeenLastCalledWith("one");
+  expect(change).not.toHaveBeenCalled();
+  await user.keyboard("{ArrowRight}");
+  expect(reselect).toHaveBeenCalledTimes(3);
+  expect(change).not.toHaveBeenCalled();
+  await user.keyboard("{Enter}");
+  expect(change).toHaveBeenCalledExactlyOnceWith("two");
+  expect(reselect).toHaveBeenCalledTimes(3);
+});

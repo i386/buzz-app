@@ -563,9 +563,7 @@ export function SessionShare({
           )
             throw new Error("Add agents separately.");
           progress(`Adding ${names(key)} to the new channel…`);
-          await session.memberAdditions.add(target, key, undefined, {
-            startAgent: false,
-          });
+          await session.memberAdditions.add(target, key);
         }
       }
       if (exact.intent.audience === "everyone" && !exact.audienceKeys) {

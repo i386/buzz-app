@@ -54,20 +54,24 @@ export function ResizeHandle({
     document.documentElement.style.removeProperty("cursor");
     document.body.style.removeProperty("user-select");
   }, [move]);
-  const measure = useCallback(() => {
+  // Only aria-valuenow reads the rendered width, and it changes only when the
+  // panel is laid out differently (drag, keyboard step, reset, CSS clamp,
+  // container or window resize). Observe the panel rather than measuring on
+  // every commit: the handle re-renders with each channel-list replacement and
+  // a getBoundingClientRect there forces layout of the whole committed tree.
+  useLayoutEffect(() => {
     const panel =
       direction === 1
         ? handle.current?.previousElementSibling
         : handle.current?.parentElement;
     if (!(panel instanceof HTMLElement)) return;
-    const next = Math.round(panel.getBoundingClientRect().width);
-    setRenderedWidth((current) => (current === next ? current : next));
+    const observer = new ResizeObserver(() => {
+      const next = Math.round(panel.getBoundingClientRect().width);
+      setRenderedWidth((current) => (current === next ? current : next));
+    });
+    observer.observe(panel);
+    return () => observer.disconnect();
   }, [direction]);
-  useLayoutEffect(measure);
-  useEffect(() => {
-    window.addEventListener("resize", measure);
-    return () => window.removeEventListener("resize", measure);
-  }, [measure]);
   useEffect(() => () => finish(), [finish]);
 
   return (

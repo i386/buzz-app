@@ -247,6 +247,42 @@ describe("type and role boundaries", () => {
       h.owner.dispose();
     },
   );
+  it("reads the type from the first t tag of a labeled channel", () => {
+    const h = harness();
+    // The relay writes the type first, then labels, the creator and the
+    // creation time (NIP-CL).
+    h.setEvents([
+      h.record(39000, [
+        ["d", id],
+        ["t", "stream"],
+        ["t", "workspace"],
+        ["t", "team:core"],
+        ["P", other],
+        ["name", "fixture"],
+        ["created_at", "100"],
+      ]),
+      ...h.getEvents().slice(1),
+    ]);
+    expect(
+      lifecycleSettings(h.getEvents(), id, viewer, relayAuthor),
+    ).toMatchObject({
+      channelType: "stream",
+      canArchive: true,
+      canDelete: true,
+    });
+    h.setEvents([
+      h.record(39000, [
+        ["d", id],
+        ["t", "stream", "extra"],
+        ["t", "workspace"],
+      ]),
+      ...h.getEvents().slice(1),
+    ]);
+    expect(() =>
+      lifecycleSettings(h.getEvents(), id, viewer, relayAuthor),
+    ).toThrow("Malformed channel t state");
+    h.owner.dispose();
+  });
   it("validates the complete administrator record, not just the viewer's first match", () => {
     const h = harness();
     h.setEvents([

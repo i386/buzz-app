@@ -319,6 +319,58 @@ it.each([true])(
   },
 );
 
+it.each([false, true])(
+  "asks a mentioned agent for a model and effort, and only a mentioned one, reply=%s",
+  async (reply) => {
+    const h = setup();
+    await h.members([viewer.pubkey, honey.pubkey]);
+    const root = "f".repeat(64);
+    const post = (
+      picks: Record<string, { model?: string; effort?: string }>,
+    ) =>
+      reply
+        ? h.session.messages.reply(
+            "c",
+            root,
+            "@Honey",
+            [honey.pubkey],
+            [],
+            undefined,
+            [],
+            picks,
+          )
+        : h.session.messages.send(
+            "c",
+            "@Honey",
+            [honey.pubkey],
+            [],
+            undefined,
+            [],
+            picks,
+          );
+    post({
+      [honey.pubkey]: { model: "claude-fable-5-1[1m]", effort: "xhigh" },
+    });
+    await flush();
+    const tags = h.publish.mock.calls[0]?.[0]?.tags;
+    expect(tags).toContainEqual([
+      "model",
+      honey.pubkey,
+      "claude-fable-5-1[1m]",
+    ]);
+    expect(tags).toContainEqual(["effort", honey.pubkey, "xhigh"]);
+    expect(() => post({ [namesake.pubkey]: { effort: "high" } })).toThrow(
+      /mentioned agent/,
+    );
+    expect(() => post({ [honey.pubkey]: { effort: "High Effort" } })).toThrow(
+      /mentioned agent/,
+    );
+    expect(() => post({ [honey.pubkey]: { model: "two words" } })).toThrow(
+      /mentioned agent/,
+    );
+  },
+);
+
 it.each(mentionConformance.tags.write)(
   "conforms to the portable mention tag writing contract: $name",
   async (fixture) => {

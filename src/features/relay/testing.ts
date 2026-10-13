@@ -256,7 +256,7 @@ export function archiveRelay(
         return [];
       }),
     writer: {
-      kinds: [9001, 5],
+      kinds: [9001, 5, 30177],
       async sign(template) {
         return finalizeEvent({ ...template }, viewer.secret);
       },
@@ -268,7 +268,7 @@ export function archiveRelay(
         )
           throw removal.fail;
         published.push(event);
-        if (!removal.apply) return;
+        if (!removal.apply || event.kind === 30177) return;
         if (event.kind === 5) {
           for (const [name, value] of event.tags)
             if (name === "a" && value) deleted.add(value);

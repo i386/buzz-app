@@ -211,6 +211,30 @@ export function MenuSpecimen() {
   const [workspace, setWorkspace] = useState("1");
   return (
     <div className="component-specimen-stack">
+      <Example
+        title="Highlight selection"
+        description="Single-choice views use a persistent highlight, while checkbox choices keep checks."
+        code={
+          '<MenuRadioItem value="1" selection="highlight">All</MenuRadioItem>'
+        }
+      >
+        <MenuRoot>
+          <MenuTrigger render={<Button>Choose view</Button>} />
+          <MenuPopup>
+            <MenuGroup>
+              <MenuGroupLabel emphasis="quiet">Show</MenuGroupLabel>
+              <MenuRadioGroup value={workspace} onValueChange={setWorkspace}>
+                <MenuRadioItem value="1" selection="highlight">
+                  All
+                </MenuRadioItem>
+                <MenuRadioItem value="2" selection="highlight">
+                  Threads
+                </MenuRadioItem>
+              </MenuRadioGroup>
+            </MenuGroup>
+          </MenuPopup>
+        </MenuRoot>
+      </Example>
       <Related />
       <Example
         title="Actions"

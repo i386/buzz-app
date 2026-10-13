@@ -1,4 +1,4 @@
-import type { AgentControl, AgentView } from "./control";
+import type { LocalAgent, LocalAgents } from "./local";
 import type { AgentLibrarySnapshot, createAgentLibrary } from "./library";
 import type { ChannelList } from "../relay/contracts";
 import { relayOrigin } from "../communities/destination";
@@ -11,7 +11,7 @@ import { relayPartition } from "../relay/partition";
 
 /** Community evidence, not process readiness or permission to grant access. */
 export function sameCommunityAgents(
-  agents: readonly AgentView[],
+  agents: readonly LocalAgent[],
   scope: string,
 ) {
   const viewer = scope.slice(-64);
@@ -19,7 +19,7 @@ export function sameCommunityAgents(
   return agents.filter((agent) => {
     try {
       return (
-        agent.configured !== false &&
+        agent.owner === viewer &&
         relayPartition(relayOrigin(agent.relayUrl), viewer) === scope
       );
     } catch {
@@ -63,7 +63,7 @@ export function createAgentChoices({
 }: {
   scope: string;
   library: ReturnType<typeof createAgentLibrary>["queries"];
-  native?: Pick<AgentControl, "snapshot" | "subscribe" | "refresh"> | undefined;
+  native?: LocalAgents | undefined;
   /** Absent only on hosts without archive evidence; nothing is then hidden. */
   archives?:
     | Pick<
@@ -96,7 +96,7 @@ export function createAgentChoices({
   let cached:
     | {
         legacy: AgentLibrarySnapshot;
-        local: ReturnType<AgentControl["snapshot"]> | undefined;
+        local: ReturnType<LocalAgents["snapshot"]> | undefined;
         archive: IdentityArchiveSnapshot;
         value: AgentChoicesSnapshot;
       }
@@ -117,14 +117,13 @@ export function createAgentChoices({
       for (const row of legacy.identities)
         choices.set(row.pubkey, { ...row, managed: false });
     if (local?.status === "ready")
-      for (const row of sameCommunityAgents(local.data?.agents ?? [], scope)) {
+      for (const row of sameCommunityAgents(local.agents, scope)) {
         // Keep existing source names in serialized mentions; the shared name
         // resolver supplies native display labels independently.
         choices.set(row.pubkey, {
           pubkey: row.pubkey,
           name: row.name,
           ...choices.get(row.pubkey),
-          ...(row.picture == null ? {} : { avatar: row.picture }),
           managed: true,
           managedName: row.name,
         });
@@ -143,7 +142,9 @@ export function createAgentChoices({
         .map((agent) => ({ ...agent, name: agent.managedName ?? agent.name })),
       complete: templateSource.status === "ready" && !templateSource.error,
       pending:
-        templateSource.status === "idle" || templateSource.status === "loading",
+        templateSource === legacy
+          ? legacy.status === "idle" || legacy.status === "loading"
+          : local?.status === "loading",
       ...(templateSource.error ? { error: templateSource.error } : {}),
     };
     const value: AgentChoicesSnapshot = {
@@ -154,13 +155,12 @@ export function createAgentChoices({
           ? "error"
           : legacy.status === "loading" || local?.status === "loading"
             ? "loading"
-            : legacy.status === "idle" || local?.status === "idle"
+            : legacy.status === "idle"
               ? "idle"
               : "unavailable",
       pending:
         legacy.status === "idle" ||
         legacy.status === "loading" ||
-        local?.status === "idle" ||
         local?.status === "loading",
       complete:
         legacy.status === "ready" &&
@@ -181,6 +181,9 @@ export function createAgentChoices({
     source === "templates"
       ? !native || native.snapshot().status === "unavailable"
       : source;
+  // Booleans only toggle the legacy inventory; local agents are always chosen.
+  const usesLocal = (source: SelectionSource) =>
+    !!native && (source !== "templates" || !usesLegacy(source));
   return Object.freeze({
     snapshot,
     subscribe(listener: () => void) {
@@ -206,7 +209,6 @@ export function createAgentChoices({
       if (signal.aborted) return;
       if (includeLegacy && library.snapshot().status === "idle")
         void library.refresh();
-      if (native?.snapshot().status === "idle") void native.refresh();
       if (archive && archives?.snapshot().status === "idle")
         void archives.ensure();
     },
@@ -214,7 +216,7 @@ export function createAgentChoices({
       if (signal.aborted) return;
       await Promise.all([
         usesLegacy(source) ? library.refresh() : undefined,
-        native?.refresh(),
+        usesLocal(source) ? native?.refresh() : undefined,
         // Archive reads stay lazy; templates always need fresh evidence.
         source === "templates" || archives?.snapshot().status !== "idle"
           ? archives?.refresh()

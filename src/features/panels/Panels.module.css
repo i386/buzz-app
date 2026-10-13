@@ -233,22 +233,3 @@ html[data-keyboard-input] :is(.subviewBase, .subview) {
   min-height: 0;
   overflow: auto;
 }
-
-.addTab {
-  display: flex;
-  opacity: 0;
-  transition: opacity var(--duration-fast) var(--easing-state);
-}
-.workspace > header:is(:hover, :focus-within) .addTab {
-  opacity: 1;
-}
-@media (hover: none) {
-  .addTab {
-    opacity: 1;
-  }
-}
-@media (prefers-reduced-motion: reduce) {
-  .addTab {
-    transition: none;
-  }
-}

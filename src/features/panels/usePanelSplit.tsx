@@ -3,7 +3,11 @@ import { ResizeHandle } from "./ResizeHandle";
 import styles from "./Panels.module.css";
 
 // Each page owns its split; keep the preferred width while the dock is closed.
-export function usePanelSplit(defaultWidth?: number, min = 316) {
+export function usePanelSplit(
+  defaultWidth?: number,
+  min = 316,
+  primary?: { defaultWidth: number; maxRatio: number },
+) {
   const ref = useRef<HTMLDivElement>(null);
   const [available, setAvailable] = useState(0);
   const [preferred, setPreferred] = useState<number>();
@@ -16,12 +20,17 @@ export function usePanelSplit(defaultWidth?: number, min = 316) {
     observer.observe(element);
     return () => observer.disconnect();
   }, []);
-  const max = Math.max(min, available - 320);
-  const clamp = (width: number) => Math.min(max, Math.max(min, width));
-  const width = clamp(preferred ?? defaultWidth ?? available / 2.1);
+  const minimum = Math.max(min, available * (1 - (primary?.maxRatio ?? 1)));
+  const max = Math.max(minimum, available - 320);
+  const clamp = (width: number) => Math.min(max, Math.max(minimum, width));
+  const width = clamp(
+    preferred ??
+      defaultWidth ??
+      (primary ? available - primary.defaultWidth : available / 2.1),
+  );
   return {
     ref,
-    style: (preferred === undefined
+    style: (preferred === undefined && primary === undefined
       ? {}
       : {
           "--secondary-panel-width": `${width}px`,
@@ -31,7 +40,7 @@ export function usePanelSplit(defaultWidth?: number, min = 316) {
         label="Resize main and secondary panels"
         direction={-1}
         width={width}
-        min={min}
+        min={minimum}
         max={max}
         setWidth={(next) => setPreferred(clamp(next))}
         reset={() => setPreferred(undefined)}

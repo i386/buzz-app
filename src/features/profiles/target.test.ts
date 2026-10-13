@@ -1,6 +1,8 @@
 import { expect, it } from "vitest";
 import {
   profileAgentHint,
+  profileActivityViewTarget,
+  profileActivityViewKey,
   profileKey,
   profilePanelKey,
   profileTarget,
@@ -45,4 +47,22 @@ it("keeps agent appearance in an exact app-local target without changing public 
     expect(profilePanelKey(invalid)).toBeUndefined();
     expect(profileAgentHint(invalid)).toBe(false);
   }
+});
+
+it("recognizes only the exact local profile Activity destination", () => {
+  const key = "ab".repeat(32);
+  const target = profileActivityViewTarget(key);
+  expect(profileActivityViewTarget(key.toUpperCase())).toBe(target);
+  expect(profileActivityViewKey(target ?? "")).toBe(key);
+  expect(profileKey(target ?? "")).toBeUndefined();
+  for (const invalid of ["", "not-a-key", "g".repeat(64)])
+    expect(profileActivityViewTarget(invalid)).toBeUndefined();
+  for (const invalid of [
+    `${target}&owner=true`,
+    `${target}#activity`,
+    `${target}&agent=${key}`,
+    `https://example.com?agent=${key}&tab=activity`,
+    `buzz:profile?agent=${key}&tab=info`,
+  ])
+    expect(profileActivityViewKey(invalid)).toBeUndefined();
 });

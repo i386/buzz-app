@@ -81,6 +81,7 @@ test("archive confirmation returns focus on cancel and retains the conversation 
       "Move channel",
       "Mute",
       "Mark as Unread",
+      "Copy link",
     ]);
     await expect(menu.getByRole("menuitemradio")).toHaveCount(0);
   } finally {
@@ -94,6 +95,7 @@ test("archive confirmation returns focus on cancel and retains the conversation 
     "Move channel",
     "Mute",
     "Mark as Unread",
+    "Copy link",
     "Archive channel",
     "Delete channel",
   ]);

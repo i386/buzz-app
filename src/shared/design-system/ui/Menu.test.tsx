@@ -2,6 +2,7 @@
 import "@testing-library/jest-dom/vitest";
 import { afterEach, expect, test, vi } from "vitest";
 import {
+  act,
   cleanup,
   fireEvent,
   render,
@@ -15,6 +16,9 @@ import { ChoiceRow } from "./ChoiceRow";
 import {
   ContextMenuRoot,
   ContextMenuTrigger,
+  MenuSubmenu,
+  MenuSubmenuTrigger,
+  MenuSubmenuPopup,
   MenuRoot,
   MenuTrigger,
   MenuPopup,
@@ -210,4 +214,90 @@ test("rich choices retain their names and selected state while disabled choices 
   await user.click(unavailable);
   expect(change).not.toHaveBeenCalled();
   expect(unavailable).toHaveAttribute("aria-disabled", "true");
+});
+
+test("keyboard-opened menus ignore a stationary pointer and open submenus immediately on movement", async () => {
+  const user = userEvent.setup();
+  render(
+    <MenuRoot>
+      <MenuTrigger>Actions</MenuTrigger>
+      <MenuPopup>
+        <MenuSubmenu>
+          <MenuSubmenuTrigger>Sort</MenuSubmenuTrigger>
+          <MenuSubmenuPopup>
+            <MenuItem>Recent</MenuItem>
+          </MenuSubmenuPopup>
+        </MenuSubmenu>
+      </MenuPopup>
+    </MenuRoot>,
+  );
+  screen.getByRole("button", { name: "Actions" }).focus();
+  await user.keyboard("{ArrowDown}");
+  const trigger = await screen.findByRole("menuitem", { name: "Sort" });
+  vi.useFakeTimers();
+  try {
+    fireEvent.mouseEnter(trigger);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    expect(trigger).toHaveAttribute("aria-expanded", "false");
+    fireEvent.mouseMove(trigger);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    expect(trigger).toHaveAttribute("aria-expanded", "true");
+    expect(screen.getByRole("menuitem", { name: "Recent" })).toBeVisible();
+  } finally {
+    cleanup();
+    vi.useRealTimers();
+  }
+});
+
+test("highlight radio choices keep single-selection semantics without a check icon", async () => {
+  const user = userEvent.setup();
+  const change = vi.fn();
+  function ViewMenu() {
+    const [value, setValue] = useState("all");
+    return (
+      <MenuRoot>
+        <MenuTrigger render={<Button>Views</Button>} />
+        <MenuPopup>
+          <MenuRadioGroup
+            value={value}
+            onValueChange={(next) => {
+              setValue(next);
+              change(next);
+            }}
+          >
+            <MenuRadioItem
+              value="all"
+              selection="highlight"
+              closeOnClick={false}
+            >
+              All
+            </MenuRadioItem>
+            <MenuRadioItem
+              value="threads"
+              selection="highlight"
+              closeOnClick={false}
+            >
+              Threads
+            </MenuRadioItem>
+          </MenuRadioGroup>
+        </MenuPopup>
+      </MenuRoot>
+    );
+  }
+  render(<ViewMenu />);
+  await user.click(screen.getByRole("button", { name: "Views" }));
+  const all = await screen.findByRole("menuitemradio", { name: "All" });
+  const threads = screen.getByRole("menuitemradio", { name: "Threads" });
+  expect(all).toBeChecked();
+  expect(all).toHaveAttribute("data-selection", "highlight");
+  expect(all.querySelector("svg")).toBeNull();
+  expect(threads.querySelector("svg")).toBeNull();
+  await user.click(threads);
+  expect(threads).toBeChecked();
+  expect(all).not.toBeChecked();
+  expect(change).toHaveBeenLastCalledWith("threads");
 });

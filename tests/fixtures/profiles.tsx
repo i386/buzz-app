@@ -1,4 +1,3 @@
-import { controlFixture } from "../../src/features/agents/control-testing";
 import { schnorr } from "@noble/curves/secp256k1.js";
 import { bytesToHex } from "nostr-tools/utils";
 // Real ChannelsPage, thread reader, shared directory, panel registry and plugin lifecycle.
@@ -14,11 +13,10 @@ import {
   type PanelProps,
 } from "../../src/features/panels/service";
 import { PagesService } from "../../src/features/pages/service";
-import { TemplateProvidersService } from "../../src/features/channel-templates/provider";
 import { ChannelWorkspaceFixture } from "./channel-workspace";
 import { createRelaySession } from "../../src/features/relay/session";
-import { createAgentControl } from "../../src/features/agents/control";
-import { Agents2Service } from "../../src/features/agents2/service";
+import { localAgentsFixture } from "../../src/features/agents/local-testing";
+import { AgentsService } from "../../src/features/agents/service";
 import { provideNavigation } from "../../src/features/navigation/service";
 import type {
   RelayData,
@@ -42,15 +40,9 @@ const viewer = keypair(),
   mic = keypair(),
   pinky = keypair(),
   missing = keypair();
-const instanceProbe = new URLSearchParams(location.search).has(
-  "agent-instances",
-);
-const fixtureOrigin = instanceProbe
-  ? "https://buzz.block.builderlab.xyz"
-  : "https://relay.example.test";
-const archivedProbe = new URLSearchParams(location.search).has("archived");
-const actionsProbe = new URLSearchParams(location.search).has("agent-actions");
-const logProbe = new URLSearchParams(location.search).has("harness-log");
+const fixtureOrigin = "https://relay.example.test";
+// Pinky is one of this machine's own agents in this community.
+const localAgentProbe = new URLSearchParams(location.search).has("local-agent");
 const memberMessageProbe = new URLSearchParams(location.search).has(
   "member-message",
 );
@@ -87,7 +79,6 @@ const report = {
   profileReads: [] as string[][],
   media: [] as [string, "small" | undefined][],
   publications: 0,
-  memoryReads: [] as string[],
 };
 let failMissing = true;
 let data = [
@@ -113,193 +104,161 @@ async function attestAgentProfile() {
   const ownerSignature = bytesToHex(
     schnorr.sign(new Uint8Array(digest), viewer.secret),
   );
-  const micDigest = await crypto.subtle.digest(
-    "SHA-256",
-    new TextEncoder().encode(`nostr:agent-auth:${mic.pubkey}:`),
-  );
-  const micSignature = bytesToHex(
-    schnorr.sign(new Uint8Array(micDigest), viewer.secret),
-  );
   data = data.map((head) =>
-    head.pubkey === mic.pubkey && logProbe
-      ? signed(mic, {
+    head.pubkey === pinky.pubkey
+      ? signed(pinky, {
           kind: 0,
           content: head.content,
-          tags: [["auth", viewer.pubkey, "", micSignature]],
+          tags: [["auth", viewer.pubkey, "", ownerSignature]],
         })
-      : head.pubkey === pinky.pubkey
-        ? signed(pinky, {
-            kind: 0,
-            content: head.content,
-            tags: [["auth", viewer.pubkey, "", ownerSignature]],
-          })
-        : head,
+      : head,
   );
 }
 function session() {
-  return createRelaySession({
-    viewer: viewer.pubkey,
-    ...(memberMessageProbe
-      ? {
-          openDirectMessage: async (keys: readonly string[]) => {
-            dmOpens.push([...keys]);
-            dmOpened = true;
-            return "member-dm";
-          },
-          writer: {
-            kinds: [9],
-            sign: async (template: Parameters<typeof signed>[1]) =>
-              signed(viewer, template),
-            publish: async () => {
-              report.publications++;
+  return createRelaySession(
+    {
+      viewer: viewer.pubkey,
+      ...(localAgentProbe ? { scope: fixtureOrigin } : {}),
+      ...(memberMessageProbe
+        ? {
+            openDirectMessage: async (keys: readonly string[]) => {
+              dmOpens.push([...keys]);
+              dmOpened = true;
+              return "member-dm";
             },
-          },
-        }
-      : {}),
-    ...(logProbe ? { authorizeAgentLog: async () => "fixture-proof" } : {}),
-    relayAuthor: authority.pubkey,
-    archiveAuthority: authority.pubkey,
-    subscribe(callbacks) {
-      callbacks.state({ status: "connected", routes: [] });
-      return { update() {}, retry() {}, dispose() {} };
-    },
-    async readAgentMemories(agent) {
-      report.memoryReads.push(agent);
-      return {
-        partial: false,
-        entries: [
-          {
-            slug: "core",
-            body:
-              "<script>not executable</script>\n" +
-              "long-memory-text".repeat(60),
-            eventId: "a".repeat(64),
-            createdAt: 1,
-          },
-        ],
-      };
-    },
-    media: (url, size) => {
-      report.media.push([url, size]);
-      return url === picture
-        ? pictureFixture
-        : url === pinkyPicture
-          ? pinkyPictureFixture
-          : url;
-    },
-    async query(filters) {
-      return filters.flatMap((filter) => {
-        if (dmOpened && filter["#d"]?.includes("member-dm"))
-          return dmEvents().filter((event) =>
-            filter.kinds?.includes(event.kind),
-          );
-        if (filter.kinds?.includes(9) && filter["#h"]?.includes("member-dm"))
-          return [
-            bounds(authority, "member-dm", "head", {
-              has_more: false,
-              next_cursor: null,
-            }),
-          ];
-        if (filter.kinds?.includes(13535))
-          return [
-            signed(authority, {
-              kind: 13535,
-              content: "",
-              tags: [["-"], ...(archivedProbe ? [["p", pinky.pubkey]] : [])],
-            }),
-          ];
-        if (filter.kinds?.includes(39002))
-          return [
-            roster(authority, "one", [viewer.pubkey, mic.pubkey, pinky.pubkey]),
-            roster(authority, "two", [viewer.pubkey]),
-          ];
-        if (filter.kinds?.includes(39000))
-          return [
-            signed(authority, {
-              kind: 39000,
-              content: JSON.stringify({ name: "One" }),
-              tags: [
-                ["d", "one"],
-                ["name", "One"],
-                ["t", "stream"],
-              ],
-            }),
-            signed(authority, {
-              kind: 39000,
-              content: JSON.stringify({ name: "Two" }),
-              tags: [
-                ["d", "two"],
-                ["name", "Two"],
-                ["t", "stream"],
-              ],
-            }),
-          ];
-        if (
-          filter.kinds?.includes(10100) &&
-          filter.authors?.includes(pinky.pubkey)
-        )
-          return [
-            signed(pinky, {
-              kind: 10100,
-              content: JSON.stringify({
-                agent_type: "codex-acp",
-                capabilities: ["code", "review"],
+            writer: {
+              kinds: [9],
+              sign: async (template: Parameters<typeof signed>[1]) =>
+                signed(viewer, template),
+              publish: async () => {
+                report.publications++;
+              },
+            },
+          }
+        : {}),
+      relayAuthor: authority.pubkey,
+      subscribe(callbacks) {
+        callbacks.state({ status: "connected", routes: [] });
+        return { update() {}, retry() {}, dispose() {} };
+      },
+      media: (url, size) => {
+        report.media.push([url, size]);
+        return url === picture
+          ? pictureFixture
+          : url === pinkyPicture
+            ? pinkyPictureFixture
+            : url;
+      },
+      async query(filters) {
+        return filters.flatMap((filter) => {
+          if (dmOpened && filter["#d"]?.includes("member-dm"))
+            return dmEvents().filter((event) =>
+              filter.kinds?.includes(event.kind),
+            );
+          if (filter.kinds?.includes(9) && filter["#h"]?.includes("member-dm"))
+            return [
+              bounds(authority, "member-dm", "head", {
+                has_more: false,
+                next_cursor: null,
               }),
-              tags: [],
-            }),
-          ];
-        if (filter.kinds?.includes(30315))
-          return filter.authors?.includes(mic.pubkey)
-            ? [
-                signed(mic, {
-                  kind: 30315,
-                  content: "In a meeting",
-                  tags: [
-                    ["d", "general"],
-                    ["emoji", "📅"],
-                  ],
-                }),
-              ]
-            : [];
-        if (filter.kinds?.includes(0)) {
-          report.profileReads.push([...(filter.authors ?? [])]);
-          if (
-            failMissing &&
-            filter.authors?.length === 1 &&
-            filter.authors[0] === missing.pubkey
-          )
-            throw new Error("Fixture profile failure");
-          return data.filter((event) => filter.authors?.includes(event.pubkey));
-        }
-        if (filter.ids)
-          return [root, unknown, reply].filter((event) =>
-            filter.ids?.includes(event.id),
-          );
-        if (filter.depth_limit) return [reply];
-        if (filter.kinds?.includes(9))
-          return filter["#h"]?.includes("two")
-            ? [
-                bounds(authority, "two", "head", {
-                  has_more: false,
-                  next_cursor: null,
-                }),
-              ]
-            : [
-                root,
-                unknown,
-                summary(authority, "one", root.id, {
-                  reply_count: 1,
-                  participants: [viewer.pubkey],
-                }),
-                bounds(authority, "one", "head", {
-                  has_more: false,
-                  next_cursor: null,
-                }),
-              ];
-        return [];
-      });
+            ];
+          if (filter.kinds?.includes(39002))
+            return [
+              roster(authority, "one", [
+                viewer.pubkey,
+                mic.pubkey,
+                pinky.pubkey,
+              ]),
+              roster(authority, "two", [viewer.pubkey]),
+            ];
+          if (filter.kinds?.includes(39000))
+            return [
+              signed(authority, {
+                kind: 39000,
+                content: JSON.stringify({ name: "One" }),
+                tags: [
+                  ["d", "one"],
+                  ["name", "One"],
+                  ["t", "stream"],
+                ],
+              }),
+              signed(authority, {
+                kind: 39000,
+                content: JSON.stringify({ name: "Two" }),
+                tags: [
+                  ["d", "two"],
+                  ["name", "Two"],
+                  ["t", "stream"],
+                ],
+              }),
+            ];
+          if (filter.kinds?.includes(30315))
+            return filter.authors?.includes(mic.pubkey)
+              ? [
+                  signed(mic, {
+                    kind: 30315,
+                    content: "In a meeting",
+                    tags: [
+                      ["d", "general"],
+                      ["emoji", "📅"],
+                    ],
+                  }),
+                ]
+              : [];
+          if (filter.kinds?.includes(0)) {
+            report.profileReads.push([...(filter.authors ?? [])]);
+            if (
+              failMissing &&
+              filter.authors?.length === 1 &&
+              filter.authors[0] === missing.pubkey
+            )
+              throw new Error("Fixture profile failure");
+            return data.filter((event) =>
+              filter.authors?.includes(event.pubkey),
+            );
+          }
+          if (filter.ids)
+            return [root, unknown, reply].filter((event) =>
+              filter.ids?.includes(event.id),
+            );
+          if (filter.depth_limit) return [reply];
+          if (filter.kinds?.includes(9))
+            return filter["#h"]?.includes("two")
+              ? [
+                  bounds(authority, "two", "head", {
+                    has_more: false,
+                    next_cursor: null,
+                  }),
+                ]
+              : [
+                  root,
+                  unknown,
+                  summary(authority, "one", root.id, {
+                    reply_count: 1,
+                    participants: [viewer.pubkey],
+                  }),
+                  bounds(authority, "one", "head", {
+                    has_more: false,
+                    next_cursor: null,
+                  }),
+                ];
+          return [];
+        });
+      },
     },
-  });
+    localAgentProbe
+      ? {
+          agentChoices: localAgentsFixture([
+            {
+              pubkey: pinky.pubkey,
+              name: "Pinky",
+              relayUrl: fixtureOrigin,
+              owner: viewer.pubkey,
+            },
+          ]),
+        }
+      : {},
+  );
 }
 let owner = session();
 let snapshot: RelaySnapshot = {
@@ -325,52 +284,6 @@ const relay: RelayData = {
 const context = new Context();
 context.provide("relay", relay);
 const navigationHost = provideNavigation(context, undefined);
-const native = controlFixture();
-native.agent.pubkey = mic.pubkey;
-if (logProbe)
-  native.host.readLog = async ({ id, pubkey, relayUrl, authorize }) => {
-    if (
-      id !== native.agent.id ||
-      pubkey !== mic.pubkey ||
-      relayUrl !== native.agent.relayUrl ||
-      (await authorize({ id, pubkey, relayUrl }, "fixture-nonce")) !==
-        "fixture-proof"
-    )
-      throw new Error("Unauthorized fixture log");
-    return "fixture harness output\n";
-  };
-native.agent.status = "stopped";
-native.agent.enabled = false;
-let releaseLaunch: (() => void) | undefined;
-const commands: string[] = [];
-const action = native.host.action;
-native.host.action = async (id, command) => {
-  commands.push(command);
-  if (command === "start" || command === "restart")
-    await new Promise<void>((resolve) => {
-      releaseLaunch = resolve;
-    });
-  return action(id, command);
-};
-if (instanceProbe) {
-  Object.assign(native.agent, {
-    pubkey: pinky.pubkey,
-    relayUrl: "wss://buzz.block.builderlab.xyz/",
-    name: "First instance",
-    workspace: "/fixture/first",
-  });
-  native.data.agents.push({
-    ...structuredClone(native.agent),
-    id: "second",
-    name: "Second instance",
-    workspace: "/fixture/second",
-  });
-}
-const agentControl = createAgentControl(
-  actionsProbe || instanceProbe || logProbe ? native.host : null,
-);
-context.provide("agentControl", agentControl);
-context.effect(() => () => agentControl.dispose());
 const contexts: PanelContext[] = [];
 function ContextProbe({ context }: PanelProps) {
   useLayoutEffect(() => {
@@ -404,26 +317,13 @@ const manager = createPluginManager(context, {
     : bundledPlugins.filter(({ manifest }) => manifest.id === "buzz.profiles"),
 });
 const panels = new PanelsService(context);
-// Profiles reads Agents2 to choose agent tabs; this fixture has no Agents2 agents.
-new Agents2Service(context, relay, undefined);
+// Profiles reads Agents to choose agent tabs; this fixture has no agents.
+new AgentsService(context, relay, undefined);
 const pages = new PagesService(context);
-const providers = new TemplateProvidersService(context);
 Object.assign(window, {
   profilesFixture: {
     report,
     navigation: context.navigation,
-    async deleteSecond() {
-      native.data.agents = native.data.agents.filter(
-        (agent) => agent.id !== "second",
-      );
-      await agentControl.refresh();
-    },
-    commands: () => [...commands],
-    launchPending: () => !!releaseLaunch,
-    finishLaunch: () => {
-      releaseLaunch?.();
-      releaseLaunch = undefined;
-    },
     contexts,
     dmOpens,
     targets: {
@@ -484,7 +384,6 @@ function Fixture() {
           relay={relay}
           panels={panels}
           pages={pages}
-          providers={providers}
         />
       </div>
     </>

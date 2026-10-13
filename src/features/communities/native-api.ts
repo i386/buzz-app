@@ -224,18 +224,6 @@ export async function nativeCommunityRequest(
       throw new Error("Profile publication was not confirmed");
     return result;
   }
-  if (route === "authorize-agent") {
-    // Native signs only the key it generated for the pending create request.
-    const input = body as { pubkey?: unknown; owner?: unknown } | undefined;
-    if (typeof input?.pubkey !== "string" || typeof input.owner !== "string")
-      throw new Error("Invalid agent owner authorization");
-    const auth = await invoke<string[]>("agent_control_create_authorize", {
-      destination: community,
-      owner: input.owner,
-      pubkey: input.pubkey,
-    });
-    return { auth };
-  }
   if (route === "member") {
     // The relay decides each change; only its allowed refusals come back verbatim.
     const event = await nativeRelaySigner(community).signEvent(

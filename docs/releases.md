@@ -166,7 +166,7 @@ Scheduled runs and dispatches without this switch build and publish all three
 platforms. A `promote_version` recovery run skips all platform builds and only
 updates the macOS feed. Candidate-only runs remain artifact-only and can run from
 a feature branch, without signing credentials or publication. They use the same
-preview version, source commit, Buzz/Goose pins and six-tool manifest; they never
+preview version, source commit and repository toolchain pins; they never
 use legacy Buzz's sidecars, updater feed, application identifier, or signing
 secrets. The workflow records
 `SOURCE_COMMIT` and checksums over final installer bytes. Download the
@@ -178,13 +178,12 @@ Windows uses the repository's Rust, Node and pnpm pins on the hosted MSVC runner
 because Hermit does not run there. NSIS retains Tauri's current-user install and
 WebView2 download-bootstrapper defaults (network needed if WebView2 is absent).
 The job silently installs into a disposable runner directory and verifies the
-installed runtime manifest and each tool's hash, without launching the app.
+installed app executable, without launching the app.
 
 Linux reuses old Buzz's Ubuntu 24.04 recipe and guarded Wayland/GStreamer AppImage
 repair from `block/buzz` tag `desktop-v0.5.25`. Repacking tools and the type2 runtime
-are checksum-pinned. Resource binaries must retain their manifest hashes; the
-repair restores the verified original tools after linuxdeploy rewrites ELF RPATHs,
-then the workflow verifies both extracted package payloads after repacking.
+are checksum-pinned. The workflow verifies the app executable in the extracted deb
+and the app executable and launch shim in the extracted AppImage after repacking.
 Compatibility guards fail rather than silently omitting a fix.
 AppImage still relies on host desktop/media libraries; this is not a promise of
 universal distro compatibility. Neither candidate job writes shared build caches.

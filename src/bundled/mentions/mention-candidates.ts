@@ -7,18 +7,16 @@ import {
   mentionAdmission,
 } from "../../features/messages/mention-admission";
 
-/** Managed agents offered outside a stream or forum when the viewer can add members. */
+/** The viewer's agents offered outside a stream or forum when the viewer can add members. */
 function availableMentionAgents(
   channel: ChannelSummary | undefined,
-  agents: readonly { pubkey: string; name: string; managed?: boolean }[],
+  agents: readonly { pubkey: string; name: string }[],
   canInvite: boolean | undefined,
 ) {
   return channel?.members &&
     (channel.channelType === "stream" || channel.channelType === "forum") &&
     canInvite
-    ? agents.filter(
-        (agent) => agent.managed && !channel.members?.includes(agent.pubkey),
-      )
+    ? agents.filter((agent) => !channel.members?.includes(agent.pubkey))
     : [];
 }
 

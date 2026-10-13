@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+import "../../../tests/sonner-dom";
 import { afterEach, expect, it, vi } from "vitest";
 import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";

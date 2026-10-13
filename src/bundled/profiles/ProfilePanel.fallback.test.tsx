@@ -6,8 +6,7 @@ import { act, cleanup, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { StrictMode } from "react";
 import { afterEach, expect, it, vi } from "vitest";
-import { createAgentControl } from "../../features/agents/control";
-import { controlFixture } from "../../features/agents/control-testing";
+import { localAgentsFixture } from "../../features/agents/local-testing";
 import { bindNames } from "../../features/identity-names/service";
 import { createAgentDirectory } from "../../features/identity-names/testing";
 import { profileTarget } from "../../features/profiles/target";
@@ -23,12 +22,14 @@ afterEach(cleanup);
 function fixture(configuredNames = false) {
   const person = keypair();
   const viewer = keypair().pubkey;
-  const local = controlFixture();
-  local.agent.pubkey = person.pubkey;
-  local.agent.status = "stopped";
-  local.agent.enabled = false;
-  local.agent.runningRevision = null;
-  const control = createAgentControl(local.host);
+  const agent = {
+    pubkey: person.pubkey,
+    name: "Fixture agent",
+    relayUrl: "wss://relay.example.test",
+    owner: viewer,
+  };
+  // Agents lists this machine's agents once it loads.
+  const control = localAgentsFixture(configuredNames ? [agent] : []);
   const provider = createAgentDirectory(control);
   const query = vi.fn<ReadTransport["query"]>(async () => []);
   const owner = createRelaySession(
@@ -69,9 +70,12 @@ function fixture(configuredNames = false) {
     clearCache: async () => {},
   };
   return {
-    local,
+    agent,
     person,
     control,
+    /** Agents lists the person as one of this machine's agents. */
+    known: (relayUrl = agent.relayUrl) =>
+      act(() => control.set({ agents: [{ ...agent, relayUrl }] })),
     query,
     relay,
     session: owner.session,
@@ -87,7 +91,6 @@ function fixture(configuredNames = false) {
     dispose() {
       cleanup();
       owner.dispose();
-      control.dispose();
     },
   };
 }
@@ -105,7 +108,7 @@ it("identifies unnamed profiles by public key and scopes shared agent hints to t
       screen.getByRole("img", { name: `${label} avatar` }),
     ).toHaveAttribute("data-avatar-shape", "circle");
 
-    await act(() => f.control.refresh());
+    f.known();
     expect(
       screen.getByRole("heading", { name: "Unknown agent" }),
     ).toBeInTheDocument();
@@ -126,8 +129,7 @@ it("identifies unnamed profiles by public key and scopes shared agent hints to t
 
     view.rerender(f.panel());
     await screen.findByRole("heading", { name: "Unknown agent" });
-    f.local.agent.relayUrl = "wss://other.example.test";
-    await act(() => f.control.refresh());
+    f.known("wss://other.example.test");
     expect(screen.getByRole("heading", { name: label })).toBeInTheDocument();
   } finally {
     f.dispose();
@@ -137,7 +139,7 @@ it("identifies unnamed profiles by public key and scopes shared agent hints to t
 it("keeps the known-agent fallback on profile failure and replaces it with relay metadata on retry", async () => {
   const f = fixture();
   try {
-    await f.control.refresh();
+    f.known();
     f.query.mockImplementation(async (filters) => {
       if (filters.some((filter) => filter.kinds?.includes(0)))
         throw new Error("Profile unavailable");
@@ -184,13 +186,10 @@ it("keeps an agent-avatar hint without granting ownership or native controls", a
   const f = fixture();
   const name = "Unknown agent";
   try {
-    f.local.data.agents = [];
-    await f.control.refresh();
     const show = (hint: boolean) => (
       <StrictMode>
         <ProfilePanel
           relay={f.relay}
-          control={f.control}
           target={profileTarget(f.person.pubkey, { agent: hint }) ?? ""}
           close={() => {}}
         />
@@ -206,9 +205,6 @@ it("keeps an agent-avatar hint without granting ownership or native controls", a
         .getByRole("img", { name: `${name} avatar` })
         .querySelector("[data-avatar-shape]"),
     ).toHaveAttribute("data-avatar-shape", "squircle");
-    expect(
-      await screen.findByText("Not managed on this device."),
-    ).toBeInTheDocument();
     expect(
       screen.queryByRole("tab", { name: "Runtime" }),
     ).not.toBeInTheDocument();
@@ -230,9 +226,6 @@ it("keeps an agent-avatar hint without granting ownership or native controls", a
       }),
     ).toBeInTheDocument();
     expect(
-      screen.queryByText("Not managed on this device."),
-    ).not.toBeInTheDocument();
-    expect(
       screen.getByRole("img", {
         name: `${formatPublicKey(f.person.pubkey)} avatar`,
       }),
@@ -245,8 +238,6 @@ it("keeps an agent-avatar hint without granting ownership or native controls", a
 it("loads public agent names, avatars and bios without a local agent", async () => {
   const f = fixture();
   try {
-    f.local.data.agents = [];
-    await f.control.refresh();
     const publicProfile = profile(f.person, {
       name: "Remote agent",
       picture: "https://relay.example.test/remote.png",
@@ -282,7 +273,7 @@ it("preserves the configured name of a stopped local agent without a relay profi
     await screen.findByText(
       "No profile metadata is available in this community.",
     );
-    await screen.findByRole("heading", { name: f.local.agent.name });
+    await screen.findByRole("heading", { name: f.agent.name });
   } finally {
     f.dispose();
   }

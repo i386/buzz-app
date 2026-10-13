@@ -2,7 +2,11 @@ import { expect, it, vi } from "vitest";
 import { selectProfiles } from "./profile-selection";
 import { foldProfiles } from "./profiles";
 import { createProfileDirectory } from "./profile-directory";
-import { createRelayReader } from "./reader";
+import {
+  createRelayReader,
+  type RelayReader,
+  type ReadOptions,
+} from "./reader";
 import { keypair, profile, scriptedTransport, signed } from "./testing";
 const user = keypair();
 it("projects about safely and publishes an about-only replacement/removal", () => {
@@ -210,5 +214,73 @@ it("retains safe inline profile pictures through parsing and media routing", asy
     expect(parsed?.picture).toBe(safe ? picture : undefined);
     if (parsed?.picture)
       expect(mediaUrl(parsed.picture, undefined, undefined)).toBe(picture);
+  }
+});
+
+it("refreshes retained profiles in the background without rolling back signed heads", async () => {
+  const old = profile(user, { name: "GLM" }, 1);
+  const renamed = profile(user, { name: "Luna" }, 2);
+  const read = vi.fn(async () => [renamed]);
+  const directory = createProfileDirectory({ read });
+  try {
+    directory.accept([old]);
+    await directory.reconnect();
+    expect(read).toHaveBeenCalledWith(
+      [{ kinds: [0], authors: [user.pubkey], limit: 500 }],
+      expect.objectContaining({ priority: "background" }),
+    );
+    expect(directory.queries.snapshot().get(user.pubkey)?.name).toBe("Luna");
+    read.mockResolvedValueOnce([old]);
+    await directory.reconnect();
+    expect(directory.event(user.pubkey)).toBe(renamed);
+    expect(directory.queries.snapshot().get(user.pubkey)?.name).toBe("Luna");
+    read.mockRejectedValueOnce(new Error("offline"));
+    await expect(directory.reconnect()).rejects.toThrow("offline");
+    expect(directory.event(user.pubkey)).toBe(renamed);
+    await directory.reconnect();
+    expect(read).toHaveBeenCalledTimes(4);
+  } finally {
+    directory.dispose();
+  }
+});
+
+it("retires pending profile reads before reconnect and fences cache clear/disposal", async () => {
+  const old = profile(user, { name: "GLM" }, 1);
+  const renamed = profile(user, { name: "Luna" }, 2);
+  let resolve!: (events: (typeof old)[]) => void;
+  const read = vi.fn(
+    (_filters: Parameters<RelayReader["read"]>[0], _options?: ReadOptions) =>
+      new Promise<(typeof old)[]>((done) => {
+        resolve = done;
+      }),
+  );
+  const directory = createProfileDirectory({ read });
+  const pending = directory.ensure([user.pubkey]);
+  const finishOld = resolve;
+  try {
+    directory.accept([old]);
+    const refreshed = directory.reconnect();
+    expect(read).toHaveBeenCalledTimes(2);
+    expect(read.mock.calls[0]?.[1]?.signal?.aborted).toBe(true);
+    resolve([renamed]);
+    await refreshed;
+    finishOld([old]);
+    await pending;
+    expect(directory.event(user.pubkey)).toBe(renamed);
+
+    const cleared = directory.reconnect();
+    directory.clear();
+    resolve([renamed]);
+    await cleared;
+    expect(directory.queries.snapshot().size).toBe(0);
+
+    directory.accept([old]);
+    const disposed = directory.reconnect();
+    directory.dispose();
+    resolve([renamed]);
+    await disposed;
+    expect(directory.queries.snapshot().size).toBe(0);
+  } finally {
+    directory.dispose();
   }
 });

@@ -24,11 +24,7 @@ import { publicKeyLabels } from "../../shared/identity/public-key";
 import type { RelaySession } from "../relay/session";
 import { NewMessage } from "./NewMessage";
 import { createAgentChoices } from "../agents/choices";
-import type {
-  AgentControl,
-  AgentControlState,
-  AgentView,
-} from "../agents/control";
+import type { LocalAgentsSnapshot } from "../agents/local";
 
 composerDOMFixture();
 
@@ -146,20 +142,17 @@ function setup() {
   } as unknown as RelaySession;
   const onOpened = vi.fn();
   const onStarted = vi.fn();
-  let controlState = {
+  let controlState: LocalAgentsSnapshot = {
     status: "ready",
-    data: {
-      agents: [
-        {
-          pubkey: people[1]?.pubkey,
-          relayUrl: "https://relay.example",
-        } as AgentView,
-      ],
-      runtimeAvailable: true,
-    },
-    busy: false,
-    error: null,
-  } as AgentControlState;
+    agents: [
+      {
+        pubkey: people[1]?.pubkey ?? "",
+        name: people[1]?.name ?? "",
+        relayUrl: "https://relay.example",
+        owner: "f".repeat(64),
+      },
+    ],
+  };
   const listeners = new Set<() => void>();
   const control = {
     snapshot: () => controlState,
@@ -167,8 +160,8 @@ function setup() {
       listeners.add(listener);
       return () => listeners.delete(listener);
     },
-    refresh: vi.fn(async () => {}),
-  } as unknown as AgentControl;
+    refresh: async () => {},
+  };
   Object.assign(session, {
     agentChoices: createAgentChoices({
       scope,
@@ -196,7 +189,7 @@ function setup() {
     onStarted,
     mount,
     control,
-    updateControl(next: AgentControlState) {
+    updateControl(next: LocalAgentsSnapshot) {
       controlState = next;
       act(() => {
         for (const listener of listeners) listener();
@@ -209,7 +202,7 @@ const recipient = () =>
   screen.getByRole("combobox", { name: "Message recipients" });
 const send = () => screen.getByRole("button", { name: "Send message" });
 
-it("offers only controlled agents in this community, including cached searches after control changes", async () => {
+it("offers only local agents in this community, including cached searches after their list changes", async () => {
   const t = setup();
   const foreign = {
     pubkey: "a".repeat(64),
@@ -224,16 +217,15 @@ it("offers only controlled agents in this community, including cached searches a
   const state = t.control.snapshot();
   t.updateControl({
     ...state,
-    data: {
-      runtimeAvailable: true,
-      agents: [
-        ...(state.data?.agents ?? []),
-        {
-          pubkey: otherCommunity.pubkey,
-          relayUrl: "https://elsewhere.example",
-        } as AgentView,
-      ],
-    },
+    agents: [
+      ...state.agents,
+      {
+        pubkey: otherCommunity.pubkey,
+        name: otherCommunity.name,
+        relayUrl: "https://elsewhere.example",
+        owner: "f".repeat(64),
+      },
+    ],
   });
   t.directMessages.people.mockResolvedValue({
     people: [...people, foreign, otherCommunity],
@@ -658,19 +650,15 @@ it("finds and completes a managed agent by its own name when its profile name di
   const t = setup();
   t.updateControl({
     status: "ready",
-    data: {
-      agents: [
-        {
-          pubkey: people[1]?.pubkey,
-          name: "José",
-          relayUrl: "https://relay.example",
-        } as AgentView,
-      ],
-      runtimeAvailable: true,
-    },
-    busy: false,
-    error: null,
-  } as AgentControlState);
+    agents: [
+      {
+        pubkey: people[1]?.pubkey ?? "",
+        name: "José",
+        relayUrl: "https://relay.example",
+        owner: "f".repeat(64),
+      },
+    ],
+  });
   t.mount();
   // Browsing caches the agent under its profile name, Person 2.
   await screen.findByRole("option", { name: "Person 2, Agent" });
@@ -1026,7 +1014,7 @@ it.each(["removed", "loading", "error"] as const)(
     t.updateControl({
       ...current,
       status: state === "removed" ? "ready" : state,
-      data: { agents: [], runtimeAvailable: true },
+      agents: [],
     });
     await t.user.click(send());
     await screen.findByRole("alert");
@@ -1042,7 +1030,7 @@ it.each(["removed", "loading", "error"] as const)(
   },
 );
 
-it("checks agent control again after opening and leaves queued retries alone", async () => {
+it("checks local agents again after opening and leaves queued retries alone", async () => {
   const t = setup();
   let opened: (id: string) => void = () => {};
   t.directMessages.open.mockImplementationOnce(

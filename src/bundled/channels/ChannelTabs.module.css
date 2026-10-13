@@ -1,31 +1,5 @@
 @reference "../../shared/styles/globals.css";
 
-.picker {
-  width: 100%;
-  padding: var(--space-4) var(--space-panel-inset);
-  display: flex;
-  min-height: 0;
-  overflow: hidden;
-}
-.pickerLayout {
-  display: grid;
-  width: 100%;
-  grid-template-columns: minmax(0, 1fr);
-  grid-template-rows: auto minmax(0, 1fr);
-  gap: var(--space-4);
-  min-height: 0;
-  overflow: hidden;
-}
-.group {
-  margin-block-start: var(--space-4);
-}
-.choices {
-  min-width: 0;
-  overflow: auto;
-}
-.group > p {
-  padding: var(--space-2);
-}
 .conversation {
   display: flex;
   flex-direction: column;
@@ -51,4 +25,9 @@
   min-height: 0;
   width: 100%;
   margin-inline: 0;
+}
+
+/* Retained tab content moves between panes without its own box. */
+.tabSlot {
+  display: contents;
 }

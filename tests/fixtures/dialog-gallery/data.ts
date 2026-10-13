@@ -2,9 +2,6 @@ import type {
   Communities,
   ClientSnapshot,
 } from "../../../src/features/communities/service";
-import type { AgentControl } from "../../../src/features/agents/control";
-import { createAgentControl } from "../../../src/features/agents/control";
-import { controlFixture } from "../../../src/features/agents/control-testing";
 import { createRelaySession } from "../../../src/features/relay/session";
 import {
   keypair,
@@ -111,36 +108,6 @@ export function communityFixture(): Communities {
       clearCache: async () => {},
     },
   };
-}
-
-export function agentFixture() {
-  const fixture = controlFixture();
-  fixture.agent.name = "Studio assistant";
-  fixture.agent.systemPrompt =
-    "Help the team build thoughtful, well-crafted interfaces.";
-  fixture.agent.workspace = "/projects/design-studio";
-  fixture.agent.harness = {
-    command: "buzz-agent",
-    args: [],
-    model: "studio-model",
-    provider: "databricks_v2",
-    environmentKeys: [],
-  };
-  fixture.data.createAvailable = true;
-  fixture.data.defaultWorkspace = "/projects/design-studio";
-  const control: AgentControl & { dispose(): void } = createAgentControl(
-    fixture.host,
-  );
-  // Avoid the native creation/auth path. Only this in-memory fixture changes.
-  control.create = async (_request, _destination, _owner, edit) => ({
-    ...fixture.agent,
-    name: edit.name,
-    systemPrompt: edit.systemPrompt,
-    status: "stopped",
-    enabled: false,
-  });
-  control.publishProfile = async () => fixture.data;
-  return { control, agent: fixture.agent };
 }
 
 export function mediaFixture() {

@@ -60,12 +60,6 @@ function harness(value: ChannelSummary | undefined = channel) {
   const props = {
     channel: value,
     session,
-    providers: {
-      snapshot: () => [],
-      subscribe: () => () => {},
-      register: () => {},
-    },
-    templateProvider: undefined,
     trigger: createRef<HTMLButtonElement>(),
     openDetails: vi.fn(),
     openCanvas: vi.fn(),

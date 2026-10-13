@@ -7,24 +7,16 @@ import {
   waitFor,
   fireEvent,
 } from "@testing-library/react";
-import { useEffect } from "react";
-import type { TemplateEditorProps } from "../../features/channel-templates/provider";
-import { emptyLineup } from "../../features/channel-templates/model";
 import userEvent from "@testing-library/user-event";
 import { afterEach, expect, it, vi } from "vitest";
 import { createRelaySession } from "../../features/relay/session";
+import type { Agents } from "../../features/agents/service";
+import { channelTemplates } from "../../features/channel-templates/local";
 import { CreateChannelDialog } from "./CreateChannelDialog";
 
-const providers = {
-  snapshot: () => emptyProviders,
-  subscribe: () => () => {},
-  register: () => {},
-};
-const emptyProviders = Object.freeze([]);
 let store = createRelaySession(null);
 const setupProps = () => ({
   session: store.session,
-  providers,
   groups: undefined,
   initialGroup: "",
   groupsReady: true,
@@ -851,80 +843,110 @@ it("does not offer to discard frozen recovery when it arrives during confirmatio
   expect(props.onCreate).not.toHaveBeenCalled();
 });
 
-it.each([false, true])(
-  "protects template-only edits without treating group defaults as edits (default: %s)",
-  async (hasDefault) => {
-    const user = userEvent.setup();
-    const onOpenChange = vi.fn();
-    function Editor({ value, initialDefault, onChange }: TemplateEditorProps) {
-      useEffect(() => {
-        if (
-          initialDefault &&
-          value?.problem === "Group default is awaiting selection."
-        )
-          onChange({
-            templateId: initialDefault,
-            lineup: { ...emptyLineup(), canvas: "Saved plan" },
-            agents: [],
-          });
-      });
-      return (
-        <button
-          type="button"
-          onClick={() =>
-            onChange({
-              templateId: "custom",
-              lineup: { ...emptyLineup(), canvas: "My plan" },
-              agents: [],
-            })
-          }
-        >
-          Customize setup
-        </button>
-      );
-    }
-    const entries = [
-      {
-        key: "test/templates",
-        id: "templates",
-        pluginId: "test",
-        revision: "1",
-        title: "Templates",
-        editor: Editor,
-        groupDefault: () => null,
-        saveAs: () => null,
+it("starts a channel from a template with its agents and teams' agents here and its Canvas", async () => {
+  const user = userEvent.setup();
+  const [ada, bo, elsewhere] = ["a", "b", "c"].map((c) => c.repeat(64)) as [
+    string,
+    string,
+    string,
+  ];
+  const snapshot = {
+    status: "ready",
+    running: [],
+    // Agents in this community; `elsewhere` is in another one.
+    agents: [
+      { pubkey: ada, name: "Ada" },
+      { pubkey: bo, name: "Bo" },
+    ],
+    teams: [
+      { id: "t1", name: "Core", instructions: "", members: [ada, elsewhere] },
+      { id: "t2", name: "Docs", instructions: "", members: [bo, ada] },
+    ],
+  };
+  const agents = {
+    snapshot: () => snapshot,
+    subscribe: () => () => {},
+  } as unknown as Agents;
+  channelTemplates.save({
+    name: "Launch",
+    teams: ["t1", "t2", "gone"],
+    agents: [elsewhere, bo],
+    canvas: "# Goal",
+  });
+  const onCreate = vi.fn(async () => {});
+  render(
+    <CreateChannelDialog
+      {...setupProps()}
+      agents={agents}
+      open
+      onOpenChange={() => {}}
+      onCreate={onCreate}
+    />,
+  );
+  await user.type(screen.getByRole("textbox", { name: "Name" }), "launch");
+  await user.click(screen.getByRole("combobox", { name: "Template" }));
+  await user.click(await screen.findByRole("option", { name: "Launch" }));
+  expect(screen.getByText("Adds Bo, Ada · Starts the Canvas")).toBeVisible();
+  await user.click(screen.getByRole("button", { name: "Create channel" }));
+  const [template] = channelTemplates.snapshot();
+  await waitFor(() =>
+    expect(onCreate).toHaveBeenCalledWith({
+      name: "launch",
+      visibility: "open",
+      setup: {
+        agents: [bo, ada],
+        canvas: "# Goal",
+        groupId: "",
+        templateId: template?.id,
       },
-    ];
-    render(
-      <CreateChannelDialog
-        {...setupProps()}
-        open
-        onOpenChange={onOpenChange}
-        onCreate={async () => {}}
-        providers={{ ...providers, snapshot: () => entries }}
-        groups={
-          hasDefault
-            ? {
-                type: "groups",
-                id: "personal",
-                groups: [
-                  { id: "work", name: "Work", defaultTemplateId: "saved" },
-                ],
-                assignments: {},
-              }
-            : undefined
-        }
-        initialGroup={hasDefault ? "work" : ""}
-      />,
-    );
-    await user.click(
-      document.querySelector(".buzz-dialog-backdrop") as Element,
-    );
-    expect(onOpenChange).toHaveBeenCalledExactlyOnceWith(false);
-    onOpenChange.mockClear();
-    await user.click(screen.getByRole("button", { name: "Customize setup" }));
-    await user.keyboard("{Escape}");
-    expect(screen.getByRole("dialog")).toHaveAccessibleName("Discard changes?");
-    expect(onOpenChange).not.toHaveBeenCalled();
-  },
-);
+    }),
+  );
+});
+
+it("offers no template choice without saved templates", () => {
+  render(
+    <CreateChannelDialog
+      {...setupProps()}
+      open
+      onOpenChange={() => {}}
+      onCreate={async () => {}}
+    />,
+  );
+  expect(
+    screen.queryByRole("combobox", { name: "Template" }),
+  ).not.toBeInTheDocument();
+});
+
+it("creates a plain channel from a template that adds nothing here", async () => {
+  const user = userEvent.setup();
+  channelTemplates.save({
+    name: "Empty",
+    teams: ["gone"],
+    agents: [],
+    canvas: "  ",
+  });
+  const onCreate = vi.fn(async () => {});
+  render(
+    <CreateChannelDialog
+      {...setupProps()}
+      open
+      onOpenChange={() => {}}
+      onCreate={onCreate}
+    />,
+  );
+  await user.type(screen.getByRole("textbox", { name: "Name" }), "plain");
+  await user.click(screen.getByRole("combobox", { name: "Template" }));
+  await user.click(await screen.findByRole("option", { name: "Empty" }));
+  expect(
+    screen.getByText(
+      "None of its agents are in this community, and it has no Canvas.",
+    ),
+  ).toBeVisible();
+  await user.click(screen.getByRole("button", { name: "Create channel" }));
+  await waitFor(() =>
+    expect(onCreate).toHaveBeenCalledWith({
+      name: "plain",
+      visibility: "open",
+    }),
+  );
+});

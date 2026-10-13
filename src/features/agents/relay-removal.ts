@@ -1,4 +1,5 @@
-import type { LocalEvents } from "../relay/outbox";
+import type { EventData } from "../relay/events";
+import type { LocalEvents, Outbox } from "../relay/outbox";
 import type { RelaySession } from "../relay/session";
 
 type RemovalSession = Pick<
@@ -50,8 +51,68 @@ export async function removeRelayAgent(
   }
 }
 
+/** The content and tags of a kind 30177 record as read. */
+export type AgentRecordBody = Readonly<{
+  content: Readonly<Record<string, unknown>>;
+  tags: readonly (readonly string[])[];
+}>;
+/** The viewer's own kind 30177 record of an agent, as Agents writes it. */
+export type AgentRecordEntry = Readonly<{
+  pubkey: string;
+  name: string;
+  /** An HTTPS image URL. */
+  picture?: string;
+  /** The agent type's key, `pluginId/typeId`, as the `runtime` tag. */
+  runtime: string;
+  /** The record this replaces, whose other settings and tags it keeps. */
+  prior?: AgentRecordBody | undefined;
+}>;
+
+/** Publishes the viewer's kind 30177 record of an agent, replacing any
+ * before it, and resolves with what it wrote once the relay accepts it.
+ * Another desktop applies the record whole to an agent it has with that key,
+ * and its parser requires `parallelism` and `respond_to`, so the record keeps
+ * every setting of the one it replaces and defaults those two
+ * (docs/relay-queries.md, "Managed-agent registration"). */
+export async function publishAgentRecord(
+  session: Pick<RelaySession, "outbox">,
+  { pubkey, name, picture, runtime, prior }: AgentRecordEntry,
+  signal: AbortSignal,
+): Promise<AgentRecordBody> {
+  const outbox = session.outbox;
+  if (!outbox?.supports(30177))
+    throw new Error("This community cannot list agents.");
+  await outbox.ready();
+  signal.throwIfAborted();
+  const kept = Object.entries(prior?.content ?? {}).filter(
+    ([field]) => field !== "picture",
+  );
+  const content = {
+    parallelism: 1,
+    respond_to: "owner-only",
+    ...Object.fromEntries(kept),
+    name,
+    ...(picture ? { picture } : {}),
+  };
+  const tags = [
+    ["d", pubkey],
+    ["runtime", runtime],
+    ...(prior?.tags ?? [])
+      .filter(([tag]) => !["d", "runtime", "client-id"].includes(tag ?? ""))
+      .map((tag) => [...tag]),
+  ];
+  const id = outbox.send(
+    { kind: 30177, content: JSON.stringify(content), tags },
+    undefined,
+    () => !signal.aborted,
+  );
+  await delivered(outbox, id, signal, "The agent list was not updated. Retry.");
+  await outbox.dismiss(id);
+  return { content, tags };
+}
+
 /** NIP-09 coordinate deletion of the viewer's own kind 30177 agent record. */
-async function deleteAgentRecord(
+export async function deleteAgentRecord(
   session: Pick<RelaySession, "outbox">,
   viewer: string,
   pubkey: string,
@@ -64,17 +125,12 @@ async function deleteAgentRecord(
   signal.throwIfAborted();
   const coordinate = `30177:${viewer}:${pubkey}`;
   const active = () => !signal.aborted;
-  const previous = outbox
-    .snapshot()
-    .find(
-      ({ event, delivery }) =>
-        delivery !== "accepted" &&
-        delivery !== "seen" &&
-        event.kind === 5 &&
-        event.tags.some(
-          ([name, value]) => name === "a" && value === coordinate,
-        ),
-    );
+  const previous = await resumable(
+    outbox,
+    (event) =>
+      event.kind === 5 &&
+      event.tags.some(([name, value]) => name === "a" && value === coordinate),
+  );
   if (previous) outbox.retry(previous.event.id, active);
   const id =
     previous?.event.id ??
@@ -122,18 +178,13 @@ export async function removeAgentFromChannels(
   let enqueueFailure: unknown;
   try {
     for (const id of pending) {
-      const previous = outbox
-        .snapshot()
-        .find(
-          ({ event, delivery }) =>
-            delivery !== "accepted" &&
-            delivery !== "seen" &&
-            event.kind === 9001 &&
-            event.tags.some(([name, value]) => name === "h" && value === id) &&
-            event.tags.some(
-              ([name, value]) => name === "p" && value === pubkey,
-            ),
-        );
+      const previous = await resumable(
+        outbox,
+        (event) =>
+          event.kind === 9001 &&
+          event.tags.some(([name, value]) => name === "h" && value === id) &&
+          event.tags.some(([name, value]) => name === "p" && value === pubkey),
+      );
       // Retry reuses the outbox's own operation, including an unknown result.
       if (previous) {
         outbox.retry(previous.event.id, active);
@@ -181,6 +232,30 @@ export async function removeAgentFromChannels(
     );
   // The rosters confirm the outcome; nothing is left for the outbox to retry.
   await Promise.all(operations.map((id) => outbox.dismiss(id)));
+}
+
+/** The relay refuses an event more than 15 minutes from its clock, and a
+ * retry republishes the same signed event, so an older saved attempt can never
+ * land. Removal repeats safely: drop a stale attempt so the caller signs anew. */
+const RESUMABLE_ATTEMPT_MS = 10 * 60_000;
+async function resumable(
+  outbox: Outbox,
+  matches: (event: EventData) => boolean,
+) {
+  const previous = outbox
+    .snapshot()
+    .find(
+      ({ event, delivery }) =>
+        delivery !== "accepted" && delivery !== "seen" && matches(event),
+    );
+  if (
+    !previous ||
+    previous.delivery === "sending" ||
+    Date.now() - previous.event.created_at * 1000 < RESUMABLE_ATTEMPT_MS
+  )
+    return previous;
+  await outbox.dismiss(previous.event.id);
+  return undefined;
 }
 
 function delivered(

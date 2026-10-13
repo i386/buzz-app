@@ -91,7 +91,8 @@ export function bindMessageNotifications(
       for (const message of messages) {
         if (!valid()) return;
         const age = Date.now() - message.createdAt * 1000;
-        if (age < -30000 || age > 120000) continue;
+        // Coordination between agents never alerts people.
+        if (age < -30000 || age > 120000 || message.audience) continue;
         const attention = owned.unread.attention(
           message.channelId,
           message.messageId,

@@ -332,6 +332,7 @@ it.each(["discard", "remove"])(
   },
 );
 
+// About 30 rendered steps, twice: loaded CI runs it at the 5s default budget.
 it("discards form-only state on same-revision review and re-arms the next draft's guards", async () => {
   const parsed = yamlToFormState(fixtureYaml);
   if (!parsed.ok) throw new Error(parsed.error);
@@ -361,7 +362,11 @@ it("discards form-only state on same-revision review and re-arms the next draft'
     );
     await user.click(screen.getByRole("combobox", { name: "Add condition" }));
     await user.click(await screen.findByRole("option", { name: "Author" }));
-    await user.type(screen.getByRole("textbox", { name: "Value" }), value);
+    // One change event keeps this two-cycle test inside the default timeout;
+    // keystroke entry is pinned by the `guards canonical…` siblings.
+    fireEvent.change(screen.getByRole("textbox", { name: "Value" }), {
+      target: { value },
+    });
     expect(warnsOnUnload()).toBe(true);
     expect(screen.getByRole("button", { name: "Save changes" })).toBeDisabled();
     await user.click(screen.getByRole("button", { name: "Close inspector" }));
@@ -403,7 +408,7 @@ it("discards form-only state on same-revision review and re-arms the next draft'
   );
   expect(warnsOnUnload()).toBe(false);
   expect(fixture.calls.save).toBe(1);
-});
+}, 15_000);
 
 async function confirmDeletion(from: "grid" | "detail" = "grid") {
   const user = userEvent.setup();
@@ -453,7 +458,7 @@ it("confirms on the grid without mounting detail, cancels safely, and removes on
       data: { items: [], partial: false },
     });
   });
-  expect(screen.getByText("Deleting workflow…")).toBeVisible();
+  expect(await screen.findByText("Deleting workflow…")).toBeVisible();
   expect(screen.queryByText("Deleting…")).toBeNull();
   expect(screen.queryByRole("button", { name: /delete/i })).toBeNull();
   expect(screen.queryByRole("button", { name: /dismiss/i })).toBeNull();

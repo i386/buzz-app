@@ -156,6 +156,7 @@ export function CommunityRailItem({
               button.current = node;
               buttonRef?.(node);
             }}
+            size="md"
             aria-label={`Switch to ${name}`}
             aria-current={selected ? "true" : undefined}
             data-selected={selected || undefined}

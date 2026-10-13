@@ -1,3 +1,4 @@
+import { CanvasConflictError } from "../../features/channel-templates/canvas-conflict";
 import {
   useCallback,
   useEffect,
@@ -8,23 +9,40 @@ import {
   useState,
   useSyncExternalStore,
 } from "react";
-import { npubEncode } from "nostr-tools/nip19";
 import type { RelaySession } from "../../features/relay/session";
 import { useIdentityNames } from "../../features/identity-names/react";
-import { Select } from "../../shared/design-system/ui/Select";
+import { Avatar } from "../../shared/design-system/ui/Avatar";
+import { TodoChoice } from "./TodoChoice";
 import type { ChannelCanvas } from "../../features/channel-templates/capability";
 import type { ChannelPanelContext } from "../../features/panels/service";
 import {
   XIcon,
+  InfoIcon,
+  ArrowsClockwiseIcon,
   ListChecksIcon,
-  PlayIcon,
+  UserIcon,
+  CircleIcon,
+  CircleHalfIcon,
+  CheckCircleIcon,
 } from "../../shared/design-system/icons/index";
+import { AlertDialog } from "../../shared/design-system/ui/AlertDialog";
 import { Button } from "../../shared/design-system/ui/Button";
 import { Checkbox } from "../../shared/design-system/ui/Checkbox";
+import { EmptyState } from "../../shared/design-system/ui/EmptyState";
 import { Field } from "../../shared/design-system/ui/Field";
 import { IconButton } from "../../shared/design-system/ui/IconButton";
+import {
+  PopoverRoot,
+  PopoverTrigger,
+  PopoverPopup,
+  PopoverTitle,
+  PopoverDescription,
+} from "../../shared/design-system/ui/Popover";
 import { Input } from "../../shared/design-system/ui/Input";
-import { PanelHeader } from "../../shared/design-system/ui/PanelHeader";
+import {
+  PanelHeader,
+  PanelHeaderLabel,
+} from "../../shared/design-system/ui/PanelHeader";
 import { publicKeyLabels } from "../../shared/identity/public-key";
 import { readView, writeView } from "../../shared/view-state";
 import {
@@ -43,6 +61,7 @@ export type TodoPeople = {
   >;
   profiles: RelaySession["profiles"];
   names: RelaySession["names"];
+  media: RelaySession["media"];
 };
 type Draft = {
   content: string;
@@ -53,9 +72,30 @@ type Draft = {
 const empty: Draft = { content: "", original: "", base: null, input: "" };
 const statuses: [Status, string][] = [
   ["todo", "To do"],
-  ["doing", "Doing"],
+  ["doing", "In progress"],
   ["done", "Done"],
 ];
+function StatusIcon({ status }: { status: Status }) {
+  const Icon =
+    status === "done"
+      ? CheckCircleIcon
+      : status === "doing"
+        ? CircleHalfIcon
+        : CircleIcon;
+  return (
+    <Icon
+      size="1rem"
+      aria-hidden="true"
+      className={
+        status === "doing"
+          ? styles.inProgress
+          : status === "done"
+            ? styles.done
+            : "text-secondary"
+      }
+    />
+  );
+}
 function readDraft(scope: string, key: string): Draft | undefined {
   const value = readView<Partial<Draft> | null>(scope, key, null);
   return value &&
@@ -84,6 +124,10 @@ export function TodosPanel({
     people.channels.list,
   );
   const resolveIdentity = useIdentityNames(people.names);
+  const profiles = useSyncExternalStore(
+    people.profiles.subscribe,
+    people.profiles.snapshot,
+  );
   const members = list.channels.find(
     (channel) => channel.id === context.channelId,
   )?.members;
@@ -98,6 +142,8 @@ export function TodosPanel({
   const [busy, setBusy] = useState<"load" | "save">();
   const [error, setError] = useState("");
   const [conflict, setConflict] = useState(false);
+  const [confirmRefresh, setConfirmRefresh] = useState(false);
+  const refreshRef = useRef<HTMLButtonElement>(null);
   const operation = useRef(0);
   const saving = useRef(false);
   const savedAt = useRef(0);
@@ -108,9 +154,7 @@ export function TodosPanel({
     if (focusAfterToggle.current && !busy) {
       const target = document.getElementById(focusAfterToggle.current);
       if (document.activeElement === document.body)
-        (
-          target?.querySelector<HTMLElement>("[role=combobox]") ?? target
-        )?.focus();
+        (target?.querySelector<HTMLElement>("button") ?? target)?.focus();
       focusAfterToggle.current = undefined;
     }
   });
@@ -147,7 +191,7 @@ export function TodosPanel({
         setConflict(changed);
         if (changed)
           setError(
-            "Canvas changed elsewhere. Your draft is kept. Refresh to review the saved Canvas before saving.",
+            "Canvas changed elsewhere. Refresh to load the latest todos. Your changes are kept until then.",
           );
         else if (!replace && savedDirty && !alreadySaved)
           setError("Recovered unsaved changes. Retry to save them to Canvas.");
@@ -219,10 +263,15 @@ export function TodosPanel({
         base: head.id,
       });
     } catch (reason) {
-      if (active() && generation === operation.current)
+      if (active() && generation === operation.current) {
+        const hasConflict = reason instanceof CanvasConflictError;
+        setConflict(hasConflict);
         setError(
-          `Todos couldn’t save. Your changes are still here. ${reason instanceof Error ? reason.message : String(reason)}`,
+          hasConflict
+            ? "Canvas changed elsewhere. Refresh to load the latest todos. Your changes are kept until then."
+            : `Couldn’t save. Your changes are still here. ${reason instanceof Error ? reason.message : String(reason)}`,
         );
+      }
     } finally {
       saving.current = false;
       if (active() && generation === operation.current) setBusy(undefined);
@@ -242,7 +291,6 @@ export function TodosPanel({
     !loaded || busy === "load" || !canvas.available || !!parseError || conflict;
   const disabled = inputDisabled || busy === "save";
   const items = parsed?.items ?? [];
-  const remaining = items.filter((item) => item.status !== "done").length;
   const peopleKey = [
     ...new Set([
       ...(members ?? []),
@@ -277,6 +325,24 @@ export function TodosPanel({
     const name = resolveName(pubkey, fallback);
     return name ? `${name} · ${key}` : key;
   };
+  const personIcon = (pubkey: string, fallback = "") => {
+    const profile = profiles.get(pubkey);
+    const name =
+      resolveName(pubkey, fallback) ||
+      keyLabels.get(pubkey) ||
+      "Unknown member";
+    return (
+      <Avatar
+        size="small"
+        alt=""
+        fallback={name}
+        shape={profile?.isAgent ? "squircle" : "circle"}
+        src={
+          profile?.picture ? people.media(profile.picture, "small") : undefined
+        }
+      />
+    );
+  };
   const choices = (members ?? [])
     .map((pubkey) => ({
       value: pubkey,
@@ -294,27 +360,78 @@ export function TodosPanel({
       setError(String(reason));
     }
   };
+  const saveStatus =
+    busy === "save"
+      ? "Saving…"
+      : dirty
+        ? "Unsaved changes"
+        : loaded
+          ? "Saved in Canvas"
+          : "Channel Canvas";
   return (
     <div data-buzz-ui="" className={styles.panel} aria-busy={!!busy}>
       <PanelHeader
-        icon={<ListChecksIcon size={18} aria-hidden="true" />}
         title={
-          <div className={styles.heading}>
-            <h2 className="text-label">Todos</h2>
-            <span className="text-caption text-secondary">
+          <PanelHeaderLabel title="Todos" icon={<ListChecksIcon size="1rem" />}>
+            <span
+              className={`${styles.channel} text-caption text-secondary`}
+              title={context.channelName}
+            >
               {context.channelName}
             </span>
-          </div>
+          </PanelHeaderLabel>
         }
         actions={
-          <IconButton
-            size="sm"
-            variant="ghost"
-            icon={<XIcon size={16} aria-hidden="true" />}
-            aria-label="Hide todos"
-            title="Hide todos"
-            onClick={close}
-          />
+          <>
+            <span role="status" className="sr-only">
+              {saveStatus}
+            </span>
+            <PopoverRoot>
+              <PopoverTrigger
+                render={
+                  <IconButton
+                    size="sm"
+                    icon={<InfoIcon size="1rem" aria-hidden="true" />}
+                    aria-label="About todos"
+                    aria-description={saveStatus}
+                    title="About todos"
+                  />
+                }
+              />
+              <PopoverPopup align="end">
+                <PopoverTitle>{saveStatus}</PopoverTitle>
+                <PopoverDescription>
+                  Todos are shared in this channel’s Canvas. Changes save
+                  automatically. Refresh to load others’ changes. On older
+                  relays, simultaneous saves can overwrite edits.
+                </PopoverDescription>
+              </PopoverPopup>
+            </PopoverRoot>
+            <IconButton
+              ref={refreshRef}
+              size="sm"
+              icon={<ArrowsClockwiseIcon size="1rem" aria-hidden="true" />}
+              aria-label="Refresh"
+              title="Refresh todos"
+              loading={busy === "load"}
+              disabled={!!busy}
+              onClick={() => {
+                if (loaded && (dirty || draft.input)) {
+                  setConfirmRefresh(true);
+                  return;
+                }
+                void load(loaded);
+              }}
+            />
+            <IconButton
+              size="sm"
+              variant="ghost"
+              icon={<XIcon size="1rem" aria-hidden="true" />}
+              aria-label="Hide todos"
+              title="Hide todos"
+              onClick={close}
+            />
+          </>
         }
       />
       <div className={styles.scroll}>
@@ -357,16 +474,40 @@ export function TodosPanel({
             </Field>
             <Button
               type="submit"
-              size="sm"
+              size="md"
+              variant="prominent"
               disabled={disabled || !draft.input.trim()}
             >
               Add
             </Button>
           </form>
-          {(error || parseError) && (
-            <p role="alert" className="text-body-sm text-danger">
-              {error || parseError}
-            </p>
+          {(error || parseError || (dirty && !busy)) && (
+            <div className={styles.feedback}>
+              {(error || parseError) && (
+                <p role="alert" className="text-body-sm text-secondary">
+                  {error || parseError}
+                </p>
+              )}
+              {conflict && !busy && (
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={() => setConfirmRefresh(true)}
+                >
+                  Refresh todos
+                </Button>
+              )}
+              {dirty && !busy && !conflict && !parseError && (
+                <Button
+                  size="sm"
+                  variant="outline"
+                  disabled={disabled}
+                  onClick={() => void save()}
+                >
+                  Retry
+                </Button>
+              )}
+            </div>
           )}
           {(namesError || list.error || !members) && (
             <div className="text-caption text-secondary">
@@ -398,18 +539,13 @@ export function TodosPanel({
           ) : (
             !parseError && (
               <>
-                {items.length === 0 || remaining === 0 ? (
-                  <div className={styles.empty}>
-                    <p className="text-label">
-                      {items.length ? "All done" : "No todos yet"}
-                    </p>
-                    <p className="text-body-sm text-secondary">
-                      {items.length
-                        ? "Uncheck an item to move it back."
-                        : "Add the first item for this channel."}
-                    </p>
-                  </div>
-                ) : null}
+                {items.length === 0 && (
+                  <EmptyState
+                    icon={<ListChecksIcon />}
+                    title="No todos yet"
+                    description="Add a todo above to track work with this channel. Changes save automatically."
+                  />
+                )}
                 {statuses.map(([status, title]) => {
                   const group = items.filter((item) => item.status === status);
                   return (
@@ -419,8 +555,11 @@ export function TodosPanel({
                         className={styles.group}
                         aria-label={title}
                       >
-                        <h3 className="text-label-sm text-secondary">
-                          {title} · {group.length}
+                        <h3 className={`${styles.groupHeading} text-label-sm`}>
+                          {title}
+                          <span className={styles.groupCount}>
+                            {group.length}
+                          </span>
                         </h3>
                         <ul className={styles.list}>
                           {group.map((item) => (
@@ -451,116 +590,144 @@ export function TodosPanel({
                                   </span>
                                 }
                               />
-                              <IconButton
-                                id={`${prefix}-${item.offset}-doing`}
-                                size="sm"
-                                variant={
-                                  item.status === "doing" ? "tint" : "ghost"
-                                }
-                                icon={<PlayIcon size={16} aria-hidden="true" />}
-                                aria-label={`Doing: ${item.label}`}
-                                title="Doing"
-                                aria-pressed={item.status === "doing"}
-                                disabled={disabled}
-                                onClick={() => {
-                                  focusAfterToggle.current = `${prefix}-${item.offset}-doing`;
-                                  change(() =>
-                                    setStatus(
-                                      draft.content,
-                                      item.offset,
-                                      item.status === "doing"
-                                        ? "todo"
-                                        : "doing",
-                                    ),
-                                  );
-                                }}
-                              />
-                              <fieldset
-                                id={`${prefix}-${item.offset}-assignee`}
-                                className={styles.assignee}
-                                aria-label={`Assignee for ${item.label}`}
-                              >
-                                <Select
-                                  label={`Assignee for ${item.label}`}
-                                  variant="compact"
-                                  valueLabel={
-                                    item.assignee
-                                      ? resolveName(
+                              <div className={styles.rowDetails}>
+                                <div
+                                  id={`${prefix}-${item.offset}-status`}
+                                  className={styles.status}
+                                >
+                                  <TodoChoice
+                                    id={`${prefix}-${item.offset}-status-control`}
+                                    label={`Status for ${item.label}`}
+                                    menuTitle="Change status"
+                                    title="Status"
+                                    icon={<StatusIcon status={item.status} />}
+                                    value={item.status}
+                                    disabled={disabled}
+                                    options={statuses.map(([value, label]) => ({
+                                      value,
+                                      label,
+                                      icon: <StatusIcon status={value} />,
+                                    }))}
+                                    onValueChange={(value) => {
+                                      const status = statuses.find(
+                                        ([status]) => status === value,
+                                      )?.[0];
+                                      if (!status || status === item.status)
+                                        return;
+                                      focusAfterToggle.current = `${prefix}-${item.offset}-status`;
+                                      change(() =>
+                                        setStatus(
+                                          draft.content,
+                                          item.offset,
+                                          status,
+                                        ),
+                                      );
+                                    }}
+                                  />
+                                </div>
+                                <fieldset
+                                  id={`${prefix}-${item.offset}-assignee`}
+                                  className={styles.assignee}
+                                  aria-label={`Assignee for ${item.label}`}
+                                >
+                                  <TodoChoice
+                                    id={`${prefix}-${item.offset}-assignee-control`}
+                                    label={`Assignee for ${item.label}`}
+                                    menuTitle="Assign to"
+                                    title={
+                                      item.assignee
+                                        ? userLabel(
+                                            item.assignee.pubkey,
+                                            item.assignee.name,
+                                          )
+                                        : "Assign task"
+                                    }
+                                    icon={
+                                      item.assignee ? (
+                                        personIcon(
                                           item.assignee.pubkey,
                                           item.assignee.name,
-                                        ) ||
-                                        keyLabels.get(item.assignee.pubkey) ||
-                                        ""
-                                      : "Unassigned"
-                                  }
-                                  valueTitle={
-                                    item.assignee
-                                      ? npubEncode(item.assignee.pubkey)
-                                      : "Unassigned"
-                                  }
-                                  value={item.assignee?.pubkey ?? ""}
-                                  disabled={disabled || !members}
-                                  groups={[
-                                    {
-                                      label: "Channel users",
-                                      options: [
-                                        { value: "", label: "Unassigned" },
-                                        ...choices.map((choice) =>
+                                        )
+                                      ) : (
+                                        <UserIcon
+                                          size="1rem"
+                                          aria-hidden="true"
+                                        />
+                                      )
+                                    }
+                                    variant={item.assignee ? "avatar" : "ghost"}
+                                    value={item.assignee?.pubkey ?? ""}
+                                    disabled={disabled || !members}
+                                    options={[
+                                      {
+                                        value: "",
+                                        label: "Unassigned",
+                                        icon: (
+                                          <UserIcon
+                                            size="1rem"
+                                            aria-hidden="true"
+                                          />
+                                        ),
+                                      },
+                                      ...choices.map((choice) => ({
+                                        ...choice,
+                                        label: userLabel(
+                                          choice.value,
                                           item.assignee?.pubkey === choice.value
+                                            ? item.assignee.name
+                                            : "",
+                                        ),
+                                        icon: personIcon(choice.value),
+                                      })),
+                                      ...(item.assignee &&
+                                      !members?.includes(item.assignee.pubkey)
+                                        ? [
+                                            {
+                                              value: item.assignee.pubkey,
+                                              label: `${userLabel(item.assignee.pubkey, item.assignee.name)} (${members ? "not in channel" : "membership unavailable"})`,
+                                              icon: personIcon(
+                                                item.assignee.pubkey,
+                                                item.assignee.name,
+                                              ),
+                                              disabled: true,
+                                            },
+                                          ]
+                                        : []),
+                                    ]}
+                                    onValueChange={(pubkey) => {
+                                      const currentMembers = people.channels
+                                        .list()
+                                        .channels.find(
+                                          (channel) =>
+                                            channel.id === context.channelId,
+                                        )?.members;
+                                      if (
+                                        !currentMembers ||
+                                        (pubkey &&
+                                          !currentMembers.includes(pubkey))
+                                      )
+                                        return;
+                                      focusAfterToggle.current = `${prefix}-${item.offset}-assignee`;
+                                      change(() =>
+                                        assignTodo(
+                                          draft.content,
+                                          item.offset,
+                                          pubkey
                                             ? {
-                                                ...choice,
-                                                label: userLabel(
-                                                  choice.value,
-                                                  item.assignee.name,
+                                                pubkey,
+                                                name: resolveName(
+                                                  pubkey,
+                                                  keyLabels.get(pubkey) ??
+                                                    pubkey,
                                                 ),
                                               }
-                                            : choice,
+                                            : undefined,
                                         ),
-                                        ...(item.assignee &&
-                                        !members?.includes(item.assignee.pubkey)
-                                          ? [
-                                              {
-                                                value: item.assignee.pubkey,
-                                                label: `${userLabel(item.assignee.pubkey, item.assignee.name)} (${members ? "not in channel" : "membership unavailable"})`,
-                                                disabled: true,
-                                              },
-                                            ]
-                                          : []),
-                                      ],
-                                    },
-                                  ]}
-                                  onValueChange={(pubkey) => {
-                                    const currentMembers = people.channels
-                                      .list()
-                                      .channels.find(
-                                        (channel) =>
-                                          channel.id === context.channelId,
-                                      )?.members;
-                                    if (
-                                      !currentMembers ||
-                                      (pubkey &&
-                                        !currentMembers.includes(pubkey))
-                                    )
-                                      return;
-                                    focusAfterToggle.current = `${prefix}-${item.offset}-assignee`;
-                                    change(() =>
-                                      assignTodo(
-                                        draft.content,
-                                        item.offset,
-                                        pubkey
-                                          ? {
-                                              pubkey,
-                                              name: resolveName(
-                                                pubkey,
-                                                keyLabels.get(pubkey) ?? pubkey,
-                                              ),
-                                            }
-                                          : undefined,
-                                      ),
-                                    );
-                                  }}
-                                />
-                              </fieldset>
+                                      );
+                                    }}
+                                  />
+                                </fieldset>
+                              </div>
                             </li>
                           ))}
                         </ul>
@@ -571,54 +738,32 @@ export function TodosPanel({
               </>
             )
           )}
-          <p className="text-caption text-secondary">
-            Shared Markdown. Simultaneous saves can overwrite edits.
-          </p>
         </div>
       </div>
-      <footer className={styles.footer}>
-        <div className={styles.summary}>
-          <p role="status" className="text-caption">
-            {busy === "save"
-              ? "Saving…"
-              : dirty
-                ? "Unsaved changes"
-                : loaded
-                  ? "Saved in Canvas"
-                  : "Channel Canvas"}
-          </p>
-        </div>
-        <div className={styles.actions}>
-          <Button
-            size="sm"
-            variant={error ? "prominent" : "subtle"}
-            disabled={!!busy}
-            onClick={() => {
-              if (
-                loaded &&
-                (dirty || draft.input) &&
-                !window.confirm(
-                  "Discard your unsaved todo changes and load the saved Canvas?",
-                )
-              )
-                return;
-              void load(loaded);
-            }}
-          >
-            Refresh
-          </Button>
-          {dirty && !busy && !conflict && !parseError && (
-            <Button
-              size="sm"
-              variant="prominent"
-              disabled={disabled}
-              onClick={() => void save()}
-            >
-              Retry
-            </Button>
-          )}
-        </div>
-      </footer>
+      {confirmRefresh && (
+        <AlertDialog
+          title="Discard unsaved changes?"
+          description="Refreshing replaces your local changes and new todo text with the saved channel Canvas."
+          finalFocus={refreshRef}
+          onClose={() => setConfirmRefresh(false)}
+          actions={
+            <>
+              <Button onClick={() => setConfirmRefresh(false)}>
+                Keep editing
+              </Button>
+              <Button
+                variant="destructive"
+                onClick={() => {
+                  setConfirmRefresh(false);
+                  void load(true);
+                }}
+              >
+                Discard and refresh
+              </Button>
+            </>
+          }
+        />
+      )}
     </div>
   );
 }

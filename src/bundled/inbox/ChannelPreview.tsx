@@ -1,4 +1,4 @@
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useState } from "react";
 import type { RelaySession } from "../../features/relay/session";
 import type { ConversationExtensions } from "../../features/conversation/contracts";
 import { useChannelWindow } from "../../features/relay/react";
@@ -6,7 +6,6 @@ import { ChannelTimeline } from "../../features/messages/ChannelTimeline";
 import { ThreadPanel } from "../../features/messages/ThreadPanel";
 import { MessageComposer } from "../../features/messages/MessageComposer";
 import { MessageEditScope } from "../../features/messages/MessageEditScope";
-import { PanelHeader } from "../../shared/design-system/ui/PanelHeader";
 import { Button } from "../../shared/design-system/ui/Button";
 import styles from "./Inbox.module.css";
 
@@ -17,23 +16,17 @@ export function ChannelPreview({
   channelId,
   channelName,
   extensions,
-  actions,
-  exactActions,
   anchor,
   draft = false,
   onDraftSaved,
-  onClose,
 }: {
   session: RelaySession;
   channelId: string;
   channelName: string;
   extensions?: ConversationExtensions | undefined;
-  actions: ReactNode;
-  exactActions?: ReactNode;
   anchor?: string | undefined;
   draft?: boolean;
   onDraftSaved?: () => void;
-  onClose?: () => void;
 }) {
   const window = useChannelWindow(session.channels, channelId);
   const [sentId, setSentId] = useState<string>();
@@ -75,7 +68,7 @@ export function ChannelPreview({
   useEffect(() => {
     if (window.status === "idle") session.channels.ensure(channelId);
   }, [session, channelId, window.status]);
-  if (anchor && opening?.anchor === anchor && !opening.inTimeline && onClose)
+  if (anchor && opening?.anchor === anchor && !opening.inTimeline)
     return (
       <ThreadPanel
         session={session}
@@ -85,8 +78,6 @@ export function ChannelPreview({
         channelName={channelName}
         messageId={anchor}
         revealSelected
-        close={onClose}
-        headerActions={exactActions}
         onOpenLink={() => false}
       />
     );
@@ -97,7 +88,6 @@ export function ChannelPreview({
         aria-label="Conversation preview"
         data-reading-surface=""
       >
-        <PanelHeader variant="compact" title="Messages" actions={actions} />
         <div className={styles.previewHistory}>
           {window.rows.length > 0 && (
             <ChannelTimeline

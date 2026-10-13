@@ -198,7 +198,11 @@ test("channel activity consumes telemetry, isolates mixed batches, selects agent
         app.report.presenceSnapshots.every(({ pending }) => !pending),
     )
     .toBe(true);
-  await page.getByRole("button", { name: /^Close (?!Thread).* tab$/ }).click();
+  await page
+    .locator(
+      '.buzz-tabs-item:not(:has([data-tab-value^="thread:"])) > button:not([role="tab"])',
+    )
+    .click();
   // A busy skip followed by a successful retry must not masquerade as recovery.
   expect(
     app.report.brokerRequests.filter(({ url }) =>
@@ -286,7 +290,11 @@ test("channel activity consumes telemetry, isolates mixed batches, selects agent
   await expect(panel.locator("pre code")).toContainText('"channelId": "alpha"');
   await expect(panel.locator("pre code")).not.toContainText("other channel");
 
-  await page.getByRole("button", { name: /^Close (?!Thread).* tab$/ }).click();
+  await page
+    .locator(
+      '.buzz-tabs-item:not(:has([data-tab-value^="thread:"])) > button:not([role="tab"])',
+    )
+    .click();
   // The popup's action has unmounted; focus returns to its floating trigger.
   await expect(trigger).toBeFocused();
   await viewAgentActivity(page, composer, second);
@@ -296,7 +304,11 @@ test("channel activity consumes telemetry, isolates mixed batches, selects agent
     panel.getByRole("button", { name: /turn_liveness/ }),
   ).toBeVisible();
   await expect(panel.getByRole("button", { name: /acp_read/ })).toHaveCount(0);
-  await page.getByRole("button", { name: /^Close (?!Thread).* tab$/ }).click();
+  await page
+    .locator(
+      '.buzz-tabs-item:not(:has([data-tab-value^="thread:"])) > button:not([role="tab"])',
+    )
+    .click();
   await expect(trigger).toBeFocused();
 
   const sockets = app.relay.sockets.length;
@@ -311,11 +323,11 @@ test("channel activity consumes telemetry, isolates mixed batches, selects agent
     (response) =>
       response.url().endsWith("/stream-observer") &&
       response.ok() &&
-      response.request().postDataJSON().observer !== null,
+      response.request().postDataJSON().observer === null,
   );
   await toggle.click();
   await disabled;
-  // Archive capture and owner-review requests both retain independent demand.
+  // Archive capture retains independent demand.
   // Disabling the activity UI clears only its display evidence.
   await expect.poll(() => app.relay.hasRoute("primary", "observer")).toBe(true);
   expect(app.relay.sockets).toHaveLength(sockets);
@@ -361,7 +373,11 @@ test("channel activity consumes telemetry, isolates mixed batches, selects agent
   // One terminal turn must not hide another active turn for the same agent,
   // and stale evidence is not working. The other agent's frames, observed in
   // order, are the barrier for each transition. Capture survives closing the panel.
-  await page.getByRole("button", { name: /^Close (?!Thread).* tab$/ }).click();
+  await page
+    .locator(
+      '.buzz-tabs-item:not(:has([data-tab-value^="thread:"])) > button:not([role="tab"])',
+    )
+    .click();
   app.observer(activity("turn_liveness", "alpha", "parallel"), firstKey);
   app.observer(activity("turn_completed", "alpha", "after-reset"), firstKey);
   app.observer(activity("turn_liveness", "alpha", "barrier"), secondKey);
@@ -610,7 +626,9 @@ it("profile activity opens the exact agent and originating channel before its fi
   await profile
     .getByRole("button", { name: "View activity", exact: true })
     .click();
-  await expect(profile).toHaveCount(0);
+  await expect(
+    profile.getByRole("tab", { name: "Activity", exact: true }),
+  ).toHaveAttribute("aria-selected", "true");
   const panel = page.getByRole("region", {
     name: "Agent activity",
     exact: true,
@@ -664,12 +682,16 @@ it("profile activity opens the exact agent and originating channel before its fi
     panel.getByRole("button", { name: /session_resolved/ }),
   ).toBeVisible();
   await expect(panel.getByRole("button", { name: /acp_read/ })).toHaveCount(0);
-  await panel.press("Escape");
-  await expect(profile).toBeVisible();
+  // Activity is the profile's tab, not a nested panel. Info returns to the preview.
+  await profile.getByRole("tab", { name: "Info", exact: true }).click();
+  await expect(panel).toHaveCount(0);
+  await expect(
+    profile.getByRole("region", { name: "Activity preview" }),
+  ).toBeVisible();
   const profileTab = page
     .getByRole("tablist", { name: "Panel tabs" })
     .getByRole("tab", { selected: true });
-  await expect(profileTab).toBeFocused();
+  await profileTab.focus();
   await profileTab.press("Escape");
   await expect(profile).toBeHidden();
   await expect(avatar).toBeFocused();
@@ -973,7 +995,9 @@ test.describe("thread activity", () => {
     await expect(panel.locator("code").first()).toHaveText(agent);
     await expect(conversation).toHaveText(/^#Alpha · whole channel/);
     await page
-      .getByRole("button", { name: /^Close (?!Thread).* tab$/, exact: true })
+      .locator(
+        '.buzz-tabs-item:not(:has([data-tab-value^="thread:"])) > button:not([role="tab"])',
+      )
       .click();
     // Activity and Thread share the detail pane; return to the thread.
     await openThread();
@@ -1008,12 +1032,16 @@ test.describe("thread activity", () => {
     // The thread composer opens this thread's scope, not channel-wide details.
     await expect(conversation).toHaveText(/^#Alpha › /);
     await page
-      .getByRole("button", { name: /^Close (?!Thread).* tab$/, exact: true })
+      .locator(
+        '.buzz-tabs-item:not(:has([data-tab-value^="thread:"])) > button:not([role="tab"])',
+      )
       .click();
     // The channel row opens the agent's one known thread.
     await openThread();
     await page
-      .getByRole("button", { name: "Close Thread tab", exact: true })
+      .locator(
+        '.buzz-tabs-item:has([data-tab-value^="thread:"][aria-selected="true"]) > button:not([role="tab"])',
+      )
       .click();
     await expect(thread).toHaveCount(0);
     sendTyping(root.id);
@@ -1209,7 +1237,9 @@ test.describe("thread activity", () => {
     publish(human, roots[0], 9);
     await expect(humanTyping(thread)).toHaveCount(0);
     await page
-      .getByRole("button", { name: "Close Thread tab", exact: true })
+      .locator(
+        '.buzz-tabs-item:has([data-tab-value^="thread:"][aria-selected="true"]) > button:not([role="tab"])',
+      )
       .click();
     await openThread(roots[1]);
     await expect(
@@ -1218,7 +1248,9 @@ test.describe("thread activity", () => {
     await expect(threadTrigger).toHaveCount(0);
     await expect(workingStatus).toBeEmpty();
     await page
-      .getByRole("button", { name: "Close Thread tab", exact: true })
+      .locator(
+        '.buzz-tabs-item:has([data-tab-value^="thread:"][aria-selected="true"]) > button:not([role="tab"])',
+      )
       .click();
     await openThread(roots[0]);
     // Fresh pulses avoid making the navigation assertions depend on fixture speed.
@@ -1236,7 +1268,9 @@ test.describe("thread activity", () => {
     await expect(workingStatus).toBeEmpty();
     await expect(humanTyping(thread)).toHaveCount(0);
     await page
-      .getByRole("button", { name: "Close Thread tab", exact: true })
+      .locator(
+        '.buzz-tabs-item:has([data-tab-value^="thread:"][aria-selected="true"]) > button:not([role="tab"])',
+      )
       .click();
     // The channel composer uses the same floating control and popup rows.
     const channelStatus = composer.locator("[data-agent-working-status]");

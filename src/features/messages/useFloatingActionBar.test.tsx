@@ -56,19 +56,34 @@ afterEach(() => {
   vi.clearAllMocks();
 });
 
-function Harness({ open = false, expanded = false, hasPicker = true }) {
+function Harness({
+  open = false,
+  expanded = false,
+  hasPicker = true,
+  scroller = false,
+}) {
   const row = useRef<HTMLDivElement>(null);
+  const content = (
+    <div ref={row} data-testid="row">
+      <button type="button">Avatar</button>
+      <Controls
+        row={row}
+        open={open}
+        expanded={expanded}
+        hasPicker={hasPicker}
+      />
+    </div>
+  );
   return (
     <StrictMode>
-      <div ref={row} data-testid="row">
-        <button type="button">Avatar</button>
-        <Controls
-          row={row}
-          open={open}
-          expanded={expanded}
-          hasPicker={hasPicker}
-        />
-      </div>
+      {scroller ? (
+        <div data-message-scroller data-testid="scroller">
+          <p data-testid="sibling">Earlier message</p>
+          {content}
+        </div>
+      ) : (
+        content
+      )}
       <button type="button">Outside</button>
     </StrictMode>
   );
@@ -210,7 +225,7 @@ it("leaves coarse-pointer controls static and cleans up floating mode on media c
   expect(mediaListeners.size).toBe(0);
 });
 
-it("tracks geometry only while revealed and cancels frames on mode changes and unmount", async () => {
+function controlFrames() {
   let nextFrame = 0;
   const frames = new Map<number, FrameRequestCallback>();
   vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => {
@@ -224,26 +239,76 @@ it("tracks geometry only while revealed and cancels frames on mode changes and u
       frames.clear();
       for (const [, callback] of pending) callback(0);
     });
-  const { unmount } = render(<Harness />);
-  const row = screen.getByTestId("row");
+  const drain = () => act(() => Promise.resolve());
+  return { frames, advanceFrame, drain };
+}
+
+function renderInScroller() {
+  const rendered = render(<Harness scroller />);
   const bar = screen.getByTestId("bar");
+  const scroller = screen.getByTestId("scroller");
   const slot = bar.parentElement;
   if (!slot) throw new Error("Missing action slot");
-  const readAnchor = vi.spyOn(slot, "getBoundingClientRect");
+  // jsdom reports empty boxes; place the slot inside the scroller's viewport.
+  vi.spyOn(scroller, "getBoundingClientRect").mockReturnValue(
+    new DOMRect(0, 0, 800, 600),
+  );
+  const readAnchor = vi
+    .spyOn(slot, "getBoundingClientRect")
+    .mockReturnValue(new DOMRect(0, 100, 800, 0));
+  return {
+    ...rendered,
+    row: screen.getByTestId("row"),
+    bar,
+    scroller,
+    readAnchor,
+  };
+}
+
+it("positions once per sibling change, scroll or resize, and reads nothing while idle", async () => {
+  const { frames, advanceFrame, drain } = controlFrames();
+  const { unmount, row, bar, scroller, readAnchor } = renderInScroller();
   expect(frames.size).toBe(0);
   fireEvent.pointerEnter(row);
-  // Drain mount mutations before checking idle positioning work.
-  await act(() => Promise.resolve());
+  expect(bar).toHaveAttribute("data-shown");
+  // Drain reveal mutations: a revealed, idle bar schedules no further reads.
+  await drain();
   advanceFrame();
+  await drain();
   const reads = readAnchor.mock.calls.length;
   const writes = show.mock.calls.length;
+  expect(frames.size).toBe(0);
+
+  // One sibling row content change repositions once; the toolbar's own
+  // positioning writes do not schedule another frame.
+  act(() => {
+    screen.getByTestId("sibling").textContent = "Earlier message (edited)";
+  });
+  await drain();
+  expect(frames.size).toBe(1);
   advanceFrame();
   expect(readAnchor).toHaveBeenCalledTimes(reads + 1);
-  expect(show).toHaveBeenCalledTimes(writes);
+  expect(show).toHaveBeenCalledTimes(writes + 1);
+  await drain();
+  expect(frames.size).toBe(0);
+  expect(readAnchor).toHaveBeenCalledTimes(reads + 1);
+
+  // Scroll and resize bursts coalesce into a single frame.
+  fireEvent.scroll(scroller);
+  fireEvent.scroll(document);
+  fireEvent(window, new Event("resize"));
+  expect(frames.size).toBe(1);
+  advanceFrame();
+  expect(readAnchor).toHaveBeenCalledTimes(reads + 2);
+  expect(frames.size).toBe(0);
+
+  // Pending frames are cancelled when the bar hides, leaves floating mode or unmounts.
+  fireEvent.scroll(scroller);
   expect(frames.size).toBe(1);
   fireEvent.pointerLeave(row);
   expect(frames.size).toBe(0);
   fireEvent.pointerEnter(row);
+  fireEvent.scroll(scroller);
   expect(frames.size).toBe(1);
   act(() => {
     mediaMatches = false;
@@ -255,9 +320,71 @@ it("tracks geometry only while revealed and cancels frames on mode changes and u
     for (const listener of mediaListeners) listener();
   });
   fireEvent.pointerEnter(row);
+  fireEvent.scroll(scroller);
   expect(frames.size).toBe(1);
   unmount();
   expect(frames.size).toBe(0);
+});
+
+it("follows ancestor motion every frame only while it runs, then realigns once", async () => {
+  const { frames, advanceFrame, drain } = controlFrames();
+  const { row, bar, scroller, readAnchor } = renderInScroller();
+  // jsdom runs no animations. Model a drawer transition on an ancestor through
+  // the Web Animations surface the hook reads; events and effects stay real.
+  let slide: { playState: AnimationPlayState; endTime: number } | undefined = {
+    playState: "running",
+    endTime: 200,
+  };
+  scroller.getAnimations = () =>
+    slide
+      ? [
+          {
+            playState: slide.playState,
+            effect: { getComputedTiming: () => ({ endTime: slide?.endTime }) },
+          } as unknown as Animation,
+        ]
+      : [];
+  // Revealed mid-transition: no event announces motion that already started.
+  fireEvent.pointerEnter(row);
+  expect(bar).toHaveAttribute("data-shown");
+  await drain();
+  const reads = readAnchor.mock.calls.length;
+  for (let frame = 1; frame <= 3; frame++) {
+    expect(frames.size).toBe(1);
+    advanceFrame();
+    await drain();
+    expect(readAnchor).toHaveBeenCalledTimes(reads + frame);
+  }
+  // The frame after it settles realigns at the resting position, then stops.
+  slide.playState = "finished";
+  advanceFrame();
+  await drain();
+  expect(readAnchor).toHaveBeenCalledTimes(reads + 4);
+  expect(frames.size).toBe(0);
+
+  // Motion starting or ending on an ancestor while revealed realigns; an
+  // unbounded animation, or one inside the toolbar, never polls.
+  slide = { playState: "running", endTime: Number.POSITIVE_INFINITY };
+  for (const type of ["transitionrun", "animationstart", "transitionend"]) {
+    fireEvent(scroller, new Event(type, { bubbles: true }));
+    expect(frames.size).toBe(1);
+    advanceFrame();
+    expect(frames.size).toBe(0);
+  }
+  expect(readAnchor).toHaveBeenCalledTimes(reads + 7);
+  slide = { playState: "running", endTime: 200 };
+  fireEvent(
+    screen.getByRole("button", { name: "Picker", hidden: true }),
+    new Event("transitionrun", { bubbles: true }),
+  );
+  expect(frames.size).toBe(0);
+  fireEvent(scroller, new Event("transitionrun", { bubbles: true }));
+  advanceFrame();
+  expect(frames.size).toBe(1);
+  slide = undefined;
+  advanceFrame();
+  expect(frames.size).toBe(0);
+  expect(readAnchor).toHaveBeenCalledTimes(reads + 9);
 });
 
 it("suppresses actions outside a modal without relying on pointer or focus movement", async () => {

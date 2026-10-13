@@ -85,10 +85,7 @@ need their own validation.
   a value the dev server would reject is recorded as `null`. To profile in
   another Vite mode, pass it as `--mode <mode>` so the manifest follows it.
 - `just desktop [args...]`: install locked dependencies and forward arguments to
-  Tauri, e.g. `just desktop --port 1431 --no-watch`. Before launching, the adapter
-  builds the pinned agent runtime when missing/outdated, or verifies and reuses it.
-  A preparation failure stops launch; help does not prepare resources.
-  The desktop adapter consumes
+  Tauri, e.g. `just desktop --port 1431 --no-watch`. The desktop adapter consumes
   `--port N` or `--port=N` to set both Vite's port and Tauri's development URL;
   Tauri's own `--port` is for its static-file server, not Vite. Without this flag,
   the adapter derives a stable port from the worktree path (the same derivation
@@ -153,8 +150,7 @@ into a new worktree. Native dependencies are fetched by Cargo as needed into the
 shared `~/.cargo`. Each worktree compiles into its own `target/`, overriding any
 user-level `target-dir`, so its app and bundled resources always match its sources;
 remove stale worktrees (or run `bin/cargo clean` in them) to reclaim that space.
-The pinned agent runtime is built once per clone and reused by worktrees with the
-same pin and toolchain. Native compilation still takes time in each new worktree. Parallel worktrees normally need
+Native compilation still takes time in each new worktree. Parallel worktrees normally need
 no port flags: each derives a stable default from its path. Pass `--port` if paths
 collide, the default is occupied, or you run a second instance from one checkout;
 ports must be integers from 1 to 65535. Browser dev

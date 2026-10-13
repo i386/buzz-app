@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+import "../../../tests/sonner-dom";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import {
   act,
@@ -268,6 +269,7 @@ it("a report notice expiring behind the image viewer keeps the row pinned for th
   await act(async () => settle());
   const notice = () =>
     screen.queryByText("Report submitted to community moderators");
+  await act(() => vi.advanceTimersByTimeAsync(0));
   expect(notice()).not.toBeNull();
   const thumbnail = within(row).getByRole("link", {
     name: "Open image attachment",
@@ -275,6 +277,7 @@ it("a report notice expiring behind the image viewer keeps the row pinned for th
   fireEvent.click(thumbnail);
   await act(() => vi.advanceTimersByTimeAsync(50));
   const dialog = screen.getByRole("dialog", { name: "Image attachment" });
+  await act(() => vi.advanceTimersByTimeAsync(0));
   expect(notice()).not.toBeNull();
   await act(() => vi.advanceTimersByTimeAsync(5000));
   expect(notice()).toBeNull();

@@ -36,6 +36,12 @@ type Props = {
   tools: ContributionReader<ComposerTool>;
   inline: ContributionReader<InlineRenderer>;
 };
+/**
+ * Who reacted is the pill's primary answer and people scan several pills in a
+ * row, so the first hover opens quickly (as Slack does); once a preview is
+ * open, moving along the row switches previews immediately.
+ */
+export const REACTION_PREVIEW_DELAY_MS = 100;
 const noSubscribe = () => () => {};
 const noOperations = Object.freeze([]);
 const empty = () => noOperations;
@@ -338,6 +344,7 @@ export function MessageReactions(
 ) {
   const active = useConversationPresentation();
   const { row, session, scope, tools } = props;
+  const reactions = row.reactions;
   const action = useReactionAction(props);
   const catalog = useSyncExternalStore(
     session.emoji.subscribe,
@@ -369,7 +376,7 @@ export function MessageReactions(
       }}
     >
       {active &&
-        row.reactions.map((reaction, index) => {
+        reactions.map((reaction, index) => {
           const key = JSON.stringify([reaction.content, reaction.emoji?.url]);
           const slideFrom =
             preview?.key === key ? preview.fromIndex : preview?.index;
@@ -389,7 +396,9 @@ export function MessageReactions(
               unavailable={action.disabled}
               toggle={action.toggle}
               onFocusedRemoval={props.onFocusedRemoval}
-              previewDelay={pointerInRow && preview ? 0 : 1200}
+              previewDelay={
+                pointerInRow && preview ? 0 : REACTION_PREVIEW_DELAY_MS
+              }
               previewOpen={preview?.key === key}
               previewSlide={previewSlide}
               onPreviewChange={(open) =>
@@ -411,7 +420,7 @@ export function MessageReactions(
             />
           );
         })}
-      {active && row.reactions.length > 0 && !props.disabled && (
+      {active && reactions.length > 0 && !props.disabled && (
         <span
           className={styles.inlineReactionTool}
           data-testid="inline-add-reaction"

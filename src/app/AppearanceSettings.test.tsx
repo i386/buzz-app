@@ -39,7 +39,7 @@ it("hidden settings do not portal errors; returning retains both save recovery a
   const view = render(content(false));
   expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
   view.rerender(content(true));
-  expect(screen.getAllByRole("dialog")).toHaveLength(2);
+  await waitFor(() => expect(screen.getAllByRole("dialog")).toHaveLength(2));
   view.rerender(content(false));
   await waitFor(() =>
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument(),
@@ -48,7 +48,7 @@ it("hidden settings do not portal errors; returning retains both save recovery a
   view.rerender(content(true));
   write.mockRestore();
   fireEvent.click(
-    screen.getByRole("button", { name: "Retry saving appearance" }),
+    await screen.findByRole("button", { name: "Retry saving appearance" }),
   );
   fireEvent.click(
     screen.getByRole("button", { name: "Retry saving interface size" }),
@@ -76,7 +76,7 @@ it("retry saves the System choice even when its current palette is light", async
   );
   expect(screen.getByRole("radio", { name: "System" })).toBeChecked();
   fireEvent.click(
-    screen.getByRole("button", { name: "Retry saving appearance" }),
+    await screen.findByRole("button", { name: "Retry saving appearance" }),
   );
   expect(write).toHaveBeenLastCalledWith("buzz-appearance.v1", "system");
   expect(localStorage.getItem("buzz-appearance.v1")).toBe("system");

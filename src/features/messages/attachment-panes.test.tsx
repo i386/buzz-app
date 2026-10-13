@@ -247,9 +247,9 @@ it.each([false, true])(
       await waitFor(() =>
         expect(
           within(form).getByRole("status", { name: "" }),
-        ).toHaveTextContent("notes.txt: 1 KB · Queued"),
+        ).toHaveTextContent("notes.txt: 1 KB · Ready"),
       );
-      expect(h.upload).not.toHaveBeenCalled();
+      expect(h.upload).toHaveBeenCalledTimes(1);
     }
     expect(other).not.toHaveBeenCalled();
   },
@@ -310,15 +310,15 @@ it.each([false, true])(
       await waitFor(() =>
         expect(
           within(pane).getByRole("status", { name: "" }),
-        ).toHaveTextContent("notes.txt: 1 KB · Queued"),
+        ).toHaveTextContent("notes.txt: 1 KB · Ready"),
       );
-      expect(h.upload).not.toHaveBeenCalled();
+      expect(h.upload).toHaveBeenCalledTimes(1);
     }
     expect(other).not.toHaveBeenCalled();
   },
 );
 
-it("announces queued files, then background preparation and upload, while editor focus stays put", async () => {
+it("announces eager preparation, then background upload after Send, while editor focus stays put", async () => {
   const h = await fixture();
   const header = deferred<ArrayBuffer>();
   const upload = deferred<typeof h.uploaded>();
@@ -343,7 +343,7 @@ it("announces queued files, then background preparation and upload, while editor
   const status = screen.getByRole("status", { name: "" });
   expect(status).toHaveAttribute("aria-live", "polite");
   expect(status).toHaveAttribute("aria-atomic", "true");
-  expect(status).toHaveTextContent("notes.txt: 1 KB · Queued");
+  expect(status).toHaveTextContent("notes.txt: 1 KB · Preparing…");
   expect(editor).toHaveFocus();
   const send = screen.getByRole("button", { name: "Send message" });
   expect(send).toBeEnabled();

@@ -4,12 +4,14 @@ const RETRY_WINDOW = 7 * 24 * 60 * 60 * 1000 - 5 * 60 * 1000;
 const UUID =
   /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 
+export type RegistrationIntent = Readonly<{ storageKey: string; key: string }>;
+
 /** Persist only the intent, never the credential or owner proof. */
 export function registrationIntent(
   target: string,
   subject: string,
   name: string,
-) {
+): RegistrationIntent {
   const storageKey = PREFIX + JSON.stringify([target, subject, name]);
   let saved: { key: string; createdAt: number } | null;
   try {
@@ -31,7 +33,7 @@ export function registrationIntent(
       throw new Error(
         "This pending creation cannot be retried safely. Check the agent list before creating with a different name.",
       );
-    return { storageKey, key: saved.key as string };
+    return { storageKey, key: saved.key };
   }
   const key = crypto.randomUUID();
   try {
@@ -44,7 +46,7 @@ export function registrationIntent(
   return { storageKey, key };
 }
 
-export function clearRegistration(intent: { storageKey: string; key: string }) {
+export function clearRegistration(intent: RegistrationIntent) {
   try {
     const saved = JSON.parse(localStorage.getItem(intent.storageKey) ?? "null");
     if (saved?.key === intent.key) localStorage.removeItem(intent.storageKey);

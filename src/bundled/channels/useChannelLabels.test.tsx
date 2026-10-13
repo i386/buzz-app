@@ -3,6 +3,7 @@ import { act, createElement } from "react";
 import { createRoot } from "react-dom/client";
 import { useChannelLabels } from "./useChannelLabels";
 import { useChannelList } from "../../features/relay/react";
+import { bindNames } from "../../features/identity-names/service";
 import { createRelaySession } from "../../features/relay/session";
 import type { ChannelSummary } from "../../features/relay/contracts";
 import {
@@ -182,6 +183,66 @@ it.each([
     }
   },
 );
+
+it("resolves DM participants once per label pass through one scope per channel", async () => {
+  const dm: ChannelSummary = {
+    id: "dm",
+    channelType: "dm",
+    name: "dm",
+    participants: ["alice", "bob"],
+  };
+  let roster = [dm];
+  const queries = {
+    snapshot: () => new Map(),
+    subscribe: () => () => {},
+    ensure: () => Promise.resolve(),
+  } as unknown as import("../../features/relay/profile-directory").ProfileQueries;
+  const provider = {
+    id: "spy",
+    scope: vi.fn(() => (pubkey: string) => ({ name: pubkey.toUpperCase() })),
+    activate: () => undefined,
+  };
+  const names = bindNames(
+    {
+      profiles: queries,
+      agentLibrary: {
+        snapshot: () => ({ status: "ready", definitions: [], identities: [] }),
+        subscribe: () => () => {},
+        refresh: async () => {},
+        retain: () => () => {},
+      },
+    },
+    { snapshot: () => [provider], subscribe: () => () => {} },
+  );
+  const resolve = vi.spyOn(names, "resolve");
+  let labels: readonly ChannelSummary[] = [];
+  function Probe() {
+    labels = useChannelLabels(roster, queries, names).channels;
+    return null;
+  }
+  const root = createRoot(container());
+  try {
+    await act(async () => root.render(createElement(Probe)));
+    const first = labels[0];
+    expect(first?.name).toBe("ALICE, BOB");
+    expect(resolve).toHaveBeenCalledTimes(2);
+    expect(provider.scope).toHaveBeenCalledTimes(1);
+    // An unrelated re-render with the same roster resolves nothing.
+    await act(async () => root.render(createElement(Probe)));
+    expect(labels[0]).toBe(first);
+    expect(resolve).toHaveBeenCalledTimes(2);
+    // A replaced list with unchanged channels (one per incoming message)
+    // re-resolves each participant but reuses the channel's candidate scope.
+    roster = [...roster];
+    await act(async () => root.render(createElement(Probe)));
+    expect(labels[0]).toBe(first);
+    expect(resolve).toHaveBeenCalledTimes(4);
+    expect(provider.scope).toHaveBeenCalledTimes(1);
+  } finally {
+    await act(async () => root.unmount());
+    names.dispose();
+  }
+});
 
 it("retains a labelled DM across roster and profile recomputations until its source or name changes", async () => {
   const dm: ChannelSummary = {

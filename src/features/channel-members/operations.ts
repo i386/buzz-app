@@ -1,5 +1,4 @@
-import { MembershipChanged, type MemberAdditionIntent } from "./members";
-import type { AgentControl } from "../agents/control";
+import type { MemberAdditionIntent } from "./members";
 import type { Delivery, LocalEvents } from "../relay/outbox";
 
 type Addition = Readonly<{
@@ -8,7 +7,6 @@ type Addition = Readonly<{
   pending: boolean;
   confirmed: boolean;
   error?: string;
-  removed?: boolean;
 }>;
 
 /** Session-owned continuation and recovery; closing a view never cancels intent. */
@@ -19,24 +17,11 @@ export function createMemberAdditions(
     pubkey: string,
     intent: MemberAdditionIntent,
   ) => Promise<void>,
-  start: (
-    channelId: string,
-    pubkey: string,
-    control: AgentControl | undefined,
-    retryStart: boolean,
-  ) => Promise<void>,
   receipts?: LocalEvents,
 ) {
   let snapshot: readonly Addition[] = [];
   const listeners = new Set<() => void>();
-  const pending = new Map<
-    string,
-    {
-      promise: Promise<void>;
-      startAgent: boolean;
-      control: AgentControl | undefined;
-    }
-  >();
+  const pending = new Map<string, Promise<void>>();
   const intents = new Map<string, MemberAdditionIntent>();
   const stopReceipts = trackMemberAdditionReceipts(receipts, () =>
     intents.values(),
@@ -63,24 +48,12 @@ export function createMemberAdditions(
         listeners.delete(listener);
       };
     },
-    add(
-      channelId: string,
-      pubkey: string,
-      control?: AgentControl,
-      options: { startAgent?: boolean } = {},
-    ): Promise<void> {
+    add(channelId: string, pubkey: string): Promise<void> {
       if (signal.aborted)
         return Promise.reject(new Error("The community connection closed."));
       const key = JSON.stringify([channelId, pubkey]);
       const existing = pending.get(key);
-      if (existing) {
-        if (options.startAgent !== false) {
-          existing.startAgent = true;
-          existing.control = control ?? existing.control;
-        }
-        return existing.promise;
-      }
-      const request = { startAgent: options.startAgent !== false, control };
+      if (existing) return existing;
       const matches = (item: Addition) =>
         item.channelId === channelId && item.pubkey === pubkey;
       const previous = snapshot.find(matches);
@@ -97,15 +70,11 @@ export function createMemberAdditions(
       const operation = Promise.resolve()
         .then(async () => {
           signal.throwIfAborted();
-          const retryStart = confirmed;
           if (!confirmed) {
             await add(channelId, pubkey, intent);
             confirmed = true;
           }
           signal.throwIfAborted();
-          // Mention sends wake agents through the confirmed outgoing message.
-          if (request.startAgent)
-            await start(channelId, pubkey, request.control, retryStart);
           update();
         })
         .catch((error: unknown) => {
@@ -113,8 +82,7 @@ export function createMemberAdditions(
             channelId,
             pubkey,
             pending: false,
-            confirmed: error instanceof MembershipChanged ? false : confirmed,
-            removed: error instanceof MembershipChanged,
+            confirmed,
             error:
               error instanceof Error
                 ? error.message
@@ -125,8 +93,7 @@ export function createMemberAdditions(
         .finally(() => {
           pending.delete(key);
         });
-      const entry = Object.assign(request, { promise: operation });
-      pending.set(key, entry);
+      pending.set(key, operation);
       update({ channelId, pubkey, pending: true, confirmed });
       return operation;
     },

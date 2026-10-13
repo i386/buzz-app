@@ -18,22 +18,6 @@ if (
 const port = values.port === undefined ? undefined : Number(values.port);
 
 const help = forwarded.some((arg) => arg === "--help" || arg === "-h");
-// Prepare resources before Tauri can compile or observe an already-running Vite.
-// Its dev-server readiness timeout must not include a cold runtime build.
-if (!help) {
-  const prepared = spawnSync(
-    process.execPath,
-    // Local-only, so skip Goose's size optimizations; packaged builds keep them.
-    [
-      fileURLToPath(new URL("./build-agent-runtime.mjs", import.meta.url)),
-      "--dev",
-    ],
-    { stdio: "inherit" },
-  );
-  if (prepared.error) console.error(prepared.error.message);
-  if (prepared.signal) process.kill(process.pid, prepared.signal);
-  if (prepared.status !== 0) process.exit(prepared.status ?? 1);
-}
 const root = fileURLToPath(new URL("../", import.meta.url));
 const config = desktopOverlay(root);
 // Tauri's own --port controls its static-file server, not our Vite server.

@@ -70,6 +70,9 @@ import { SwitchPreferenceRow } from "../../../../src/shared/design-system/ui/Swi
 import { Accordion } from "../../../../src/shared/design-system/ui/Accordion";
 
 import { Avatar } from "../../../../src/shared/design-system/ui/Avatar";
+import { AvatarStack } from "../../../../src/shared/design-system/ui/AvatarStack";
+import { ShimmerText } from "../../../../src/shared/design-system/ui/ShimmerText";
+import { TypingDots } from "../../../../src/shared/design-system/ui/TypingDots";
 import { InlineChip } from "../../../../src/shared/design-system/ui/InlineChip";
 import { Button } from "../../../../src/shared/design-system/ui/Button";
 import { IconButton } from "../../../../src/shared/design-system/ui/IconButton";
@@ -207,6 +210,92 @@ function Specimen({
   );
 }
 
+function ShimmerTextSpecimen() {
+  return (
+    <div className="component-specimen-row">
+      <Specimen prop="active (default)">
+        <span className="text-body-sm">
+          <ShimmerText>Bash</ShimmerText>
+        </span>
+      </Specimen>
+      <Specimen prop="active={false}">
+        <span className="text-body-sm">
+          <ShimmerText active={false}>Finished</ShimmerText>
+        </span>
+      </Specimen>
+    </div>
+  );
+}
+
+function TypingDotsSpecimen() {
+  const [state, setState] = useState<"waiting" | "working">("waiting");
+  return (
+    <div className="component-specimen-stack">
+      <div className="component-specimen-row">
+        <Specimen prop='state="waiting"'>
+          <span className="flex items-center gap-2 text-body">
+            <TypingDots state="waiting" /> Received · waiting to start
+          </span>
+        </Specimen>
+        <Specimen prop='state="working" (default)'>
+          <span className="flex items-center gap-2 text-body">
+            <TypingDots /> Working
+          </span>
+        </Specimen>
+      </div>
+      <ExamplePreview
+        label="Activity transition"
+        code={'<TypingDots state="waiting" />\n<TypingDots state="working" />'}
+      >
+        <div className="component-specimen-stack">
+          <span
+            role="status"
+            aria-label="Example activity"
+            className="flex items-center gap-2 text-body"
+          >
+            <TypingDots state={state} />
+            {state === "waiting" ? "Received · waiting to start" : "Working"}
+          </span>
+          <Button
+            size="sm"
+            onClick={() =>
+              setState(state === "waiting" ? "working" : "waiting")
+            }
+          >
+            {state === "waiting" ? "Start work" : "Reset to waiting"}
+          </Button>
+        </div>
+      </ExamplePreview>
+    </div>
+  );
+}
+
+function AvatarStackSpecimen() {
+  const items = [
+    { id: "alex", name: "Alex", shape: "circle" as const },
+    { id: "brain", name: "Brain", shape: "squircle" as const },
+    { id: "casey", name: "Casey", shape: "circle" as const },
+    { id: "helper", name: "Helper", shape: "squircle" as const },
+  ];
+  return (
+    <div className="component-specimen-row">
+      <Button
+        size="xs"
+        variant="subtle"
+        aria-label="Alex, Brain, Casey, and Helper"
+      >
+        <AvatarStack items={items} />
+      </Button>
+      <Button
+        variant="ghost"
+        aria-label="Thread with Alex, Brain, Casey, and Helper"
+      >
+        <AvatarStack items={items} size="small" /> 4 replies
+      </Button>
+    </div>
+  );
+}
+
 function AvatarSpecimen() {
   return (
     <div className="component-specimen-stack">
@@ -279,7 +368,7 @@ function AvatarSpecimen() {
       <SpecimenGroup
         label="Status badge and rounded cutout"
         code={`<div className="flex flex-wrap items-center gap-4">
-  {(["small", "default", "large"] as const).map((size) => (
+  {(["compact", "small", "default", "large"] as const).map((size) => (
 
       <Avatar
         src={avatarUrl}
@@ -312,7 +401,7 @@ function AvatarSpecimen() {
 </div>`}
       >
         <div className="component-specimen-row">
-          {(["small", "default", "large"] as const).map((size) => (
+          {(["compact", "small", "default", "large"] as const).map((size) => (
             <Specimen key={size} prop={`${size} · online`}>
               <Avatar
                 src={avatarUrl}
@@ -347,7 +436,7 @@ function AvatarSpecimen() {
       <SpecimenGroup
         label="Agent shape (proposed)"
         code={`<div className="flex flex-wrap items-center gap-4">
-  {(["small", "default", "large"] as const).map((size) => (
+  {(["compact", "small", "default", "large"] as const).map((size) => (
 
       <Avatar
         src={avatarUrl}
@@ -385,7 +474,7 @@ function AvatarSpecimen() {
 </div>`}
       >
         <div className="component-specimen-row">
-          {(["small", "default", "large"] as const).map((size) => (
+          {(["compact", "small", "default", "large"] as const).map((size) => (
             <Specimen key={size} prop={`squircle · ${size} · online`}>
               <Avatar
                 src={avatarUrl}
@@ -1815,6 +1904,9 @@ export const COMPONENT_SPECIMENS: Record<string, () => ReactNode> = {
   button: ButtonSpecimen,
   "icon-button": IconButtonSpecimen,
   avatar: AvatarSpecimen,
+  "avatar-stack": AvatarStackSpecimen,
+  "shimmer-text": ShimmerTextSpecimen,
+  "typing-dots": TypingDotsSpecimen,
   "preview-card": PreviewCardSpecimen,
   "inline-chip": InlineChipSpecimen,
   "full-page-surface": FullPageSurfaceSpecimen,

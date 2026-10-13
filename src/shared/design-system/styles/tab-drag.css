@@ -1,0 +1,49 @@
+@layer components {
+  /* Panel Swap's title pill and insertion line, shared with product tabs. */
+  .buzz-tab-drag-title {
+    position: fixed;
+    top: 0;
+    left: 0;
+    z-index: 1000;
+    pointer-events: none;
+    box-sizing: border-box;
+    border-radius: var(--radius-pill);
+    padding: var(--space-1) var(--space-3);
+    background: var(--affordance-accent);
+    color: var(--text-primary);
+    opacity: 0.85;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    user-select: none;
+  }
+  .buzz-tab-drag-insertion {
+    position: fixed;
+    z-index: 1000;
+    pointer-events: none;
+    width: calc(var(--space-1) / 2 + 1px);
+    transform: translateX(-50%);
+    border-radius: var(--radius-pill);
+    background: var(--border-accent);
+  }
+  .buzz-tab-drag-edge {
+    position: fixed;
+    z-index: 1000;
+    pointer-events: none;
+    width: calc(var(--space-1) / 2);
+    height: var(--space-6);
+    transform: translate(-100%, -50%);
+    border-radius: var(--radius-pill);
+    background: var(--affordance-prominent);
+  }
+  .buzz-tabs-tab[data-draggable] {
+    cursor: grab;
+  }
+}
+@layer utilities {
+  html[data-tab-dragging],
+  html[data-tab-dragging] * {
+    cursor: grabbing;
+    user-select: none;
+  }
+}

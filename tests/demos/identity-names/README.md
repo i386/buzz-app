@@ -103,8 +103,8 @@ change. Channel references are not identity naming surfaces.
 - Vite source app, not a packaged desktop binary. All layout and name rendering
   use production components. The server substitutes only transport/control data
   and exposes services to capture scripts; it does not replace the naming policy.
-- Native managed-agent controls are modeled. Save/start/import cannot affect the
-  machine. Their browser screenshots do not establish native process behavior.
+- The local agent list is modeled. Nothing runs or is saved on the machine, so
+  its browser screenshots do not establish native process behavior.
 - Browser notifications are recorded at the Notification API boundary. No fake
   OS banner is drawn. A real OS notification screenshot remains a manual check.
 - Presence/read synchronization and some unrelated host operations are not

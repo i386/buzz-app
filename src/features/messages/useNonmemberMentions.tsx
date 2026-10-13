@@ -23,6 +23,7 @@ export function useNonmemberMentions(
   const [pending, setPending] = useState<Pending>();
   const adding = useRef(false);
   const safeAction = useRef<HTMLButtonElement>(null);
+  const inviteAction = useRef<HTMLButtonElement>(null);
   const channel = session.channels
     .list()
     .channels.find((item) => item.id === channelId);
@@ -40,9 +41,7 @@ export function useNonmemberMentions(
     try {
       for (const person of request.people) {
         check();
-        await session.memberAdditions.add(channelId, person.pubkey, undefined, {
-          startAgent: false,
-        });
+        await session.memberAdditions.add(channelId, person.pubkey);
       }
       check();
       request.finish([]);
@@ -84,7 +83,7 @@ export function useNonmemberMentions(
         title="Mention people outside this channel?"
         description={pending && describe(pending.people, canAdd)}
         preventClose={!!pending?.busy}
-        initialFocus={safeAction}
+        initialFocus={canAdd ? inviteAction : safeAction}
         finalFocus={() => {
           restoreFocus();
           return false;
@@ -103,6 +102,7 @@ export function useNonmemberMentions(
             </Button>
             {canAdd && (
               <Button
+                ref={inviteAction}
                 type="button"
                 variant="prominent"
                 disabled={pending?.busy}

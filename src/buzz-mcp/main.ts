@@ -6,7 +6,7 @@
 import { fromJsonSchema, McpServer } from "@modelcontextprotocol/server";
 import { serveStdio } from "@modelcontextprotocol/server/stdio";
 import { nodeClient } from "./node";
-import { errorText } from "./rpc";
+import { content, errorText } from "./rpc";
 import { callTool, TOOLS } from "./tools";
 
 const env = (name: string) => {
@@ -39,8 +39,9 @@ serveStdio(() => {
       },
       async (args) => {
         try {
-          const text = await callTool(client, context, tool.name, args);
-          return { content: [{ type: "text", text }] };
+          return {
+            content: content(await callTool(client, context, tool.name, args)),
+          };
         } catch (error) {
           return {
             content: [{ type: "text", text: errorText(error) }],

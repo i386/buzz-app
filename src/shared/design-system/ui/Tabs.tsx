@@ -8,9 +8,13 @@ export type TabItem<Value extends string> = {
   value: Value;
   label: string;
   icon?: ReactNode;
+  trailing?: ReactNode;
   /** Link a retained, externally owned tab panel. */
   panelId?: string;
   onClose?: (() => void) | undefined;
+  /** Option/Alt+Shift+Arrow moves this tab one position; the caller places it. */
+  draggable?: boolean | undefined;
+  onMove?: ((delta: -1 | 1) => void) | undefined;
 };
 
 /**
@@ -33,6 +37,7 @@ export function Tabs<Value extends string>({
   items,
   label,
   onValueChange,
+  onReselect,
   trailingAction,
   variant = "chrome",
   showSelection = true,
@@ -42,10 +47,12 @@ export function Tabs<Value extends string>({
 }: {
   /** Omit only when composing an existing externally owned view. */
   renderPanel?: (value: Value) => ReactNode;
-  value: Value;
+  value: Value | null;
   items: readonly TabItem<Value>[];
   label: string;
   onValueChange: (value: Value) => void;
+  /** Opt in when activating the selected tab returns from a nested view. */
+  onReselect?: (value: Value) => void;
   trailingAction?: ReactNode;
   variant?: TabsVariant;
   /** Hide the visual selection for a single-view header; tab semantics remain. */
@@ -81,6 +88,7 @@ export function Tabs<Value extends string>({
                         </span>
                       )
                     }
+                    trailing={item.trailing}
                     selected={showSelection && item.value === value}
                     aria-current={false}
                   />
@@ -89,10 +97,26 @@ export function Tabs<Value extends string>({
               {...(item.panelId
                 ? { id: `${item.panelId}-tab`, "aria-controls": item.panelId }
                 : {})}
+              onClick={() => {
+                if (item.value === value) onReselect?.(item.value);
+              }}
               onKeyDown={(event) => {
                 if (item.onClose && event.key === "Delete") {
                   event.preventDefault();
                   item.onClose();
+                }
+                if (
+                  item.onMove &&
+                  event.altKey &&
+                  event.shiftKey &&
+                  !event.metaKey &&
+                  !event.ctrlKey &&
+                  (event.key === "ArrowLeft" || event.key === "ArrowRight")
+                ) {
+                  // Keep Base UI's arrow navigation from also moving focus.
+                  event.preventDefault();
+                  event.stopPropagation();
+                  item.onMove(event.key === "ArrowLeft" ? -1 : 1);
                 }
               }}
               className="buzz-tabs-tab"
@@ -107,6 +131,7 @@ export function Tabs<Value extends string>({
                 (showSelection && item.value === value) || undefined
               }
               data-preview={item.value === previewValue || undefined}
+              data-draggable={item.draggable || undefined}
               data-tab-value={item.value}
             >
               {variant === "workspace" && item.value === arrivalValue ? (
@@ -116,6 +141,7 @@ export function Tabs<Value extends string>({
                 <>
                   {item.icon}
                   <span>{item.label}</span>
+                  {item.trailing}
                 </>
               )}
             </BaseTabs.Tab>

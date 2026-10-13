@@ -6,11 +6,20 @@ test("avatar image controls retain their hover fill and accessible URL label", a
   page,
 }) => {
   await page.route("**/api/relay/**", (route) => route.abort());
-  await page.goto("/tests/fixtures/agent-control.html?avatars");
+  await page.goto("/tests/fixtures/profile-settings.html");
   await page
     .getByRole("button", { name: "Edit human profile", exact: true })
     .click();
-  await page.getByRole("button", { name: "Edit avatar", exact: true }).click();
+  const editAvatar = page.getByRole("button", {
+    name: "Edit avatar",
+    exact: true,
+  });
+  // The badge owns its outer box; opting into medium preserves the artwork
+  // without replacing that human/agent geometry with the new compact default.
+  await expect(editAvatar).toHaveCSS("width", "32px");
+  await expect(editAvatar).toHaveCSS("height", "32px");
+  await expect(editAvatar.locator("svg")).toHaveCSS("width", "24px");
+  await editAvatar.click();
   const dropzone = page.getByRole("button", {
     name: "Drop or browse",
     exact: true,
@@ -56,15 +65,13 @@ test("avatar image controls retain their hover fill and accessible URL label", a
 
 // Browser boundary: nested overlay hit-testing/focus, canvas image preparation,
 // lazy shadow-DOM emoji picker, and narrow viewport geometry in both engines.
-test("shared human and agent avatar upload, scoped save, publication retry and nested popup", async ({
-  page,
-}) => {
+test("human avatar upload and scoped save", async ({ page }) => {
   const artwork = await readFile(
     new URL("../fixtures/design-system/assets/avatar.png", import.meta.url),
   );
   const errors = watchPageErrors(page);
   await page.route("**/api/relay/**", (route) => route.abort());
-  await page.goto("/tests/fixtures/agent-control.html?avatars");
+  await page.goto("/tests/fixtures/profile-settings.html");
   await page
     .getByRole("button", { name: "Edit human profile", exact: true })
     .click();
@@ -123,150 +130,13 @@ test("shared human and agent avatar upload, scoped save, publication retry and n
       .getByRole("button", { name: "Your profile", exact: true })
       .locator("img"),
   ).toHaveAttribute("data-loaded", "true");
-  await page.getByRole("button", { name: "Edit agents", exact: true }).click();
-  await page
-    .getByRole("button", { name: "Reject publication", exact: true })
-    .click();
-  await page
-    .getByRole("button", { name: "Actions for Fixture agent", exact: true })
-    .click();
-  await page.getByRole("menuitem", { name: "Edit", exact: true }).click();
-  await page.getByRole("button", { name: "Edit avatar", exact: true }).click();
-  await page.getByRole("tab", { name: "Emoji", exact: true }).click();
-  const search = page.getByRole("searchbox", { name: "Search emoji" });
-  await expect(search).toBeFocused();
-  await search.fill("grinning");
-  const emoji = page.getByRole("button", { name: "😀", exact: true });
-  await expect(emoji).toHaveCSS("width", "48px");
-  await page.evaluate(() =>
-    document.documentElement.style.setProperty("--buzz-text-scale", "2"),
-  );
-  await expect(emoji).toHaveCSS("width", "96px");
-  await expect(search).toHaveValue("grinning");
-  await expect(search).toBeFocused();
-  await page.evaluate(() =>
-    document.documentElement.style.setProperty("--buzz-text-scale", "1"),
-  );
-  await expect(emoji).toHaveCSS("width", "48px");
-  await search.press("Escape");
-  await expect(search).toHaveValue("");
-  await page.evaluate(() =>
-    document.documentElement.style.setProperty("--buzz-text-scale", "2"),
-  );
-  await expect(
-    page.locator("em-emoji-picker .category button").first(),
-  ).toHaveCSS("width", "96px");
-  await expect(search).toHaveValue("");
-  await expect(search).toBeFocused();
-  await page.evaluate(() =>
-    document.documentElement.style.setProperty("--buzz-text-scale", "1"),
-  );
-  await expect(
-    page.locator("em-emoji-picker .category button").first(),
-  ).toHaveCSS("width", "48px");
-  await search.fill("brain");
-  await page.getByRole("button", { name: "🧠", exact: true }).click();
-  await expect(page.getByText("Paste an emoji", { exact: true })).toHaveCount(
-    0,
-  );
-  await expect(
-    page.getByText("Choose Done, then save your profile to apply the avatar.", {
-      exact: true,
-    }),
-  ).toHaveCount(0);
-  await page.getByRole("tab", { name: "Background", exact: true }).click();
-  await page
-    .getByRole("button", { name: "Use #476CFF background", exact: true })
-    .click();
-  await expect(
-    page.getByRole("img", { name: "Emoji avatar preview", exact: true }),
-  ).toHaveCSS("background-color", "rgb(71, 108, 255)");
-  await page
-    .getByRole("button", { name: "Use #FFF4CC background", exact: true })
-    .click();
-  await page.screenshot({
-    path: test.info().outputPath("emoji-avatar-picker.png"),
-  });
-  await page.getByRole("button", { name: "Done", exact: true }).click();
-  await page.getByRole("button", { name: "Save changes", exact: true }).click();
-  await page
-    .getByText(
-      "Settings saved; profile publication is unconfirmed. Refresh status, then retry publication below or on the agent card.",
-      { exact: true },
-    )
-    .waitFor();
-  await expect
-    .poll(() =>
-      page.evaluate(() => window.agentControlFixture.agent.profilePending),
-    )
-    .toBe(true);
-  await page.evaluate(() => window.agentControlFixture.failProfile(false));
-  await page
-    .getByRole("button", { name: "Retry profile publication", exact: true })
-    .click();
-  await page
-    .getByText("Profile published. Running work was not restarted.", {
-      exact: true,
-    })
-    .waitFor();
-  await page.getByRole("button", { name: "Edit avatar", exact: true }).click();
-  await expect(
-    page
-      .getByRole("img", { name: "Avatar preview", exact: true })
-      .locator("img"),
-  ).toHaveAttribute("data-loaded", "true");
-  await page.screenshot({ path: test.info().outputPath("agent-avatar.png") });
-  await page.keyboard.press("Escape");
-  await expect(
-    page.getByRole("button", { name: "Edit avatar", exact: true }),
-  ).toBeFocused();
-  await page.setViewportSize({ width: 390, height: 844 });
-  await page.evaluate(
-    () => (document.documentElement.dataset.colorMode = "dark"),
-  );
-  await page.getByRole("button", { name: "Edit avatar", exact: true }).click();
-  await page.getByRole("tab", { name: "Emoji", exact: true }).click();
-  await page.locator("em-emoji-picker").waitFor();
-  await page
-    .getByRole("button", { name: "Done", exact: true })
-    .scrollIntoViewIfNeeded();
-  await expect(
-    page.getByRole("button", { name: "Done", exact: true }),
-  ).toBeInViewport();
-  const bounds = await page
-    .locator("[data-buzz-ui].popover-surface")
-    .boundingBox();
-  expect(bounds.y).toBeGreaterThanOrEqual(0);
-  expect(bounds.y + bounds.height).toBeLessThanOrEqual(844);
-
-  await page.screenshot({
-    path: test.info().outputPath("agent-avatar-narrow.png"),
-  });
-  const result = await page.evaluate(() => ({
-    agent: window.agentControlFixture.agent,
-    actions: window.agentControlFixture.calls.filter(
-      (c) => c.action !== "snapshot",
-    ),
-  }));
-  expect(result.agent).toMatchObject({
-    picture: expect.stringMatching(/^https:\/\/relay.example.test\/media\//),
-    profilePending: false,
-    revision: 2,
-    runningRevision: 1,
-  });
-  expect(result.actions.map((c) => c.action)).toEqual([
-    "save",
-    "profile",
-    "profile",
-  ]);
-  expect(result.actions[0].payload.edit.picture).toBe(result.agent.picture);
   expect(errors.unexplained()).toEqual([]);
 });
 
 test("avatar custom spectrum supports dragging, keyboard hue and return focus", async ({
   page,
 }) => {
-  await page.goto("/tests/fixtures/agent-control.html?avatars");
+  await page.goto("/tests/fixtures/profile-settings.html");
   await page
     .getByRole("button", { name: "Edit human profile", exact: true })
     .click();
@@ -381,7 +251,7 @@ test("emoji picker load failure fits above the footer and retries on reopen", as
       }`,
     }),
   );
-  await page.goto("/tests/fixtures/agent-control.html?avatars");
+  await page.goto("/tests/fixtures/profile-settings.html");
   await page
     .getByRole("button", { name: "Edit human profile", exact: true })
     .click();
@@ -422,7 +292,7 @@ test("custom color and footer resize together without reversing direction", asyn
   page,
 }) => {
   await page.setViewportSize({ width: 900, height: 720 });
-  await page.goto("/tests/fixtures/agent-control.html?avatars");
+  await page.goto("/tests/fixtures/profile-settings.html");
   await page
     .getByRole("button", { name: "Edit human profile", exact: true })
     .click();
@@ -523,7 +393,7 @@ test("custom color and footer resize together without reversing direction", asyn
 test("emoji avatar artwork is centered for faces, symbols, and joined glyphs", async ({
   page,
 }) => {
-  await page.goto("/tests/fixtures/agent-control.html?avatars");
+  await page.goto("/tests/fixtures/profile-settings.html");
   const centers = await page.evaluate(async () => {
     const { paintEmojiAvatar } = await import(
       "/src/features/profiles/avatar-upload.ts"
@@ -563,7 +433,7 @@ test("emoji avatar artwork is centered for faces, symbols, and joined glyphs", a
 test("avatar picker previews pointer selections and respects reduced motion", async ({
   page,
 }) => {
-  await page.goto("/tests/fixtures/agent-control.html?avatars");
+  await page.goto("/tests/fixtures/profile-settings.html");
   await page
     .getByRole("button", { name: "Edit human profile", exact: true })
     .click();

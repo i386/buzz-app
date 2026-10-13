@@ -1,0 +1,43 @@
+.root {
+  margin-block-start: var(--space-2);
+  min-width: 0;
+  flex-shrink: 0;
+}
+.previews {
+  display: flex;
+  flex-direction: column;
+}
+/* Error dismissal is a sibling action, never a button nested in NavigationItem. */
+.row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+}
+.row > :first-child {
+  min-width: 0;
+  flex: 1;
+}
+
+/* One glanceable line each; NavigationItem's label truncation applies per line. */
+.preview {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: var(--space-1);
+}
+.preview > * {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* Errors explain what to do; keep their reason readable instead of clipped. */
+.preview[data-error] > * {
+  overflow: visible;
+  text-overflow: clip;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+.detail {
+  color: var(--text-subtle);
+}

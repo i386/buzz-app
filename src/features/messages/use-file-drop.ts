@@ -52,6 +52,7 @@ export function useFileDrop(
     };
     const over = (event: DragEvent) => {
       if (!files(event) || !owns(event)) return;
+      setDragging(enabled);
       event.preventDefault();
       if (event.dataTransfer)
         event.dataTransfer.dropEffect = enabled ? "copy" : "none";

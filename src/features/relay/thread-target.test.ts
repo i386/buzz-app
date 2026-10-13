@@ -1,5 +1,6 @@
 import { afterEach, expect, it } from "vitest";
 import { createRelaySession } from "./session";
+import { createThreadView } from "./threads";
 import { ReadError } from "./errors";
 import type { RelayEvent } from "./events";
 import type { LiveCallbacks } from "./live";
@@ -407,4 +408,385 @@ it("never retains a selected reply rejected by the shared dual-channel access ga
   h.traffic.receive([root]);
   expect(h.view.snapshot().target).toBeUndefined();
   expect(h.view.snapshot().replies).toEqual([]);
+});
+
+it("retargets a root-opened reader without reloading its history or replacing its rows", async () => {
+  const h = setup(root.id);
+  h.view.dispose();
+  h.traffic.receive([root]);
+  const view = h.session.thread("a", root.id);
+  const initial = view.refresh();
+  h.next().respond([root]);
+  await initial;
+  const before = view.snapshot();
+  const selecting = view.retarget(reply.id, new AbortController().signal);
+  expect(view.snapshot()).toBe(before);
+  const request = h.next();
+  expect(request.filters).toEqual([{ ids: [reply.id], "#h": ["a"], limit: 1 }]);
+  request.respond([reply]);
+  await flush();
+  h.next().respond([aux(40003, reply, "Retargeted reply")]);
+  await flush();
+  h.next().respond([]);
+  expect(await selecting).toBe("selected");
+  expect(view.snapshot()).toMatchObject({
+    status: "ready",
+    root: { id: root.id },
+    targetStatus: "ready",
+    target: { id: reply.id, content: "Retargeted reply" },
+  });
+  expect(view.snapshot().root).toBe(before.root);
+  expect(h.pending).toHaveLength(0);
+});
+
+it.each(["different", "unavailable", "error", "cancelled"] as const)(
+  "keeps the existing thread unchanged when retarget is %s",
+  async (outcome) => {
+    const h = setup();
+    const { loading } = await targetRead(h);
+    h.next().respond([root]);
+    await loading;
+    const before = h.view.snapshot();
+    const signal = new AbortController();
+    const unrelated = message(alice, "a", "Another root", 90);
+    const selecting = h.view.retarget(
+      outcome === "different" ? unrelated.id : "c".repeat(64),
+      signal.signal,
+    );
+    const pending = h.next();
+    if (outcome === "different") {
+      pending.respond([unrelated]);
+    } else if (outcome === "error") pending.fail(new Error("offline"));
+    else if (outcome === "cancelled") {
+      signal.abort();
+      pending.respond([reply]);
+    } else pending.respond([]);
+    expect(await selecting).toBe(outcome);
+    expect(h.view.snapshot()).toBe(before);
+    expect(h.pending).toHaveLength(0);
+  },
+);
+
+it("the newest retarget wins and access loss fences an in-flight target", async () => {
+  const h = setup();
+  h.traffic.receive([roster(relay, "a", [viewer.pubkey], 10)]);
+  const { loading } = await targetRead(h);
+  h.next().respond([root]);
+  await loading;
+  const one = message(alice, "a", "One", 3, [["e", root.id, "", "reply"]]);
+  const two = message(alice, "a", "Two", 4, [["e", root.id, "", "reply"]]);
+  const first = h.view.retarget(one.id, new AbortController().signal);
+  const stale = h.next();
+  const second = h.view.retarget(two.id, new AbortController().signal);
+  expect(stale.signal?.aborted).toBe(true);
+  stale.respond([one]);
+  await flush();
+  h.next().respond([two]);
+  await flush();
+  h.next().respond([]);
+  expect(await first).toBe("cancelled");
+  expect(await second).toBe("selected");
+  expect(h.view.snapshot().target?.id).toBe(two.id);
+  const revoked = h.view.retarget(one.id, new AbortController().signal);
+  const held = h.next();
+  h.traffic.receive([roster(relay, "a", [], 11)]);
+  expect(held.signal?.aborted).toBe(true);
+  held.respond([one]);
+  expect(await revoked).toBe("cancelled");
+  expect(h.view.snapshot().root).toBeUndefined();
+  expect(h.view.snapshot().target).toBeUndefined();
+});
+
+it("retarget during a pending history page does not strand loading or lose the page", async () => {
+  const h = setup();
+  const { loading } = await targetRead(h);
+  const sibling = message(alice, "a", "Sibling", 2, [
+    ["e", root.id, "", "reply"],
+  ]);
+  h.next().respond([root, sibling]);
+  await loading;
+  const more = h.view.loadMore();
+  const page = h.next();
+  const selection = h.view.retarget(root.id, new AbortController().signal);
+  expect(page.signal?.aborted).toBe(false);
+  h.next().respond([root]);
+  await flush();
+  h.next().respond([]);
+  expect(await selection).toBe("selected");
+  page.respond([
+    root,
+    message(alice, "a", "Later", 3, [["e", root.id, "", "reply"]]),
+  ]);
+  await more;
+  expect(h.view.snapshot().replies.some((row) => row.content === "Later")).toBe(
+    true,
+  );
+  expect(h.view.snapshot().target?.id).toBe(root.id);
+  expect(h.view.snapshot().status).toBe("ready");
+});
+
+it("a deleted new target does not replace the prior selection used by refresh", async () => {
+  const h = setup();
+  const { loading } = await targetRead(h);
+  h.next().respond([root]);
+  await loading;
+  const deleted = message(alice, "a", "Deleted", 3, [
+    ["e", root.id, "", "reply"],
+  ]);
+  const selecting = h.view.retarget(deleted.id, new AbortController().signal);
+  h.next().respond([deleted]);
+  await flush();
+  h.next().respond([aux(5, deleted)]);
+  await flush();
+  h.next().respond([]);
+  expect(await selecting).toBe("unavailable");
+  expect(h.view.snapshot().target?.id).toBe(reply.id);
+  const refresh = h.view.refresh();
+  const target = h.next();
+  expect(target.filters[0]?.ids).toEqual([reply.id]);
+  target.respond([reply]);
+  await flush();
+  h.next().respond([]);
+  await flush();
+  h.next().respond([root]);
+  await refresh;
+  expect(h.view.snapshot().target?.id).toBe(reply.id);
+});
+
+it("a held initial traversal finishes after retarget without overwriting the selection", async () => {
+  const h = setup();
+  const { loading } = await targetRead(h);
+  const page = h.next();
+  h.traffic.receive([root]);
+  const selected = h.view.retarget(root.id, new AbortController().signal);
+  h.next().respond([root]);
+  await flush();
+  h.next().respond([]);
+  expect(await selected).toBe("selected");
+  expect(h.view.snapshot().status).toBe("loading");
+  page.respond([root]);
+  await loading;
+  expect(h.view.snapshot()).toMatchObject({
+    status: "ready",
+    target: { id: root.id },
+  });
+});
+
+it("finishing an older refresh after a failed retarget keeps the previous target usable", async () => {
+  const h = setup();
+  const { loading } = await targetRead(h);
+  h.next().respond([root]);
+  await loading;
+  const refresh = h.view.refresh();
+  const oldTarget = h.next();
+  const next = h.view.retarget("c".repeat(64), new AbortController().signal);
+  h.next().respond([]);
+  expect(await next).toBe("unavailable");
+  oldTarget.respond([reply]);
+  await flush();
+  h.next().respond([]);
+  await flush();
+  h.next().respond([root]);
+  await refresh;
+  expect(h.view.snapshot()).toMatchObject({
+    status: "ready",
+    targetStatus: "ready",
+    target: { id: reply.id },
+  });
+});
+
+it("a failed retarget cannot strand a pending missing-target repair in loading", async () => {
+  const h = setup();
+  const { loading } = await targetRead(h);
+  h.next().respond([root]);
+  await loading;
+  const missing = h.view.refresh();
+  h.next().respond([]);
+  await missing;
+  expect(h.view.snapshot()).toMatchObject({
+    root: { id: root.id },
+    targetStatus: "unavailable",
+  });
+  const repair = h.view.refresh();
+  const repairingTarget = h.next();
+  expect(h.view.snapshot().targetStatus).toBe("loading");
+  const invalid = h.view.retarget("c".repeat(64), new AbortController().signal);
+  h.next().respond([]);
+  expect(await invalid).toBe("unavailable");
+  repairingTarget.respond([reply]);
+  await flush();
+  h.next().respond([]);
+  await flush();
+  h.next().respond([root]);
+  await repair;
+  expect(h.view.snapshot()).toMatchObject({
+    status: "ready",
+    targetStatus: "ready",
+    target: { id: reply.id },
+  });
+});
+
+// Exercise the session's real synchronous reconciliation, not a stubbed admission
+// callback: a bare candidate must not leak to this or another owned reader.
+it.each(["selected", "error", "cancelled"] as const)(
+  "retarget holds a new candidate out of published replies through held overlays: %s",
+  async (outcome) => {
+    const h = setup();
+    const { loading } = await targetRead(h);
+    h.next().respond([root]);
+    await loading;
+    const other = h.session.thread("a", root.id);
+    const refresh = other.refresh();
+    h.next().respond([root]);
+    await refresh;
+    const candidate = message(alice, "a", "Bare candidate", 90, [
+      ["e", root.id, "", "reply"],
+    ]);
+    const observed: string[] = [];
+    const stop = h.view.subscribe(() => {
+      const row = h.view
+        .snapshot()
+        .replies.find((row) => row.id === candidate.id);
+      if (row) observed.push(row.content);
+    });
+    const cancel = new AbortController();
+    const selecting = h.view.retarget(candidate.id, cancel.signal);
+    h.next().respond([candidate]);
+    await flush();
+    const held = h.next();
+    try {
+      expect(h.view.snapshot().target?.id).toBe(reply.id);
+      expect(
+        h.view.snapshot().replies.some((row) => row.id === candidate.id),
+      ).toBe(false);
+      expect(
+        other.snapshot().replies.some((row) => row.id === candidate.id),
+      ).toBe(false);
+      expect(observed).toEqual([]);
+      if (outcome === "error") held.fail(new Error("overlay unavailable"));
+      else if (outcome === "cancelled") {
+        cancel.abort();
+        held.respond([]);
+      } else {
+        held.respond([aux(40003, candidate, "Complete candidate")]);
+        await flush();
+        h.next().respond([]);
+      }
+      expect(await selecting).toBe(outcome);
+      if (outcome === "selected") {
+        expect(h.view.snapshot().target).toMatchObject({
+          id: candidate.id,
+          content: "Complete candidate",
+        });
+        expect(
+          other.snapshot().replies.find((row) => row.id === candidate.id)
+            ?.content,
+        ).toBe("Complete candidate");
+        expect(observed).not.toContain("Bare candidate");
+      } else {
+        expect(h.view.snapshot().target?.id).toBe(reply.id);
+        expect(
+          h.view.snapshot().replies.some((row) => row.id === candidate.id),
+        ).toBe(false);
+        expect(
+          other.snapshot().replies.some((row) => row.id === candidate.id),
+        ).toBe(false);
+        expect(observed).toEqual([]);
+      }
+    } finally {
+      cancel.abort();
+      held.respond([]);
+      await selecting;
+      stop();
+      other.dispose();
+    }
+  },
+);
+
+it.each(["finite", "live"] as const)(
+  "retarget retains %s tombstones for selection-staged edits and reactions",
+  async (delivery) => {
+    const h = setup();
+    const { loading } = await targetRead(h);
+    h.next().respond([root]);
+    await loading;
+    const other = h.session.thread("a", root.id);
+    const refresh = other.refresh();
+    h.next().respond([root]);
+    await refresh;
+    const candidate = message(alice, "a", "Original candidate", 90, [
+      ["e", root.id, "", "reply"],
+    ]);
+    const edit = aux(40003, candidate, "Withdrawn edit"),
+      reaction = aux(7, candidate, "+");
+    const withdrawn = [aux(5, edit), aux(5, reaction)];
+    const cancel = new AbortController();
+    const selecting = h.view.retarget(candidate.id, cancel.signal);
+    h.next().respond([candidate]);
+    await flush();
+    h.next().respond([edit, reaction]);
+    await flush();
+    const tombstones = h.next();
+    try {
+      expect(tombstones.filters[0]?.["#e"]).toEqual(
+        expect.arrayContaining([edit.id, reaction.id]),
+      );
+      if (delivery === "live") h.traffic.receive(withdrawn);
+      tombstones.respond(delivery === "finite" ? withdrawn : []);
+      expect(await selecting).toBe("selected");
+      expect(h.view.snapshot().target).toMatchObject({
+        id: candidate.id,
+        content: candidate.content,
+        reactions: [],
+      });
+      // Shared admission must carry the deletion to a reader that never saw it.
+      expect(
+        other.snapshot().replies.find((row) => row.id === candidate.id),
+      ).toMatchObject({ content: candidate.content, reactions: [] });
+    } finally {
+      cancel.abort();
+      tombstones.respond([]);
+      await selecting;
+      other.dispose();
+    }
+  },
+);
+
+it("a candidate rejected by final admission never establishes a thread identity", async () => {
+  const thread = createThreadView({
+    channelId: "a",
+    messageId: reply.id,
+    relayAuthor: relay.pubkey,
+    reader: { read: async (filters) => (filters[0]?.ids ? [reply] : []) },
+    seed: undefined,
+    local: undefined,
+    canAccess: () => true,
+    // Pure read visibility can permit local-only evidence; final remote
+    // admission is still authoritative and may reject this candidate.
+    visible: (events) => events,
+    admit: () => [],
+    notify: (listener) => listener(),
+    exact: true,
+  });
+  try {
+    await thread.view.refresh();
+    expect(thread.view.snapshot()).toMatchObject({
+      targetStatus: "unavailable",
+      root: undefined,
+      replies: [],
+    });
+    thread.receive([
+      root,
+      message(alice, "a", "Later live reply", 10002, [
+        ["e", root.id, "", "reply"],
+      ]),
+    ]);
+    expect(thread.view.snapshot()).toMatchObject({
+      root: undefined,
+      target: undefined,
+      replies: [],
+    });
+  } finally {
+    thread.view.dispose();
+  }
 });

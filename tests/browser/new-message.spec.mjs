@@ -14,9 +14,9 @@ import { watchPageErrors } from "./page-errors.mjs";
 const test = base.extend({
   developmentReact: [false, { scope: "worker" }],
   pluginFixtures: [false, { scope: "worker" }],
-  agentManagement: [false, { scope: "worker" }],
   companionFixture: [false, { scope: "worker" }],
   pairingFixture: [false, { scope: "worker" }],
+  localAgentActivity: [false, { scope: "worker" }],
   compiledApp: [buildApp, { scope: "worker" }],
   app: async ({ compiledApp, page, context }, use) => {
     const key = generateSecretKey(),
@@ -388,7 +388,7 @@ test("empty compose, keyboard selection, pagination, removal effects, retry, the
       .getByRole("textbox", { name: "New message", exact: true })
       .locator("[data-placeholder]"),
   ).toHaveAttribute("data-placeholder", "");
-  for (const name of ["Mention a member", "Insert emoji"]) {
+  for (const name of ["Mention a member", "Emoji and GIFS"]) {
     const tool = page.getByRole("button", { name, exact: true });
     await expect(tool).toBeDisabled();
     await expect(tool).toHaveCSS("background-color", "rgba(0, 0, 0, 0)");

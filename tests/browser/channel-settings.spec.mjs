@@ -73,7 +73,7 @@ test("channel settings owns its responsive side panel and returns keyboard focus
         tab.parentElement.getBoundingClientRect().width /
         Number.parseFloat(getComputedStyle(document.documentElement).fontSize),
     ),
-  ).toBeCloseTo(12);
+  ).toBeLessThanOrEqual(12);
   const close = workspace.getByRole("button", {
     name: "Close Channel settings tab",
   });

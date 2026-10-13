@@ -41,7 +41,13 @@ export type TranscriptItem =
       sections: PromptSection[];
       steer: boolean;
     })
-  | (Base & { type: "message" | "thought"; text: string; messageId?: string })
+  | (Base & {
+      type: "message" | "thought";
+      text: string;
+      messageId?: string;
+      /** Posted to Buzz, rather than said only in the session. */
+      posted?: boolean;
+    })
   | ToolItem
   | (Base & { type: "plan"; entries: { content: string; status: string }[] })
   | (Base & { type: "status"; text: string });
@@ -113,7 +119,7 @@ export function promptSections(text: string): PromptSection[] {
 }
 
 /** The triggering Buzz event(s): author label and content, without tags. */
-function promptMessage(sections: PromptSection[]) {
+export function promptMessage(sections: PromptSection[]) {
   const events = sections.filter(
     (section) => section.tag === "buzz-event" || section.tag === "buzz-events",
   );

@@ -359,6 +359,20 @@ export const ROLE_GROUPS: RoleGroup[] = [
         status: "core",
       },
       {
+        token: "icon-status-progress",
+        variable: "--icon-status-progress",
+        pointsAt: "amber-10 light / amber-10 dark",
+        use: "In-progress task icons, paired with a distinct shape and accessible status label. Not text.",
+        status: "core",
+      },
+      {
+        token: "icon-status-complete",
+        variable: "--icon-status-complete",
+        pointsAt: "green-10 light / green-10 dark",
+        use: "Completed task icons, paired with a checkmark and accessible status label. Not text.",
+        status: "core",
+      },
+      {
         token: "text-link",
         variable: "--text-link",
         pointsAt: "blue-11 light / blue-11 dark",
@@ -1021,7 +1035,7 @@ export const TYPE_ROLES: TypeRole[] = [
     lineHeight: "20px",
     tracking: "-0.005em",
     weight: "400",
-    use: "Reading text and messages.",
+    use: "Interface reading text.",
     status: "core",
   },
   {
@@ -1032,6 +1046,16 @@ export const TYPE_ROLES: TypeRole[] = [
     tracking: "-0.0025em",
     weight: "400",
     use: "Supporting or dense reading text.",
+    status: "core",
+  },
+  {
+    token: "text-message",
+    pointsAt: "body/message",
+    size: "14px",
+    lineHeight: "1.625 (22.75px at default)",
+    tracking: "-0.0025em",
+    weight: "400",
+    use: "Sent and received message prose, with relaxed line spacing.",
     status: "core",
   },
   {

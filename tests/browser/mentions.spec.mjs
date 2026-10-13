@@ -125,11 +125,11 @@ test("actual composer selects namesakes by exact key, publishes channel/reply ta
     };
     const order = () =>
       page
-        .getByRole("button", { name: /^(Mention a member|Insert emoji)$/ })
+        .getByRole("button", { name: /^(Mention a member|Emoji and GIFS)$/ })
         .evaluateAll((buttons) =>
           buttons.map((button) => button.getAttribute("aria-label")),
         );
-    await expect.poll(order).toEqual(["Mention a member", "Insert emoji"]);
+    await expect.poll(order).toEqual(["Mention a member", "Emoji and GIFS"]);
     // Browser-only contract: native shadow search and React search share their
     // shape, typography, clear target and alignment in both appearance modes.
     const searchAppearance = async (field) => {
@@ -197,7 +197,7 @@ test("actual composer selects namesakes by exact key, publishes channel/reply ta
       await mention.getByRole("searchbox").fill("Honey");
       const filled = await searchAppearance(mention.locator(".search-field"));
       await page
-        .getByRole("button", { name: "Insert emoji", exact: true })
+        .getByRole("button", { name: "Emoji and GIFS", exact: true })
         .click();
       const emojiField = page.locator("em-emoji-picker .search");
       await expect(emojiField.getByRole("searchbox")).toBeFocused();
@@ -276,7 +276,7 @@ test("actual composer selects namesakes by exact key, publishes channel/reply ta
       document.documentElement.dataset.colorMode = "dark";
     });
     await page
-      .getByRole("button", { name: "Insert emoji", exact: true })
+      .getByRole("button", { name: "Emoji and GIFS", exact: true })
       .click();
     const search = page.getByRole("searchbox", { name: "Search" });
     await expect(page.locator("em-emoji-picker #root")).toHaveAttribute(
@@ -319,7 +319,7 @@ test("actual composer selects namesakes by exact key, publishes channel/reply ta
       exact: true,
     });
     const emojiTool = page.getByRole("button", {
-      name: "Insert emoji",
+      name: "Emoji and GIFS",
       exact: true,
     });
     await mentionTool.focus();
@@ -434,7 +434,7 @@ test("actual composer selects namesakes by exact key, publishes channel/reply ta
     await page.evaluate(() =>
       window.mentionFixture.change("enable", "buzz.mentions"),
     );
-    await expect.poll(order).toEqual(["Mention a member", "Insert emoji"]);
+    await expect.poll(order).toEqual(["Mention a member", "Emoji and GIFS"]);
     await choose(keys.first);
     await page
       .getByRole("button", { name: "Remove first Honey", exact: true })
@@ -736,7 +736,9 @@ test("namesake recipient qualifiers remain visible on touch after live name chan
     await page.screenshot({
       path: test.info().outputPath("recipient-qualifiers-touch.png"),
     });
-    await input.evaluate((el) => el.setSelectionRange(7, 13));
+    await input.evaluate((el) =>
+      el.setSelectionRange(el.value.indexOf("@", 1), el.value.trimEnd().length),
+    );
     await input.press("Backspace");
     await expect(chips).toHaveText([labels[0]]);
     await choose(keys[1]);

@@ -1,8 +1,6 @@
-import { useEffect, useRef, useState, useSyncExternalStore } from "react";
+import { useEffect, useRef, useState } from "react";
 import { PageSearch } from "../../../src/app/shell/PageSearch";
 import { CommunityDialog } from "../../../src/features/communities/CommunityDialog";
-import { AgentCreateDialog } from "../../../src/bundled/agents/AgentCreateDialog";
-import { AgentEditor } from "../../../src/bundled/agents/AgentEditor";
 import { ConfirmAction } from "../../../src/bundled/workflows/ConfirmAction";
 import { WorkflowWebhookSecretDialog } from "../../../src/bundled/workflows/WorkflowWebhookSecretDialog";
 import { getWorkflowActivationWarning } from "../../../src/bundled/workflows/workflowActivationWarning";
@@ -11,14 +9,12 @@ import { MediaReviewViewer } from "../../../src/features/messages/MediaReviewVie
 import { Button } from "../../../src/shared/design-system/ui/Button";
 import { useKeyboardFocusVisibility } from "../../../src/shared/design-system/useKeyboardFocusVisibility";
 import {
-  agentFixture,
   attachment,
   communityFixture,
   mediaFixture,
   sampleImage,
 } from "./data";
 import { confirmations, type DialogId } from "./catalog";
-import "../../../src/bundled/agents/AgentControls.css";
 
 const pages = ["Messages", "Agents", "Sessions", "Workflows", "Projects"].map(
   (title) => ({
@@ -30,35 +26,6 @@ const pages = ["Messages", "Agents", "Sessions", "Workflows", "Projects"].map(
     component: () => null,
   }),
 );
-
-function AgentScene({ create, close }: { create: boolean; close(): void }) {
-  const [fixture] = useState(agentFixture);
-  const state = useSyncExternalStore(
-    fixture.control.subscribe,
-    fixture.control.snapshot,
-  );
-  useEffect(() => {
-    void fixture.control.refresh();
-    return () => fixture.control.dispose();
-  }, [fixture]);
-  if (state.status !== "ready") return null;
-  return create ? (
-    <AgentCreateDialog
-      control={fixture.control}
-      state={state}
-      destination="https://relay.example.test"
-      owner={"de".repeat(32)}
-      onClose={close}
-    />
-  ) : (
-    <AgentEditor
-      control={fixture.control}
-      state={state}
-      agent={state.data?.agents[0] ?? fixture.agent}
-      onClose={close}
-    />
-  );
-}
 
 function ReviewScene({ close }: { close(): void }) {
   const [fixture] = useState(mediaFixture);
@@ -119,9 +86,6 @@ export function Scene({ id }: { id: DialogId }) {
       </div>
       {open && id === "join" && (
         <CommunityDialog communities={communities} mode="join" close={close} />
-      )}
-      {open && (id === "create" || id === "edit") && (
-        <AgentScene create={id === "create"} close={close} />
       )}
       {open && confirmation && (
         <ConfirmAction

@@ -4,6 +4,17 @@ export type GitHubReference = Readonly<{
   kind: "repository" | "pull" | "issue" | "commit";
   label: string;
 }>;
+/**
+ * Fragments the pane can show. The PR Discussion tab lists conversation
+ * comments and submitted reviews; review-thread (`discussion_r…`), timeline
+ * event and other anchors fall through to the browser instead of opening a
+ * pane that cannot show them. Issues render only their body, so no fragment
+ * qualifies.
+ */
+const displayableFragments = {
+  pull: /^(?:#(?:issuecomment|pullrequestreview)-\d+)?$/,
+  issues: /^$/,
+};
 /** Exact host parsing: a lookalike domain or credentials can never become a GitHub card. */
 export function parseGitHubReference(
   value: string,
@@ -30,7 +41,8 @@ export function parseGitHubReference(
     if (
       (surface === "pull" || surface === "issues") &&
       rest.length === 1 &&
-      /^[1-9]\d*$/.test(target)
+      /^[1-9]\d*$/.test(target) &&
+      displayableFragments[surface].test(url.hash)
     ) {
       return {
         url: `${base}/${surface}/${target}${url.hash}`,

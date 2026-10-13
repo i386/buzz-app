@@ -15,12 +15,6 @@ import {
 
 const scope = "community:viewer";
 const store = createRelaySession(null);
-const emptyProviders = Object.freeze([]);
-const providers = {
-  snapshot: () => emptyProviders,
-  subscribe: () => () => {},
-  register: () => {},
-};
 afterEach(() => {
   cleanup();
   vi.restoreAllMocks();
@@ -67,7 +61,6 @@ it.each(["private", "public"] as const)(
         onOpenChange={() => {}}
         onCreate={onCreate}
         session={{ ...store.session, scope }}
-        providers={providers}
         groups={undefined}
         initialGroup=""
         groupsReady

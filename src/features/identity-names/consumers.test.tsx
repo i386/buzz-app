@@ -3,22 +3,44 @@ import { stubAvatarBrowserApis } from "../agents/avatar-testing";
 stubAvatarBrowserApis();
 import "@testing-library/jest-dom/vitest";
 import { act, cleanup, render, screen } from "@testing-library/react";
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createRef } from "react";
+import { Context } from "@deepseek-ai/cordis";
 import userEvent from "@testing-library/user-event";
-import { bindNames } from "./service";
-import { createAgentDirectory } from "./testing";
+import { PluginRuntime } from "../../plugins/runtime";
+import { createRelaySession } from "../relay/session";
+import {
+  keypair,
+  signed,
+  scriptedTransport,
+  roster as signedRoster,
+  metadata,
+} from "../relay/testing";
+import { matchesEvent } from "../relay/projection";
+import type { LiveCallbacks } from "../relay/live";
+import { MentionPicker } from "../../bundled/mentions/MentionPicker";
+import { bindNames, IdentityNamesService } from "./service";
+import { createAgentDirectory, defaultNamingPolicy } from "./testing";
 import type { RelaySession } from "../relay/session";
 import type { PresenceStatus } from "../presence/presence";
 import { BuzzLinkPreview } from "../conversation/BuzzLinkPreview";
 import { SearchResults } from "../../app/shell/SearchResults";
 import { useChannelLabels } from "../../bundled/channels/useChannelLabels";
 import { AgentChoice } from "../sessions/AgentChoice";
+import { MessageRow } from "../messages/MessageRow";
+import type { ChannelMessage } from "../relay/contracts";
 import { TypingIndicator } from "../messages/TypingIndicator";
 
 const a = "a".repeat(64),
   b = "b".repeat(64);
 const stops: (() => void)[] = [];
+// jsdom lacks scrollIntoView; mention and search highlights reveal their rows.
+beforeEach(() => {
+  Object.defineProperty(HTMLElement.prototype, "scrollIntoView", {
+    configurable: true,
+    value: vi.fn(),
+  });
+});
 afterEach(() => {
   cleanup();
   for (const stop of stops.splice(0)) stop();
@@ -146,6 +168,214 @@ function fixture() {
     },
   };
 }
+it.each(["live", "reconnect", "clear-cache"] as const)(
+  "refreshes message, DM, and mention labels after an agent rename (%s)",
+  async (delivery) => {
+    const viewer = keypair();
+    const relay = keypair();
+    const agent = keypair();
+    const wire = scriptedTransport(viewer.pubkey, relay.pubkey);
+    let live: LiveCallbacks | undefined;
+    const ctx = new Context();
+    const runtime = new PluginRuntime(ctx, async () => ({
+      inject: ["identityNames"],
+      apply: (scope) => scope.identityNames.register(defaultNamingPolicy),
+    }));
+    const identityNames = new IdentityNamesService(ctx);
+    runtime.reconcile([
+      {
+        manifest: {
+          id: "test.agent-names",
+          name: "Agent names",
+          apiVersion: 1,
+        },
+        source: "bundled",
+        enabled: true,
+        reloadable: false,
+        revision: "one",
+        previous: null,
+        error: null,
+      },
+    ]);
+    const writeProfile = (name: string, createdAt: number) =>
+      signed(agent, {
+        kind: 0,
+        created_at: createdAt,
+        content: JSON.stringify({ name }),
+        tags: [["auth", viewer.pubkey, "", "d".repeat(128)]],
+      });
+    let relayProfile = writeProfile("GLM", 1_700_000_000);
+    let savedName = "GLM";
+    let rosterReads = 0;
+    const rosterEvents = [
+      signedRoster(relay, "channel", [viewer.pubkey, agent.pubkey]),
+      metadata(relay, "channel", "general"),
+      signedRoster(relay, "dm", [viewer.pubkey, agent.pubkey]),
+      metadata(relay, "dm", "DM", 1_700_000_000, [["t", "dm"]]),
+    ];
+    const owner = createRelaySession(
+      {
+        ...wire.transport,
+        query: async (filters) => {
+          if (filters.some((filter) => filter.kinds?.includes(39002)))
+            rosterReads++;
+          return [relayProfile, ...rosterEvents].filter((event) =>
+            filters.some((filter) => matchesEvent(event, filter)),
+          );
+        },
+        readAgentLibrary: async () => ({
+          definitions: [],
+          identities: [{ pubkey: agent.pubkey, name: savedName }],
+        }),
+        scope: "wss://relay.example",
+        subscribe(callbacks) {
+          live = callbacks;
+          return { update() {}, retry() {}, dispose() {} };
+        },
+      },
+      { identityNames },
+    );
+    const stream = {
+      id: "channel",
+      name: "general",
+      channelType: "stream" as const,
+      members: [agent.pubkey],
+      participants: [],
+    };
+    const dm = {
+      id: "dm",
+      name: "DM",
+      channelType: "dm" as const,
+      members: [viewer.pubkey, agent.pubkey],
+      participants: [agent.pubkey],
+    };
+    const roster = { status: "ready" as const, channels: [stream, dm] };
+    const channels = {
+      ...owner.session.channels,
+      list: () => roster,
+      subscribeList: () => () => {},
+      ensureList() {},
+      get: (id: string) => [stream, dm].find((channel) => channel.id === id),
+    };
+    const session = { ...owner.session, channels } as RelaySession;
+    try {
+      owner.session.channels.ensureList();
+      await vi.waitFor(() =>
+        expect(owner.session.channels.list().status).toBe("ready"),
+      );
+      await vi.waitFor(() =>
+        expect(session.agentLibrary.snapshot().status).toBe("ready"),
+      );
+      if (!live) throw new Error("Relay live subscription was not installed");
+      act(() => {
+        live?.state({ status: "connected", routes: [] });
+        live?.established();
+      });
+      await vi.waitFor(() =>
+        expect(owner.session.live.snapshot().roster.state).toBe("verified"),
+      );
+      await act(async () => session.profiles.ensure([agent.pubkey]));
+      expect(session.profiles.snapshot().get(agent.pubkey)?.name).toBe("GLM");
+
+      function Sidebar() {
+        const labels = useChannelLabels([dm], session.profiles, session.names);
+        return (
+          <output aria-label="DM label">{labels.channels[0]?.name}</output>
+        );
+      }
+      const row: ChannelMessage = {
+        id: "message",
+        channelId: stream.id,
+        authorId: agent.pubkey,
+        content: "hello",
+        createdAt: 1_700_000_000,
+        mentions: [],
+        participants: [],
+        attachments: [],
+        reactions: [],
+        replyCount: 0,
+      };
+      const view = render(
+        <>
+          <Sidebar />
+          <MessageRow
+            row={row}
+            session={session}
+            profile={session.profiles.snapshot().get(agent.pubkey)}
+            media={() => undefined}
+            onOpenLink={() => false}
+            day={false}
+            retry={undefined}
+          />
+          <MentionPicker
+            session={session}
+            scope="test"
+            channelId={stream.id}
+            disabled={false}
+            inviteAgents
+            select={() => true}
+          />
+        </>,
+      );
+      expect(screen.getByLabelText("DM label")).toHaveTextContent("GLM");
+      expect(
+        view.container.querySelector('[data-message-id="message"]'),
+      ).toHaveTextContent("GLM");
+      const user = userEvent.setup();
+      await user.click(
+        screen.getByRole("button", { name: "Mention a member" }),
+      );
+      expect(
+        await screen.findByRole("button", { name: `GLM ${agent.pubkey}` }),
+      ).toBeVisible();
+
+      const oldRosterReads = rosterReads;
+      await act(async () => {
+        relayProfile = writeProfile("Luna", 1_700_000_001);
+        savedName = "Luna";
+        if (delivery === "live") live?.receive([relayProfile]);
+        else if (delivery === "clear-cache") await owner.clearCache();
+        else {
+          // No profile replay: publication happened while disconnected and is
+          // older than the live stream's five-minute lookback on reconnect.
+          // The signed roster is unchanged and startup discovery is settled.
+          live?.state({ status: "retrying", routes: [] });
+          live?.state({ status: "connected", routes: [] });
+          live?.established();
+        }
+      });
+      if (delivery === "reconnect") {
+        await vi.waitFor(() =>
+          expect(rosterReads).toBeGreaterThan(oldRosterReads),
+        );
+        await vi.waitFor(() =>
+          expect(owner.session.live.snapshot().roster.state).toBe("verified"),
+        );
+        await vi.waitFor(() =>
+          expect(session.agentLibrary.snapshot().identities[0]?.name).toBe(
+            "Luna",
+          ),
+        );
+      }
+      await vi.waitFor(() => {
+        expect(screen.getByLabelText("DM label")).toHaveTextContent("Luna");
+        expect(
+          view.container.querySelector('[data-message-id="message"]'),
+        ).toHaveTextContent("Luna");
+        expect(
+          screen.getByRole("button", { name: `Luna ${agent.pubkey}` }),
+        ).toBeVisible();
+      });
+      expect(
+        screen.queryByRole("button", { name: `GLM ${agent.pubkey}` }),
+      ).not.toBeInTheDocument();
+    } finally {
+      owner.dispose();
+      await runtime.dispose();
+      await ctx.fiber.dispose();
+    }
+  },
+);
 it("uses channel scope in link previews and activity, and participant scope in sidebar DMs", async () => {
   const f = fixture();
   function Sidebar() {
@@ -198,11 +428,6 @@ it("uses channel scope in link previews and activity, and participant scope in s
   ).toBeVisible();
 });
 it("scopes search DM labels and message authors to their own conversation", async () => {
-  // jsdom lacks scrollIntoView; the palette reveals its typed-text selection.
-  Object.defineProperty(HTMLElement.prototype, "scrollIntoView", {
-    configurable: true,
-    value: vi.fn(),
-  });
   const f = fixture();
   render(
     <SearchResults

@@ -1,0 +1,28 @@
+.text {
+  min-width: 0;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .text[data-active] {
+    background: linear-gradient(
+      100deg,
+      var(--text-subtle) 20%,
+      var(--text-standard) 45%,
+      var(--text-subtle) 70%
+    );
+    background-size: 240% 100%;
+    background-clip: text;
+    -webkit-background-clip: text;
+    color: transparent;
+    animation: text-shimmer 2.4s linear infinite;
+  }
+}
+
+@keyframes text-shimmer {
+  from {
+    background-position: 100% 0;
+  }
+  to {
+    background-position: -100% 0;
+  }
+}

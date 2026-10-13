@@ -12,6 +12,8 @@ export type PluginManifest = Readonly<{
       id: string;
       program: string;
       args: readonly string[];
+      /** Opt-in UTF-8 stdin bound, at most 65536 bytes; absent means no input. */
+      maxInputBytes?: number;
       /** Maximum UTF-8 stdout bytes; defaults to 4096, bounded at 1048576. */
       maxOutputBytes?: number;
     }>[];

@@ -611,17 +611,6 @@ impl IdentityHost {
         })))
     }
 
-    /// The owner key of synthetic agent attestations in agent-controller tests.
-    #[cfg(test)]
-    pub(crate) fn fixture_owner() -> Self {
-        let mut key = [0; 32];
-        key[31] = 2;
-        Self(Arc::new(Mutex::new(Identity {
-            state: State::Ready(Key(Zeroizing::new(key))),
-            store: Box::new(OsStore),
-        })))
-    }
-
     pub(crate) async fn viewer(&self) -> Result<String> {
         with_identity(self.clone(), |identity| {
             identity

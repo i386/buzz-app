@@ -105,11 +105,25 @@ export function useMentionChoices(
     ];
     // One naming scope per choice set, not one normalization per row.
     const name = session.names?.scope(keys, facts);
-    return candidates.map((choice) => ({
-      ...choice,
-      label: name?.(choice.recipient.pubkey)?.name ?? choice.recipient.name,
-    }));
+    return candidates.map((choice) => {
+      const named = name?.(choice.recipient.pubkey);
+      return {
+        ...choice,
+        label: named?.name ?? choice.recipient.name,
+        qualifier: named?.qualifier,
+      };
+    });
   }, [session, channelId, invite, roster, selected, people]);
+  // Keys known without the directory search: members and agent choices.
+  const localKeys = useCallback(
+    () =>
+      new Set(
+        mentionCandidates(session, channelId, invite, roster).map(
+          (c) => c.recipient.pubkey,
+        ),
+      ),
+    [session, channelId, invite, roster],
+  );
   const { candidates, local } = useMemo(() => {
     // Source revisions invalidate the projection; selection reads them again synchronously.
     void profiles;
@@ -119,28 +133,8 @@ export function useMentionChoices(
     void resolve;
     // A closed or disabled chooser shows nothing, so it names nothing.
     if (!open) return { candidates: [], local: new Set<string>() };
-    return {
-      candidates: current(),
-      // Keys known without the directory search: members and agent choices.
-      local: new Set(
-        mentionCandidates(session, channelId, invite, roster).map(
-          (c) => c.recipient.pubkey,
-        ),
-      ),
-    };
-  }, [
-    open,
-    current,
-    session,
-    channelId,
-    invite,
-    roster,
-    profiles,
-    list,
-    agents,
-    archives,
-    resolve,
-  ]);
+    return { candidates: current(), local: localKeys() };
+  }, [open, current, localKeys, profiles, list, agents, archives, resolve]);
   // Only local sources gate the list. Directory results append below it.
   const pending =
     !roster &&
@@ -159,11 +153,11 @@ export function useMentionChoices(
   const outside = open
     ? rank(candidates.filter((c) => !local.has(c.recipient.pubkey)))
     : [];
+  const missingNames = channel?.members?.some((key) => !profiles.has(key));
   if (open && !rows && !pending) {
     const ranked = rank(
       candidates.filter((c) => local.has(c.recipient.pubkey)),
     ).slice(0, 50);
-    const missingNames = channel?.members?.some((key) => !profiles.has(key));
     if (
       ranked.length ||
       outside.length ||
@@ -201,10 +195,16 @@ export function useMentionChoices(
       });
     }
   }
-  // Space needs the full choice set (README section 5). While the directory
-  // search runs, failed, or has more pages, a namesake may still be missing.
+  // Space (README section 5): once every member is named, an exact local name
+  // selects at once. Any other exact name needs the full choice set: while the
+  // directory search runs, failed, or has more pages, a namesake may be missing.
   const complete = !directory.loading && !directory.error && !directory.more;
   return useMemo(() => {
+    const spaceMention = (choices: MentionChoice[], keys: Set<string>) =>
+      (missingNames
+        ? undefined
+        : exactMention(choices, query, (c) => keys.has(c.recipient.pubkey))) ??
+      (complete ? exactMention(choices, query) : undefined);
     const live = new Map(candidates.map((c) => [c.recipient.pubkey, c]));
     const choices = (rows ?? []).map((row) => {
       const now = live.get(row.recipient.pubkey);
@@ -232,7 +232,7 @@ export function useMentionChoices(
       candidates,
       pending,
       archives,
-      spaceId: complete ? exactMention(candidates, query) : undefined,
+      spaceId: spaceMention(candidates, local),
       canSelect: (pubkey: string, space = false) => {
         const fresh = current();
         return (
@@ -242,7 +242,7 @@ export function useMentionChoices(
               (!rows?.find((row) => row.recipient.pubkey === pubkey)?.member ||
                 c.member),
           ) &&
-          (!space || (complete && exactMention(fresh, query) === pubkey))
+          (!space || spaceMention(fresh, localKeys()) === pubkey)
         );
       },
       truncated: rankMentions(candidates, query).length > 50,
@@ -253,6 +253,9 @@ export function useMentionChoices(
     directory,
     people,
     candidates,
+    local,
+    localKeys,
+    missingNames,
     archives,
     profiles,
     list,

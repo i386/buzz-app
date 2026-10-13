@@ -133,7 +133,9 @@ test("manage a channel message, peer unread state, and its thread", async ({
   await expect(root).toContainText("Edited from thread");
   await expect(row).toContainText("Edited from thread");
   await page
-    .getByRole("button", { name: /^Close (?:thread|Thread tab)$/, exact: true })
+    .locator(
+      '.buzz-tabs-item:has([data-tab-value^="thread:"][aria-selected="true"]) > button:not([role="tab"]), button[aria-label="Close thread"]',
+    )
     .click();
   for (const width of [900, 390]) {
     await page.setViewportSize({ width, height: 850 });
@@ -342,7 +344,7 @@ test("saving an attachment caption preserves its original metadata through the b
 });
 
 // Native tab order and competing portalled modal handlers need a real browser.
-test("media comment deletion keeps keyboard focus in its confirmation", async ({
+test("thread media preserves its tab and draft while modal Escape restores focus", async ({
   page,
   app,
 }) => {
@@ -378,7 +380,21 @@ test("media comment deletion keeps keyboard focus in its confirmation", async ({
   const row = page.locator(
     `[data-channel-timeline] [data-message-id="${root.id}"]`,
   );
-  const opener = row.getByRole("link", { name: "Open image attachment" });
+  await row.hover();
+  await row.getByRole("button", { name: "Reply", exact: true }).click();
+  const thread = page.getByRole("complementary", {
+    name: "Thread",
+    exact: true,
+  });
+  const editor = thread.getByRole("textbox", {
+    name: "Reply to thread",
+    exact: true,
+  });
+  await editor.fill("Keep this reply while reviewing media");
+  const retainedEditor = await editor.elementHandle();
+  const opener = thread
+    .locator(`[data-message-id="${root.id}"]`)
+    .getByRole("link", { name: "Open image attachment" });
   await opener.focus();
   await opener.press("Enter");
   const viewer = page.getByRole("dialog", { name: "Image viewer" });
@@ -423,7 +439,12 @@ test("media comment deletion keeps keyboard focus in its confirmation", async ({
   // The viewer resumes keyboard ownership after confirmation dismissal.
   await page.keyboard.press("Escape");
   await expect(viewer).toHaveCount(0);
-  await expect(
-    row.getByRole("link", { name: "Open image attachment" }),
-  ).toBeFocused();
+  await expect(opener).toBeFocused();
+  await expect(editor).toHaveText("Keep this reply while reviewing media");
+  expect(await retainedEditor.evaluate((element) => element.isConnected)).toBe(
+    true,
+  );
+  // A subsequent Escape from the thread itself still closes that tab.
+  await editor.press("Escape");
+  await expect(thread).toHaveCount(0);
 });

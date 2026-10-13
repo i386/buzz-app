@@ -27,7 +27,7 @@ export type Tool = ReturnType<typeof tool>;
 export const TOOLS: readonly Tool[] = [
   tool(
     "send",
-    "Post a message. Without channel, replies in the current thread.",
+    "Post a message. Without channel, replies in the current thread. A reply goes in its message's thread.",
     {
       text: str,
       path: str,
@@ -35,11 +35,18 @@ export const TOOLS: readonly Tool[] = [
       reply: str,
       files: strs,
       mentions: strs,
+      audience: {
+        type: "string",
+        enum: ["everyone", "agents"],
+        description:
+          "agents: only other agents need this (delegating, asking or answering an agent)",
+      },
       final: {
         type: "boolean",
         description: "Your last message this turn; ends the turn.",
       },
     },
+    ["audience"],
   ),
   tool("edit", "Edit your message.", { id: str, text: str }, ["id", "text"]),
   tool(
@@ -66,6 +73,9 @@ export const TOOLS: readonly Tool[] = [
     text: str,
     path: str,
   }),
+  tool("media_get", "See an image from a Buzz media URL.", { url: str }, [
+    "url",
+  ]),
 ];
 
 /** Message kinds as the CLI reads them. */
@@ -75,7 +85,9 @@ const SEARCH = [9, 40002, 45001, 45003];
 const HEX = /^[0-9a-f]{64}$/;
 
 type Args = Readonly<Record<string, unknown>>;
-type Handler = (tools: Tools, args: Args) => Promise<string>;
+/** A tool's answer: text, or an image (base64 `data`) for the agent to see. */
+export type Reply = string | Readonly<{ data: string; type: string }>;
+type Handler = (tools: Tools, args: Args) => Promise<Reply>;
 
 /** Runs tool `name` for an agent working in `context`. A throw is a tool
  * error for the agent to correct. */
@@ -104,6 +116,8 @@ const HANDLERS: Readonly<Record<string, Handler>> = {
         : undefined) ??
       context.channel;
     if (!channel) throw new Error("channel is required here.");
+    if (args.audience !== "everyone" && args.audience !== "agents")
+      throw new Error("audience must be everyone or agents.");
     const files = await tools.attach(list(args.files));
     const content = `${(await tools.body(args, !files.links)) ?? ""}${files.links}`;
     const thread = reply ? await tools.threadTags(reply) : [];
@@ -120,6 +134,7 @@ const HANDLERS: Readonly<Record<string, Handler>> = {
         ...thread,
         ...mentions.map((pubkey) => ["p", pubkey]),
         ...files.tags,
+        ...(args.audience === "agents" ? [["audience", "agents"]] : []),
       ],
     });
     return `sent ${event.id}`;
@@ -371,6 +386,16 @@ const HANDLERS: Readonly<Record<string, Handler>> = {
     await client.publish({ kind: 40100, content, tags: [["h", channel]] });
     return "saved";
   },
+
+  async media_get(tools, args) {
+    const data = await tools.client.media(required(args, "url"));
+    // The first 12 bytes name the type.
+    const head = atob(data.slice(0, 16));
+    const type = sniff(Uint8Array.from(head, (c) => c.charCodeAt(0)));
+    if (!type?.startsWith("image/"))
+      throw new Error("Only JPEG, PNG, GIF and WebP images can be shown.");
+    return { data, type };
+  },
 };
 
 /** One call's helpers, so lookups it repeats are made once. */
@@ -412,17 +437,12 @@ class Tools {
     return event;
   }
 
-  /** The e-tags of a reply to `parent`: one `reply` tag for a reply to a
-   * thread's root, `root` and `reply` for one nested deeper. */
+  /** The e-tag of a reply to `parent`. Agents never nest: a reply to any
+   * message in a thread is a reply to the thread's root. */
   async threadTags(parent: string) {
     const root =
       parent === this.context.root ? parent : rootOf(await this.event(parent));
-    return root === parent
-      ? [["e", root, "", "reply"]]
-      : [
-          ["e", root, "", "root"],
-          ["e", parent, "", "reply"],
-        ];
+    return [["e", root, "", "reply"]];
   }
 
   members(channel: string) {

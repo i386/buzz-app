@@ -1,6 +1,7 @@
 import { test, expect } from "./fixture.mjs";
 import { open } from "./timeline.mjs";
 import { openPage } from "./navigation.mjs";
+import { resizeInboxDetail } from "./inbox-resize.mjs";
 
 // Browser-only contract: actual sidebar/plugin routing -> exact thread target,
 // browser history, and responsive/light-dark CSS. Matrices stay in RTL/unread tests.
@@ -25,24 +26,141 @@ test("Inbox opens the exact thread, shares read state, and fits the workspace", 
     inbox.getByText("Unread reply 1", { exact: true }),
   ).toBeVisible();
   await expect(inbox.getByText("Checking recent activity…")).toHaveCount(0);
+  // The unselected list must keep the full scroll area after grid simplification.
+  const workspace = inbox.locator('[class*="workspace"]');
+  await expect
+    .poll(
+      async () =>
+        (await inbox.locator('[class*="listPane"]').boundingBox()).height,
+    )
+    .toBe((await workspace.boundingBox()).height);
   const rows = inbox
     .getByRole("list", { name: "Inbox conversations" })
     .getByRole("listitem");
-  const chooseFilter = async (label, control = "Activity type") => {
-    await inbox.getByRole("combobox", { name: control }).click();
-    await page.getByRole("option", { name: label, exact: true }).click();
+  const filter = inbox.getByRole("button", {
+    name: "Inbox filters",
+    exact: true,
+  });
+  const unread = inbox.getByRole("button", {
+    name: "Unread only",
+    exact: true,
+  });
+  const filters = page.getByRole("menu", {
+    name: "Inbox filters",
+    exact: true,
+  });
+  const chooseFilter = async (label) => {
+    await filter.click();
+    await filters
+      .getByRole("menuitemradio", { name: label, exact: true })
+      .click();
+    await expect(filters).not.toBeVisible();
   };
   await expect(inbox.getByRole("tab")).toHaveCount(0);
   await expect(
-    inbox.getByRole("combobox", { name: "Activity type" }),
-  ).toHaveText("All activity");
-  await expect(inbox.getByRole("combobox", { name: "Sender" })).toHaveText(
-    "Everyone",
-  );
-  await expect(inbox.getByText("Activity type")).toHaveClass(/sr-only/);
-  await expect(inbox.getByText("Sender", { exact: true })).toHaveClass(
-    /sr-only/,
-  );
+    inbox.getByRole("navigation", { name: "Inbox history" }),
+  ).toHaveCount(0);
+  await expect(
+    inbox.getByRole("button", { name: "Newer activity", exact: true }),
+  ).toHaveCount(0);
+  await expect(
+    inbox.getByRole("button", { name: "Load older activity", exact: true }),
+  ).toHaveCount(0);
+  await expect(inbox.getByRole("combobox")).toHaveCount(0);
+  await expect(filter).toHaveText("All");
+  const expectBareUnread = async () => {
+    await expect(unread).toHaveCSS("background-color", "rgba(0, 0, 0, 0)");
+    await expect(unread).toHaveCSS("background-image", "none");
+    await expect(unread).toHaveCSS("box-shadow", "none");
+    await expect(unread).toHaveCSS("width", "32px");
+    await expect(unread).toHaveCSS("height", "32px");
+    await expect(unread.locator("svg")).toHaveCSS("width", "20px");
+    await expect(unread.locator("svg")).toHaveCSS("height", "20px");
+  };
+  const toggleUnreadWithPointer = async (selected) => {
+    await filter.hover();
+    await expectBareUnread(); // Resting, including the selected state.
+    await unread.hover();
+    await expectBareUnread();
+    await expect(
+      page.getByRole("tooltip", { name: "Show unread only", exact: true }),
+    ).toBeVisible();
+    await page.mouse.down();
+    try {
+      await expect
+        .poll(() => unread.evaluate((element) => element.matches(":active")))
+        .toBe(true);
+      await expectBareUnread(); // Real pointer-pressed state, not aria-pressed.
+    } finally {
+      await page.mouse.up();
+    }
+    await expect(unread).toHaveAttribute("aria-pressed", String(selected));
+    await expect(unread.locator("svg")).toHaveAttribute(
+      "fill",
+      selected ? "currentColor" : "none",
+    );
+    await filter.hover();
+    await expectBareUnread();
+  };
+  await expect(unread).toHaveAttribute("aria-pressed", "false");
+  await expect(unread.locator("svg")).toHaveAttribute("fill", "none");
+  await toggleUnreadWithPointer(true);
+  await toggleUnreadWithPointer(false);
+  await filter.click();
+  const people = filters.getByRole("menuitemcheckbox", {
+    name: "People",
+    exact: true,
+  });
+  const agents = filters.getByRole("menuitemcheckbox", {
+    name: "Agents",
+    exact: true,
+  });
+  const expectMenuSelection = async (selectedLabel) => {
+    // Move outside the popup: a hovered unchecked row must not be mistaken for
+    // persistent radio selection styling.
+    await filter.hover();
+    const radios = filters.getByRole("menuitemradio");
+    await expect(radios).toHaveCount(5);
+    await expect(radios.locator("svg")).toHaveCount(0);
+    const selected = filters.getByRole("menuitemradio", {
+      name: selectedLabel,
+      exact: true,
+    });
+    const unchecked = filters.getByRole("menuitemradio", {
+      name: "DMs",
+      exact: true,
+    });
+    await expect(selected).toBeChecked();
+    await expect(unchecked).not.toBeChecked();
+    await expect(selected).not.toHaveCSS(
+      "background-color",
+      "rgba(0, 0, 0, 0)",
+    );
+    await expect(unchecked).toHaveCSS("background-color", "rgba(0, 0, 0, 0)");
+    await expect(people).toBeChecked();
+    await expect(agents).toBeChecked();
+    for (const checkbox of [people, agents]) {
+      await expect(checkbox.locator("svg")).toHaveCount(1);
+      await expect(checkbox.locator("svg")).toBeVisible();
+    }
+    for (const label of ["From", "Show"]) {
+      const metadata = filters.getByText(label, { exact: true });
+      await expect(metadata).toHaveAttribute("data-emphasis", "quiet");
+      await expect(metadata).not.toHaveCSS(
+        "color",
+        await people.evaluate((element) => getComputedStyle(element).color),
+      );
+      await expect(metadata).toHaveCSS(
+        "font-weight",
+        await people.evaluate(
+          (element) => getComputedStyle(element).fontWeight,
+        ),
+      );
+    }
+  };
+  await expectMenuSelection("All");
+  await page.keyboard.press("Escape");
+  await expect(filter).toBeFocused();
   await expect(
     inbox.getByText(
       /Verified recent conversations|Results are bounded|Feed history reached its result limit/,
@@ -65,11 +183,18 @@ test("Inbox opens the exact thread, shares read state, and fits the workspace", 
   }));
   await chooseFilter("Mentions");
   await expect(page.getByText("Activity", { exact: true })).toHaveCount(0);
-  await chooseFilter("Humans", "Sender");
+  await filter.click();
+  await agents.click();
+  await expect(people).toBeChecked();
+  await expect(people).toBeDisabled();
   await expect(rows).toHaveCount(2);
-  await chooseFilter("Agents", "Sender");
+  await agents.click();
+  await people.click();
+  await expect(agents).toBeChecked();
+  await expect(agents).toBeDisabled();
   await expect(rows).toHaveCount(0);
-  await chooseFilter("Everyone", "Sender");
+  await people.click();
+  await page.keyboard.press("Escape");
   await expect(rows).toHaveCount(2);
   // Main's fixture now also mentions the viewer in the other thread's nested
   // reply. Keep both groups and select this exact preview, not a namesake row.
@@ -125,36 +250,53 @@ test("Inbox opens the exact thread, shares read state, and fits the workspace", 
     await page.evaluate((mode) => {
       document.documentElement.dataset.colorMode = mode;
     }, mode);
-    await expect(
-      inbox.getByRole("combobox", { name: "Activity type" }),
-    ).toBeVisible();
-    await expect(inbox.getByRole("combobox", { name: "Sender" })).toBeVisible();
+    await expect(filter).toBeVisible();
+    await expect(unread).toBeVisible();
     const toolbar = inbox.locator('[class*="toolbar"]').first();
     const layout = await toolbar.evaluate((element) => {
-      const [activity, sender] = element.querySelectorAll('[role="combobox"]');
-      const unread = element.querySelector('[role="checkbox"]');
-      if (!activity || !sender || !unread) return;
-      const a = activity.getBoundingClientRect();
-      const s = sender.getBoundingClientRect();
+      const filters = element.querySelector('[aria-label="Inbox filters"]');
+      const unread = element.querySelector('[aria-label="Unread only"]');
+      if (!filters || !unread) return;
+      const f = filters.getBoundingClientRect();
       const u = unread.getBoundingClientRect();
       const t = element.getBoundingClientRect();
       return {
-        pairGap: s.left - a.right,
-        pairY: s.top - a.top,
-        unreadY: u.top - a.top,
+        gap: u.left - f.right,
+        centerY: u.top + u.height / 2 - (f.top + f.height / 2),
         left: t.left,
         right: t.right,
         bottom: t.bottom,
+        filtersLeft: f.left,
         unreadRight: u.right,
         unreadBottom: u.bottom,
       };
     });
-    expect(layout?.pairY).toBe(0);
-    expect(layout?.pairGap).toBeCloseTo(8, 0);
+    // The combined filter and unread toggle stay on one compact row, including
+    // 390px; the old pair of selects no longer forces unread onto a second row.
+    expect(layout?.centerY).toBeCloseTo(0, 0);
+    expect(layout?.gap).toBeGreaterThan(0);
+    expect(layout?.filtersLeft).toBeGreaterThanOrEqual(layout.left);
     expect(layout?.unreadRight).toBeLessThanOrEqual(layout.right);
     expect(layout?.unreadBottom).toBeLessThanOrEqual(layout.bottom);
-    expect(layout?.unreadY).toBeGreaterThanOrEqual(0);
-    if (width === 390) expect(layout?.unreadY).toBeGreaterThan(0);
+    const opener = mentionRow.getByRole("button", { name: /^Open / });
+    const dot = opener.getByRole("img", { name: "Unread", exact: true });
+    await expect(dot).toBeVisible();
+    const dotLayout = await dot.evaluate((element) => {
+      const button = element.closest("button");
+      const label = button.querySelector(".navigation-item-label");
+      const trailing = element.closest(".navigation-item-trailing");
+      return {
+        insideTrailing: !!trailing && button.contains(trailing),
+        row: button.getBoundingClientRect().toJSON(),
+        label: label.getBoundingClientRect().toJSON(),
+        dot: element.getBoundingClientRect().toJSON(),
+      };
+    });
+    expect(dotLayout.insideTrailing).toBe(true);
+    expect(dotLayout.dot.left).toBeGreaterThanOrEqual(dotLayout.label.right);
+    expect(dotLayout.dot.right).toBeLessThan(dotLayout.row.right);
+    expect(dotLayout.dot.top).toBeGreaterThanOrEqual(dotLayout.row.top);
+    expect(dotLayout.dot.bottom).toBeLessThanOrEqual(dotLayout.row.bottom);
     await expect(
       inbox.getByText("Unread reply 1", { exact: true }),
     ).toBeVisible();
@@ -175,6 +317,19 @@ test("Inbox opens the exact thread, shares read state, and fits the workspace", 
   await page.keyboard.press("Enter");
   const detail = inbox.getByRole("region", { name: "Inbox detail" });
   await expect(detail).toBeVisible();
+  // The exact-target reveal focuses its row after the thread loads. Let it land
+  // before keyboard sizing, or it can take focus from the handle mid-press.
+  await expect(
+    detail.locator("[data-message-id]").filter({ hasText: "Unread reply 1" }),
+  ).toBeFocused();
+  const resizedWidth = await resizeInboxDetail(page, detail);
+  await detail
+    .getByRole("button", { name: "Close detail", exact: true })
+    .click();
+  await mentionRow.getByRole("button", { name: /^Open / }).click();
+  await expect
+    .poll(async () => (await detail.boundingBox()).width)
+    .toBeCloseTo(resizedWidth, 0);
   const thread = detail.getByRole("region", {
     name: "Thread messages",
     exact: true,
@@ -190,8 +345,25 @@ test("Inbox opens the exact thread, shares read state, and fits the workspace", 
   await expect
     .poll(async () => (await firstMessage.boundingBox())?.height)
     .toBe(beforeHover?.height);
-  const filter = inbox.getByRole("combobox", { name: "Activity type" });
-  const heading = detail.getByRole("heading", { name: /^#/ });
+  const heading = detail
+    .locator("header")
+    .getByRole("heading", { name: "Alpha", exact: true });
+  await expect(detail.locator("header")).toHaveCount(1);
+  await expect(detail.locator("header").getByRole("heading")).toHaveCount(1);
+  await expect(
+    detail.locator("header .panel-header-label-icon svg"),
+  ).toHaveCount(1);
+  const embedded = detail.getByRole("complementary", {
+    name: "Thread",
+    exact: true,
+  });
+  await expect(embedded.locator("header")).toHaveCount(0);
+  await expect(embedded.getByRole("button", { name: /^Close / })).toHaveCount(
+    0,
+  );
+  await expect(embedded).toHaveCSS("border-width", "0px");
+  await expect(embedded).toHaveCSS("border-radius", "0px");
+  await expect(embedded).toHaveCSS("box-shadow", "none");
   const filterBox = await filter.boundingBox();
   const headingBox = await heading.boundingBox();
   const listBox = await rows.first().boundingBox();
@@ -230,8 +402,13 @@ test("Inbox opens the exact thread, shares read state, and fits the workspace", 
       inbox.getByRole("list", { name: "Inbox conversations" }),
     ).not.toBeVisible();
     await expect(filter).not.toBeVisible();
+    await expect(
+      detail.getByRole("separator", {
+        name: "Resize main and secondary panels",
+      }),
+    ).not.toBeVisible();
     const editor = detail.getByRole("textbox", { name: "Reply to thread" });
-    const close = detail.getByRole("button", { name: "Close thread" });
+    const close = detail.getByRole("button", { name: "Close detail" });
     const send = detail.getByRole("button", { name: "Send message" });
     const available = await inbox.boundingBox();
     for (const control of [detail, thread, editor, close, send]) {
@@ -258,10 +435,7 @@ test("Inbox opens the exact thread, shares read state, and fits the workspace", 
     await expect(
       mentionRow.getByRole("button", { name: /^Open / }),
     ).toBeFocused();
-    for (const control of [
-      filter,
-      inbox.getByRole("combobox", { name: "Sender" }),
-    ]) {
+    for (const control of [filter, unread]) {
       await expect(control).toBeVisible();
       const box = await control.boundingBox();
       expect(box.x).toBeGreaterThanOrEqual(available.x);
@@ -283,6 +457,61 @@ test("Inbox opens the exact thread, shares read state, and fits the workspace", 
   );
   expect(target.threadRootId).toBe(expected.id);
   expect(target.messageId).toMatch(/^[a-f0-9]{64}$/);
+  await page.getByRole("button", { name: "Go back", exact: true }).click();
+  await expect(inbox).toBeVisible();
+  await mentionRow.getByRole("button", { name: /^Open / }).click();
+  const channelHeading = detail.getByRole("heading", {
+    name: "Alpha",
+    exact: true,
+  });
+  const channelLink = channelHeading.getByRole("button", { name: "Alpha" });
+  await expect(channelLink).toHaveAttribute("title", "Open full thread");
+  await page.keyboard.press("Tab");
+  const focusRing = await channelLink.evaluate((button) => {
+    document.documentElement.setAttribute("data-keyboard-navigation", "");
+    button.focus();
+    const style = getComputedStyle(button);
+    return {
+      focused: document.activeElement === button,
+      focusVisible: button.matches(":focus-visible"),
+      width: Number.parseFloat(style.outlineWidth),
+      offset: Number.parseFloat(style.outlineOffset),
+      color: style.outlineColor,
+      background: getComputedStyle(button.parentElement).backgroundColor,
+      clipping: getComputedStyle(button.parentElement).overflow,
+      link: button.getBoundingClientRect().toJSON(),
+      heading: button.parentElement.getBoundingClientRect().toJSON(),
+    };
+  });
+  expect(focusRing.focused).toBe(true);
+  expect(focusRing.focusVisible).toBe(true);
+  expect(focusRing.clipping).toBe("hidden");
+  expect(focusRing.width).toBeGreaterThanOrEqual(2);
+  expect(focusRing.color).not.toBe(focusRing.background);
+  const outside = focusRing.width + focusRing.offset;
+  expect(focusRing.link.left - outside).toBeGreaterThanOrEqual(
+    focusRing.heading.left,
+  );
+  expect(focusRing.link.top - outside).toBeGreaterThanOrEqual(
+    focusRing.heading.top,
+  );
+  expect(focusRing.link.right + outside).toBeLessThanOrEqual(
+    focusRing.heading.right,
+  );
+  expect(focusRing.link.bottom + outside).toBeLessThanOrEqual(
+    focusRing.heading.bottom,
+  );
+  await channelLink.click();
+  await expect(page.getByRole("region", { name: "Channels" })).toBeVisible();
+  const channelTarget = await page.evaluate(
+    () => history.state.buzzNavigationV1.entry.target,
+  );
+  expect(channelTarget).toMatchObject({
+    kind: "conversation",
+    channelId: "alpha",
+    messageId: target.messageId,
+    threadRootId: expected.id,
+  });
   await page.getByRole("button", { name: "Go back", exact: true }).click();
   await expect(inbox).toBeVisible();
   await chooseFilter("Mentions");
@@ -313,7 +542,7 @@ test("Inbox opens the exact thread, shares read state, and fits the workspace", 
     page.getByRole("menuitem", { name: "Mark unread" }),
   ).toBeDisabled();
   await page.keyboard.press("Escape");
-  await inbox.getByRole("checkbox", { name: "Unread only" }).check();
+  await inbox.getByRole("button", { name: "Unread only" }).click();
   await expect(rows).toHaveCount(2);
   await row.getByRole("button", { name: /^Open / }).click();
   await expect(row.getByRole("img", { name: "Unread" })).toHaveCount(0);
@@ -324,7 +553,7 @@ test("Inbox opens the exact thread, shares read state, and fits the workspace", 
   // A re-click does not undo the user's mark; a new visit after closing does.
   await row.getByRole("button", { name: /^Open / }).click();
   await expect(row.getByRole("img", { name: "Unread" })).toBeVisible();
-  await detail.getByRole("button", { name: "Close thread" }).click();
+  await detail.getByRole("button", { name: "Close detail" }).click();
   await expect(row.getByRole("button", { name: /^Open / })).toBeFocused();
   await row.getByRole("button", { name: /^Open / }).click();
   await expect(row.getByRole("img", { name: "Unread" })).toHaveCount(0);
@@ -335,6 +564,8 @@ test("Inbox opens the exact thread, shares read state, and fits the workspace", 
     .getByRole("button", { name: /^Open / })
     .click();
   const direct = detail.getByRole("region", { name: "Conversation preview" });
+  await expect(detail.locator("header")).toHaveCount(1);
+  await expect(direct.locator("header")).toHaveCount(0);
   await expect(
     direct.getByRole("form", { name: /Send a message/ }),
   ).toBeVisible();
@@ -358,7 +589,7 @@ test("Inbox opens the exact thread, shares read state, and fits the workspace", 
   expect(geometry?.composer.right).toBeLessThanOrEqual(geometry.history.right);
   // Unread-only now filters the read DM away. Closing leaves the pane clean;
   // a separate keyboard case verifies fallback focus with another visible row.
-  await direct.getByRole("button", { name: "Close detail" }).click();
+  await detail.getByRole("button", { name: "Close detail" }).click();
   await expect(detail).toHaveCount(0);
 });
 
@@ -418,7 +649,7 @@ test.describe("signed newest-first Inbox windows", () => {
       detail.getByText("New peer reply", { exact: true }),
     ).toBeAttached();
     await expect(target).toBeInViewport();
-    await detail.getByRole("button", { name: "Close thread" }).click();
+    await detail.getByRole("button", { name: "Close detail" }).click();
     const readRow = inbox
       .getByRole("list", { name: "Inbox conversations" })
       .getByRole("listitem")
@@ -628,8 +859,10 @@ test("narrow selected detail keeps a rejected read save and its captured Retry v
   await page.getByRole("button", { name: "Inbox", exact: true }).click();
   const inbox = page.getByRole("region", { name: "Inbox", exact: true });
   await expect(inbox.getByText("Checking recent activity…")).toHaveCount(0);
-  await inbox.getByRole("combobox", { name: "Activity type" }).click();
-  await page.getByRole("option", { name: "Mentions", exact: true }).click();
+  await inbox.getByRole("button", { name: "Inbox filters" }).click();
+  await page
+    .getByRole("menuitemradio", { name: "Mentions", exact: true })
+    .click();
   const row = inbox
     .getByRole("list", { name: "Inbox conversations" })
     .getByRole("listitem")
@@ -642,8 +875,8 @@ test("narrow selected detail keeps a rejected read save and its captured Retry v
   await page.clock.pauseAt(base + 180_000);
   try {
     await row.getByRole("button", { name: /^Open / }).click();
-    const detail = inbox.getByRole("complementary", {
-      name: "Thread",
+    const detail = inbox.getByRole("region", {
+      name: "Inbox detail",
       exact: true,
     });
     await expect(detail).toBeVisible();
@@ -686,7 +919,7 @@ test("narrow selected detail keeps a rejected read save and its captured Retry v
     });
     await page.clock.runFor(32);
     await expect(
-      detail.getByRole("button", { name: "Close thread", exact: true }),
+      detail.getByRole("button", { name: "Close detail", exact: true }),
     ).toBeFocused();
     await page.clock.resume();
     await page.keyboard.press("Escape");
@@ -797,9 +1030,9 @@ test("an in-head DM keeps exact focus and Escape returns from an empty narrow li
     undefined,
     [["imeta", `url ${videoUrl}`, "m video/mp4"]],
   );
-  await inbox.getByRole("combobox", { name: "Activity type" }).click();
-  await page.getByRole("option", { name: "DMs", exact: true }).click();
-  await inbox.getByRole("checkbox", { name: "Unread only" }).check();
+  await inbox.getByRole("button", { name: "Inbox filters" }).click();
+  await page.getByRole("menuitemradio", { name: "DMs", exact: true }).click();
+  await inbox.getByRole("button", { name: "Unread only" }).click();
   const list = inbox.getByRole("list", { name: "Inbox conversations" });
   const row = list.getByRole("listitem").first();
   await expect(list.getByRole("listitem")).toHaveCount(1);
@@ -831,7 +1064,7 @@ test("an in-head DM keeps exact focus and Escape returns from an empty narrow li
   await expect(list).toBeVisible();
   await expect(list.getByRole("listitem")).toHaveCount(0);
   await expect(
-    inbox.getByRole("combobox", { name: "Activity type", exact: true }),
+    inbox.getByRole("button", { name: "Inbox filters", exact: true }),
   ).toBeFocused();
 });
 
@@ -845,7 +1078,7 @@ test("Escape from an unread detail restores its invoking row", async ({
   await openPage(page, "Inbox");
   const inbox = page.getByRole("region", { name: "Inbox", exact: true });
   await expect(inbox.getByText("Checking recent activity…")).toHaveCount(0);
-  await inbox.getByRole("checkbox", { name: "Unread only" }).check();
+  await inbox.getByRole("button", { name: "Unread only" }).click();
   const list = inbox.getByRole("list", { name: "Inbox conversations" });
   const first = list
     .getByRole("listitem")
@@ -858,7 +1091,7 @@ test("Escape from an unread detail restores its invoking row", async ({
   const detail = inbox.getByRole("region", { name: "Inbox detail" });
   await expect(detail).toBeVisible();
   await expect(first.getByRole("img", { name: "Unread" })).toHaveCount(0);
-  await detail.getByRole("button", { name: "Close thread" }).focus();
+  await detail.getByRole("button", { name: "Close detail" }).focus();
   await page.keyboard.press("Escape");
   await expect(detail).toHaveCount(0);
   await expect(

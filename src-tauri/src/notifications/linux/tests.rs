@@ -47,7 +47,10 @@ enum Scenario {
     Overflow,
     Unsupported,
     Rejected,
+    Markup,
 }
+/// Every scenario sends this plain-text preview.
+const PREVIEW: &str = "<harness> & a > b";
 struct Daemon {
     scenario: Scenario,
     unicast: bool,
@@ -56,10 +59,10 @@ struct Daemon {
 #[zbus::interface(name = "org.freedesktop.Notifications")]
 impl Daemon {
     fn get_capabilities(&self) -> Vec<&str> {
-        if matches!(self.scenario, Scenario::Unsupported) {
-            vec![]
-        } else {
-            vec!["actions"]
+        match self.scenario {
+            Scenario::Unsupported => vec![],
+            Scenario::Markup => vec!["actions", "body-markup"],
+            _ => vec!["actions"],
         }
     }
 
@@ -78,9 +81,15 @@ impl Daemon {
         #[zbus(header)] header: Header<'_>,
     ) -> zbus::fdo::Result<u32> {
         self.calls.fetch_add(1, Ordering::SeqCst);
+        // A markup server must show the typed text, not parse it as tags.
+        let expected = if matches!(self.scenario, Scenario::Markup) {
+            "&lt;harness&gt; &amp; a &gt; b"
+        } else {
+            PREVIEW
+        };
         assert_eq!(
             (app_name, replaces_id, summary, body),
-            ("Buzz", 0, "Title", "Preview")
+            ("Buzz", 0, "Title", expected)
         );
         assert_eq!(actions, ["default", "Open"]);
         // Banners are silent on the server side; the app plays its own sound.
@@ -216,7 +225,7 @@ fn exercise(scenario: Scenario, unicast: bool) -> (Outcome, usize) {
                 .unwrap();
             // The real production operation owns receiver setup, Notify,
             // correlation, terminal callback and capacity release.
-            show(Ok(connection), "Title", "Preview", pending).await;
+            show(Ok(connection), "Title", PREVIEW, pending).await;
             assert_eq!(*state.0.lock().unwrap(), 0);
             let mut seen = seen.lock().unwrap();
             assert_eq!(seen.len(), 1);
@@ -237,6 +246,11 @@ fn click_before_notify_reply_survives_unicast_and_broadcast_and_closes_once() {
     for unicast in [true, false] {
         assert_eq!(exercise(Scenario::Click, unicast), (Outcome::Activated, 1));
     }
+}
+
+#[test]
+fn markup_servers_receive_escaped_plain_text() {
+    assert_eq!(exercise(Scenario::Markup, true), (Outcome::Activated, 1));
 }
 
 #[test]

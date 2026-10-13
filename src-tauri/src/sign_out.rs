@@ -1,5 +1,5 @@
 //! Sign out of Buzz. The command only records intent in a marker outside app
-//! data, stops agents and restarts. The next launch, holding alone the lock for
+//! data and restarts, which stops agents. The next launch, holding alone the lock for
 //! its key (and, for a wipe, the lock every Buzz shares), does every deletion before any window, service or identity read:
 //! agent keys (when asked), the wipe, then the human key. Each step is safe to
 //! repeat; any failure keeps the marker and Buzz exits, so the next launch retries.
@@ -32,15 +32,25 @@ const AGENT_STOPPING: &str =
 const ALREADY: &str = "Buzz is already signing out.";
 const LINKED: &str = "Erasing is unavailable because a Buzz storage folder is a link or couldn't be checked; nothing was removed";
 const DEV_WIPE: &str = "Erasing is unavailable in development builds because they share agent keys and plugin storage with the installed Buzz";
-const KEPT: &str = "agent-controller";
+// TEMPORARY agents rename: remove after 2026-10-18; see the migration module.
+pub(crate) mod migrate_agents;
+/// App data folder holding the current Agents identities.
+pub(crate) const AGENTS: &str = "agents";
+pub(crate) const OLD_AGENTS: &str = "agent-controller";
 /// One lock per running agent, held by its supervisor until the agent has
 /// stopped, even after Buzz exits. Shared by every Buzz, under the user data folder.
 pub(crate) const AGENT_OWNERSHIP: &str = "dev.local.buzz.agent-ownership";
-/// What a kept agent needs to be identified and start again: the agent list
-/// with each agent's settings, and the shared agent defaults. Its keys live in
-/// the keychain. Anything else in `KEPT` (saved logins, logs, run folders, and
-/// whatever is added later) is wiped.
-const KEPT_FILES: [&str; 2] = ["agents.json", "defaults.json"];
+/// What kept agents need to be identified and start again, by app data folder:
+/// the Agents list, and the earlier system's list and defaults to port from.
+/// Their keys live in the keychain. Anything else in these folders (hosting
+/// locks, saved logins, logs, run folders, and whatever is added later) is wiped.
+const KEPT: Kept = &[
+    (AGENTS, &["identities.json"]),
+    (migrate_agents::LEGACY, &["identities.json"]),
+    (OLD_AGENTS, &["agents.json", "defaults.json"]),
+];
+/// The children a wiped folder keeps, each with the files it keeps.
+type Kept = &'static [(&'static str, &'static [&'static str])];
 /// Held shared by every Buzz and alone only to wipe. Named for the storage every
 /// Buzz shares whatever its identifier: the default plugin folder and the fixed
 /// agent key service. It is the release app's name too.
@@ -118,18 +128,20 @@ impl Paths {
             others,
         })
     }
-    /// Each wiped folder, and the child it keeps (the agent registry) unless agents go too.
-    fn targets(&self, choices: Choices) -> Vec<(&Path, Option<&str>)> {
-        let kept = (!choices.remove_agents).then_some(KEPT);
+    /// Each wiped folder, and the children it keeps (the agent registries) unless agents go too.
+    fn targets(&self, choices: Choices) -> Vec<(&Path, Kept)> {
+        let kept = if choices.remove_agents { &[] } else { KEPT };
         std::iter::once((self.app_data.as_path(), kept))
-            .chain(self.others.iter().map(|path| (path.as_path(), None)))
+            .chain(self.others.iter().map(|path| (path.as_path(), &[] as Kept)))
             .collect()
     }
     /// The wipe never deletes through a link: every folder it moves, opens or
-    /// removes, its trash and the kept registry must be a real folder or absent.
+    /// removes, its trash and the kept registries must be a real folder or absent.
     fn unlinked(&self, choices: Choices) -> std::io::Result<()> {
         if choices.remove_agents {
-            real_dir(&self.app_data.join(KEPT))?;
+            for (registry, _) in KEPT {
+                real_dir(&self.app_data.join(registry))?;
+            }
         }
         if !choices.wipe {
             return Ok(());
@@ -137,7 +149,7 @@ impl Paths {
         for (path, kept) in self.targets(choices) {
             for path in [path.to_owned(), trash(path)] {
                 if real_dir(&path)? {
-                    if let Some(child) = kept {
+                    for (child, _) in kept {
                         real_dir(&path.join(child))?;
                     }
                 }
@@ -370,6 +382,7 @@ pub(crate) fn boot(
         locks.key.unlock().map_err(failed)?;
         handoff();
     }
+    migrate_agents::migrate(paths, &locks)?;
     Ok(Instance {
         locks: Mutex::new(locks),
         marker: paths.marker.clone(),
@@ -445,15 +458,15 @@ fn missing(result: std::io::Result<()>) -> std::io::Result<()> {
     }
 }
 
-/// Move `path` to its trash name, then return its kept child. Resumes an
+/// Move `path` to its trash name, then return its kept children. Resumes an
 /// earlier attempt that stopped part-way.
-fn move_aside(path: &Path, kept: Option<&str>) -> std::io::Result<()> {
+fn move_aside(path: &Path, kept: Kept) -> std::io::Result<()> {
     let moved = trash(path);
     if !real_dir(&moved)? {
         real_dir(path)?;
         missing(fs::rename(path, &moved))?;
     }
-    if let Some(child) = kept {
+    for (child, _) in kept {
         if real_dir(&moved.join(child))? && !(real_dir(path)? && real_dir(&path.join(child))?) {
             fs::create_dir_all(path)?;
             fs::rename(moved.join(child), path.join(child))?;
@@ -462,32 +475,36 @@ fn move_aside(path: &Path, kept: Option<&str>) -> std::io::Result<()> {
     Ok(())
 }
 
-fn move_back(path: &Path, kept: Option<&str>) -> std::io::Result<()> {
+fn move_back(path: &Path, kept: Kept) -> std::io::Result<()> {
     let moved = trash(path);
     if !real_dir(&moved)? {
         return Ok(());
     }
-    if let Some(child) = kept {
+    for (child, _) in kept {
         if real_dir(path)? && real_dir(&path.join(child))? {
             real_dir(&moved.join(child))?;
             fs::rename(path.join(child), moved.join(child))?;
         }
     }
-    // Only the kept child was returned, so anything else here is unexpected; keep it.
+    // Only the kept children were returned, so anything else here is unexpected; keep it.
     if real_dir(path)? {
         missing(fs::remove_dir(path))?;
     }
     fs::rename(moved, path)
 }
 
-/// Delete `path` except its kept child's `KEPT_FILES`, whether it is the
+/// Delete `path` except its kept children's kept files, whether it is the
 /// original or was recreated.
-fn clear(path: &Path, kept: Option<&str>) -> std::io::Result<()> {
-    let Some(kept) = kept else {
+fn clear(path: &Path, kept: Kept) -> std::io::Result<()> {
+    if kept.is_empty() {
         return remove_real_dir(path);
-    };
-    clear_except(path, &[kept])?;
-    clear_except(&path.join(kept), &KEPT_FILES)
+    }
+    let children: Vec<&str> = kept.iter().map(|(child, _)| *child).collect();
+    clear_except(path, &children)?;
+    for (child, files) in kept {
+        clear_except(&path.join(child), files)?;
+    }
+    Ok(())
 }
 
 /// Delete a real folder; absent is done, and a link is refused, never followed or unlinked.
@@ -498,11 +515,11 @@ fn remove_real_dir(path: &Path) -> std::io::Result<()> {
     missing(fs::remove_dir_all(path))
 }
 
-/// Delete `path`'s trash, refusing a link at the trash or its kept child.
-fn remove_trash(path: &Path, kept: Option<&str>) -> std::io::Result<()> {
+/// Delete `path`'s trash, refusing a link at the trash or a kept child.
+fn remove_trash(path: &Path, kept: Kept) -> std::io::Result<()> {
     let moved = trash(path);
-    if let Some(child) = kept {
-        if real_dir(&moved)? {
+    if real_dir(&moved)? {
+        for (child, _) in kept {
             real_dir(&moved.join(child))?;
         }
     }
@@ -549,19 +566,15 @@ fn finish(
     remove_agent_keys: impl FnOnce(&Path) -> Result<(), String>,
     remove_key: impl FnOnce() -> Result<(), String>,
 ) -> Result<(), String> {
-    // Agent keys go first, while their registry is still in place; nothing is
-    // moved until every key is gone, so a registry confirmed absent means it's done.
-    // Failing to look is not absence: stop before moving anything.
+    // Agent keys go first, while their registries in app data are still in
+    // place; nothing is moved until every key is gone, so a registry confirmed
+    // absent means it's done. Failing to look is not absence: stop before moving anything.
     paths
         .unlinked(choices)
         .map_err(|error| format!("check wipe folders: {error}"))?;
-    let registry = paths.app_data.join(KEPT);
-    if choices.remove_agents
-        && registry
-            .try_exists()
-            .map_err(|error| format!("check agent registry: {error}"))?
-    {
-        remove_agent_keys(&registry).map_err(|error| format!("remove agent keys: {error}"))?;
+    if choices.remove_agents {
+        remove_agent_keys(&paths.app_data)
+            .map_err(|error| format!("remove agent keys: {error}"))?;
     }
     let targets = if choices.wipe {
         paths.targets(choices)
@@ -635,7 +648,7 @@ fn fenced() -> Failure {
     }
 }
 
-/// Commit intent, close signing, then stop agents. Deleting is left to the next launch.
+/// Commit intent, close signing, then run `shutdown`. Deleting is left to the next launch.
 async fn prepare<S>(
     paths: &Paths,
     choices: Choices,
@@ -661,7 +674,7 @@ where
     })
 }
 
-/// Admit, commit and stop agents. A refusal before the marker withdraws; any
+/// Admit, commit and shut down. A refusal before the marker withdraws; any
 /// fenced failure, before or after it, closes signing and goes to `exit`, never
 /// to the dialog.
 async fn attempt<S, E>(
@@ -697,8 +710,8 @@ where
     }
 }
 
-/// Tear down as Quit does, however that goes, then explain and exit. Supervisors
-/// stop their agents when Buzz exits; a pending erase waits for them at launch.
+/// Tear down as Quit does, however that goes, then explain and exit. Agent
+/// processes stop when Buzz exits; a pending erase waits for any ownership lock at launch.
 async fn exit_fenced<R: tauri::Runtime>(app: tauri::AppHandle<R>) -> Result<(), Failure> {
     let handle = app.clone();
     if let Err(error) = app.run_on_main_thread(move || {
@@ -754,7 +767,7 @@ pub(crate) fn sign_out_wipe_refusal() -> Option<&'static str> {
     current_refusal(true, false)
 }
 
-/// Records the choices, stops agents and restarts; the next launch deletes.
+/// Records the choices and restarts; the next launch deletes.
 #[tauri::command]
 pub(crate) async fn sign_out<R: tauri::Runtime>(
     app: tauri::AppHandle<R>,
@@ -774,15 +787,8 @@ pub(crate) async fn sign_out<R: tauri::Runtime>(
         wipe,
         remove_agents,
     };
-    let stop = app.clone();
-    let shutdown = || async move {
-        tauri::async_runtime::spawn_blocking(move || {
-            stop.state::<crate::agent_models::ModelHost>().shutdown();
-            stop.state::<crate::AgentHost>().shutdown()
-        })
-        .await
-        .map_err(|error| error.to_string())?
-    };
+    // Agents run as plugin host processes, which stop when Buzz exits.
+    let shutdown = || async { Ok(()) };
     let identity = app.state::<crate::identity::IdentityHost>().inner().clone();
     let pairing = app.state::<crate::pairing::Pairing>().inner().clone();
     // Close the signer and any pairing that already holds a copy of the key.

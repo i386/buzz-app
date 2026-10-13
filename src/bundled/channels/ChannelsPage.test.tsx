@@ -21,11 +21,6 @@ vi.mock("../../features/relay/react", async (original) => ({
   ...(await original<typeof import("../../features/relay/react")>()),
   useRelayConnection: (relay: RelayData) => relay.snapshot(),
 }));
-const providers = {
-  snapshot: () => [],
-  subscribe: () => () => {},
-  register: () => {},
-};
 const pages = {
   subscribe: () => () => {},
   snapshot: () => [],
@@ -33,7 +28,7 @@ const pages = {
 function workspace(scope: string, generation: number) {
   const snapshot = { status: "ready", scope, generation } as RelaySnapshot;
   const relay = { snapshot: () => snapshot } as RelayData;
-  const page = ChannelsPage({ providers, relay, panels: {} as Panels, pages });
+  const page = ChannelsPage({ relay, panels: {} as Panels, pages });
   return page.props.children as ReactElement<{ scope: string }>;
 }
 
@@ -91,7 +86,6 @@ it("the actual workspace receives session-bound authority, never the page's reus
       subscribe: () => () => {},
     }).request;
     const rendered = ChannelsPage({
-      providers,
       relay,
       panels: {} as Panels,
       pages,
@@ -110,7 +104,6 @@ it("the actual workspace receives session-bound authority, never the page's reus
     ).toBe(false);
     expect(parent.signal.aborted).toBe(false);
     const replacement = ChannelsPage({
-      providers,
       relay,
       panels: {} as Panels,
       pages,

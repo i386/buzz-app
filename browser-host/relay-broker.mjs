@@ -1921,7 +1921,6 @@ export function relayBrokerPlugin({
               "/api/relay/read-state-publish",
               "/api/relay/profile",
               "/api/relay/direct-message",
-              "/api/relay/authorize-agent",
               "/api/relay/agent-log-proof",
               "/api/relay/git-authorization",
               "/api/relay/resolve-agent-community",
@@ -2195,26 +2194,6 @@ export function relayBrokerPlugin({
               (identity) => identity.pubkey,
             );
             return json(res, 200, { identities });
-          }
-          if (route === "/api/relay/authorize-agent") {
-            if (
-              !scoped ||
-              filters?.owner !== viewer ||
-              !/^[0-9a-f]{64}$/.test(filters?.pubkey ?? "") ||
-              filters.pubkey === viewer ||
-              Object.keys(filters).length !== 2
-            )
-              return json(res, 400, {
-                error: "Invalid agent owner authorization",
-              });
-            cancel.signal.throwIfAborted();
-            const digest = createHash("sha256")
-              .update(`nostr:agent-auth:${filters.pubkey}:`)
-              .digest();
-            const signature = Buffer.from(schnorr.sign(digest, key)).toString(
-              "hex",
-            );
-            return json(res, 200, { auth: ["auth", viewer, "", signature] });
           }
           if (presence && !presenceFilter(filters))
             return json(res, 400, { error: "Invalid presence filter" });

@@ -5,14 +5,13 @@ import {
   ACTIVITY_TURN_LIMIT,
   createAgentActivity,
 } from "./activity";
-import { parseAgentManagementRequest } from "./management-request";
 import type { LiveSnapshot } from "../relay/live";
 const agent = "a".repeat(64);
 const connected: LiveSnapshot = {
   status: "connected",
   routes: [{ id: "observer", status: "live", replay: "unknown" }],
 };
-function fixture() {
+function fixture(findMessage?: Parameters<typeof createAgentActivity>[5]) {
   vi.useFakeTimers();
   vi.setSystemTime(1800000000000);
   const observe = vi.fn();
@@ -21,6 +20,9 @@ function fixture() {
     true,
     observe,
     (channel) => !(denied && channel === "a"),
+    undefined,
+    undefined,
+    findMessage,
   );
   const release = activity.queries.activate();
   activity.state(connected);
@@ -400,212 +402,55 @@ it("notifies the working-channel subscriber only on set changes, including timer
   unsubscribe();
   f.release();
 });
-it.each([undefined, "visible-channel"])(
-  "rejects a denied payload channel after resolution with envelope channel %s",
-  async (channelId) => {
-    let release!: () => void;
-    const resolution = new Promise<void>((resolve) => {
-      release = resolve;
-    });
-    const resolve = vi.fn(() => resolution);
-    const observe = vi.fn();
-    const activity = createAgentActivity(
-      true,
-      observe,
-      (id) => id === "visible-channel",
-      (listener) => listener(),
-      resolve,
-    );
-    const receive = vi.fn();
-    activity.management.activate();
-    activity.management.subscribe(receive);
-    activity.state(connected);
-    try {
-      activity.receive(
-        {
-          id: "2".repeat(64),
-          agent,
-          createdAt: Math.floor(Date.now() / 1000),
-          plaintext: JSON.stringify({
-            kind: "agent_management_request",
-            channelId,
-            payload: {
-              type: "agent_management_request",
-              action: "update",
-              requestId: "denied-payload",
-              request: {
-                channelId: "denied-channel",
-                agentName: "Sol",
-                model: "gpt-6-sol",
-              },
-            },
-          }),
-        },
-        observe.mock.lastCall?.[0] as number,
-      );
-      expect(resolve).toHaveBeenCalledExactlyOnceWith("denied-channel");
-      release();
-      await resolution;
-      expect(receive).not.toHaveBeenCalled();
-    } finally {
-      release();
-      activity.dispose();
-    }
-  },
-);
-
-it("resolves an unknown management channel before applying its access check", async () => {
-  let allowed = false;
-  let resolvePending: (() => void) | undefined;
-  const resolution = new Promise<void>((resolve) => {
-    resolvePending = () => {
-      allowed = true;
-      resolve();
-    };
-  });
-  const resolve = vi.fn(() => resolution);
-  const observe = vi.fn();
-  const activity = createAgentActivity(
-    true,
-    observe,
-    () => allowed,
-    (listener) => listener(),
-    resolve,
-  );
-  const receive = vi.fn();
-  activity.management.activate();
-  activity.management.subscribe(receive);
-  activity.state(connected);
-  const request = {
-    type: "agent_management_request",
-    action: "update",
-    requestId: "request-overflow",
-    request: {
-      channelId: "overflow-channel",
-      agentName: "Sol",
-      model: "gpt-6-sol",
-    },
-  };
-  activity.receive(
-    {
-      id: "1".repeat(64),
-      agent,
-      createdAt: Math.floor(Date.now() / 1000),
-      plaintext: JSON.stringify({
-        kind: "agent_management_request",
-        channelId: request.request.channelId,
-        payload: request,
-      }),
-    },
-    observe.mock.lastCall?.[0] as number,
-  );
-  expect(resolve).toHaveBeenCalledExactlyOnceWith("overflow-channel");
-  resolvePending?.();
-  for (let tick = 0; tick < 5; tick++) await Promise.resolve();
-  expect(allowed).toBe(true);
-  expect(receive).toHaveBeenCalledWith(agent, request);
-  activity.dispose();
-});
-
-it("delivers each valid owner-reviewed agent update once without adding it to activity", () => {
+it("keeps agent-management requests out of activity", () => {
   const f = fixture();
-  const receive = vi.fn();
-  f.activity.management.subscribe(receive);
-  const request = {
-    type: "agent_management_request",
-    action: "update",
-    requestId: "311e92f4-d948-40ed-af0d-3c9a02803ffc",
-    request: {
+  f.send(
+    f.item("agent_management_request", "draft", {
       channelId: "34aeaccc-c83b-4422-beac-a4b8661f9f59",
-      agentName: "Sol",
-      model: "gpt-6-sol",
-    },
-  };
-  const raw = f.item("agent_management_request", "draft", {
-    channelId: request.request.channelId,
-    payload: request,
-  });
-
-  f.send(raw);
-  f.send(raw);
-
-  expect(receive).toHaveBeenCalledOnce();
-  expect(receive).toHaveBeenCalledWith(agent, request);
+      payload: { type: "agent_management_request", action: "update" },
+    }),
+  );
   expect(f.snapshot().records).toEqual([]);
   f.activity.dispose();
 });
-
-it("rejects unknown and secret-shaped agent-management fields", () => {
-  const request = {
-    type: "agent_management_request",
-    action: "update",
-    requestId: "request-1",
-    request: {
-      channelId: "34aeaccc-c83b-4422-beac-a4b8661f9f59",
-      agentName: "Sol",
-      model: "gpt-6-sol",
-    },
+it("associates lifecycle with retained signed triggers and preserves it through completion", () => {
+  const root = "b".repeat(64),
+    request = "c".repeat(64);
+  const message = {
+    id: request,
+    pubkey: agent,
+    kind: 9,
+    created_at: 1800000000,
+    content: "work",
+    tags: [
+      ["h", "a"],
+      ["e", root, "", "reply"],
+    ],
   };
-  expect(parseAgentManagementRequest(request)).toEqual(request);
-  expect(
-    parseAgentManagementRequest({
-      ...request,
-      action: "create",
-      request: {
-        channelId: request.request.channelId,
-        displayName: "New agent",
-        systemPrompt: "Help.",
-      },
+  let retained = false;
+  const f = fixture((id) => (retained && id === request ? message : undefined));
+  f.send(
+    f.item("turn_started", "one", {
+      payload: { triggeringEventIds: [request] },
     }),
-  ).toEqual({
-    type: "agent_management_request",
-    action: "create",
-    requestId: "request-1",
-    request: {
-      channelId: request.request.channelId,
-      displayName: "New agent",
-      systemPrompt: "Help.",
-    },
+  );
+  expect(f.snapshot().turns[0]?.requests).toEqual([]);
+  retained = true;
+  f.activity.messagesChanged([message]);
+  expect(f.snapshot().turns[0]?.requests).toEqual([
+    { messageId: request, threadRootId: root },
+  ]);
+  f.send(f.item("turn_completed"));
+  expect(f.snapshot().turns[0]).toMatchObject({
+    state: "ended",
+    requests: [{ messageId: request, threadRootId: root }],
   });
-  expect(
-    parseAgentManagementRequest({
-      ...request,
-      request: { ...request.request, apiKey: "never" },
+  f.send(
+    f.item("turn_started", "other", {
+      channelId: "b",
+      payload: { triggeringEventIds: [request] },
     }),
-  ).toBeNull();
-  expect(
-    parseAgentManagementRequest({
-      ...request,
-      request: { ...request.request, respondTo: "anyone" },
-    }),
-  ).toBeNull();
-});
-
-it("bounds retained management request IDs", () => {
-  const f = fixture();
-  const receive = vi.fn();
-  f.activity.management.subscribe(receive);
-  const request = {
-    type: "agent_management_request",
-    action: "update",
-    requestId: "request-0",
-    request: {
-      channelId: "34aeaccc-c83b-4422-beac-a4b8661f9f59",
-      agentName: "Sol",
-      model: "gpt-6-sol",
-    },
-  };
-  const send = (requestId: string) =>
-    f.send(
-      f.item("agent_management_request", requestId, {
-        channelId: request.request.channelId,
-        payload: { ...request, requestId },
-      }),
-    );
-
-  for (let index = 0; index <= 200; index++) send(`request-${index}`);
-  send("request-0");
-
-  expect(receive).toHaveBeenCalledTimes(202);
-  f.activity.dispose();
+  );
+  expect(f.snapshot().turns[1]?.requests).toEqual([]);
+  f.release();
 });

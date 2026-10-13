@@ -6,6 +6,7 @@ import type { Attachment } from "../../features/relay/contracts";
 import { useChannelWindow } from "../../features/relay/react";
 import { clientMetrics } from "../../features/developer/client-metrics";
 import { ChannelTimeline } from "../../features/messages/ChannelTimeline";
+import type { MessageLinkOrigin } from "../../features/messages/MessageRow";
 import { Button } from "../../shared/design-system/ui/Button";
 import styles from "./Channels.module.css";
 
@@ -30,7 +31,7 @@ export const ChannelBody = memo(function ChannelBody({
   viewer?: string | undefined;
   channelId: string;
   navigation?: PageNavigation | undefined;
-  onOpenLink(url: string): boolean;
+  onOpenLink(url: string, origin?: MessageLinkOrigin): boolean;
   canOpenLink?: ((target: string) => boolean) | undefined;
   revealMessageId?: string | undefined;
   onOpenThread?:

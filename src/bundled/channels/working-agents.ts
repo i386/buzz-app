@@ -1,3 +1,7 @@
+import {
+  localActivity,
+  localWorkLabel,
+} from "../../features/agents/local-activity";
 import type { RelaySession } from "../../features/relay/session";
 import { activityRecords } from "../../features/agents/activity-records";
 
@@ -5,16 +9,29 @@ type Snapshot = ReturnType<RelaySession["agentActivity"]["snapshot"]>;
 
 /** Channel-wide evidence only. A thread typing signal stays in its thread. */
 export function workingAgents(snapshot: Snapshot, channelId: string): string[] {
-  if (snapshot.status !== "listening") return [];
+  const local = localActivity(snapshot, channelId);
+  const localKeys = [...local.values()]
+    .filter((row) => row.state === "waiting" || row.state === "working")
+    .map((row) => row.agent);
+  if (snapshot.status !== "listening") return localKeys.sort();
   return [
     ...new Set([
+      ...localKeys,
       ...snapshot.turns
         .filter(
-          (turn) => turn.channelId === channelId && turn.state === "working",
+          (turn) =>
+            turn.channelId === channelId &&
+            turn.state === "working" &&
+            !local.has(turn.agent),
         )
         .map((turn) => turn.agent),
       ...snapshot.typing
-        .filter((entry) => entry.channelId === channelId && !entry.threadRootId)
+        .filter(
+          (entry) =>
+            entry.channelId === channelId &&
+            !entry.threadRootId &&
+            !local.has(entry.agent),
+        )
         .map((entry) => entry.agent),
     ]),
   ].sort();
@@ -25,7 +42,25 @@ export function workingAgentDetails(
   snapshot: Snapshot,
   channelId: string,
   agent: string,
-): { startedAt: number; messageId?: string } | undefined {
+):
+  | { startedAt: number; messageId?: string; label?: string; local?: boolean }
+  | undefined {
+  const work = localActivity(snapshot, channelId).get(agent);
+  if (work) {
+    if (work.state !== "waiting" && work.state !== "working") return;
+    const active = (snapshot.local ?? []).filter(
+      (row) =>
+        row.channelId === channelId &&
+        row.agent === agent &&
+        (row.state === "waiting" || row.state === "working"),
+    );
+    return {
+      startedAt: Math.min(...active.map((row) => row.startedAt)),
+      ...(active.length === 1 ? { messageId: work.messageId } : {}),
+      label: localWorkLabel(work),
+      local: true,
+    };
+  }
   if (snapshot.status !== "listening") return;
   const turns = snapshot.turns
     .filter(

@@ -80,7 +80,7 @@ export const test = base.extend({
   channelIds: [channels, { option: true }],
   developmentReact: [false, { option: true, scope: "worker" }],
   pluginFixtures: [false, { option: true, scope: "worker" }],
-  agentManagement: [false, { option: true, scope: "worker" }],
+  localAgentActivity: [false, { option: true, scope: "worker" }],
   pairingFixture: [false, { option: true, scope: "worker" }],
   companionFixture: [false, { option: true, scope: "worker" }],
   compiledApp: [buildApp, { scope: "worker" }],
@@ -137,7 +137,6 @@ export const test = base.extend({
       historyCounts,
       channelIds: channels,
       pluginFixtures,
-      agentManagement,
       developmentReact,
       compiledApp,
     },
@@ -178,7 +177,6 @@ export const test = base.extend({
       dmLabels || readState || exactMessages || actionProfile
         ? [key(5), ...(dmLabels ? [key(6), key(7)] : [])]
         : [];
-    const managementKey = agentManagement ? key(8) : undefined;
     const peerKey = peerKeys[0];
     const communityIds = {
       primary: "01234567-89ab-cdef-0123-456789abcdef",
@@ -258,10 +256,7 @@ export const test = base.extend({
       ? Array.from({ length: 1001 }, (_, i) =>
           (i + 1).toString(16).padStart(64, "0"),
         )
-      : [
-          ...peerKeys.map(getPublicKey),
-          ...(managementKey ? [getPublicKey(managementKey)] : []),
-        ];
+      : peerKeys.map(getPublicKey);
     const dmIds = Object.keys(dmMembers).length
       ? Object.keys(dmMembers)
       : largeSidebar
@@ -827,7 +822,6 @@ export const test = base.extend({
         browserName,
         developmentReact,
         pluginFixtures,
-        agentManagement,
         agentMessageDeletion,
         compiledBuild: {
           worker: testInfo.workerIndex,
@@ -848,7 +842,7 @@ export const test = base.extend({
         platform: platform(),
         arch: arch(),
         viewport: testInfo.project.use.viewport,
-        build: `${developmentReact ? "Vite production build with development React" : "production frontend"}; ${productionBroker ? "production broker; modeled upstream WS/HTTP policy" : "fixture broker HTTP"}; ${agentManagement ? "mocked native agent control" : "no native"}; no real relay`,
+        build: `${developmentReact ? "Vite production build with development React" : "production frontend"}; ${productionBroker ? "production broker; modeled upstream WS/HTTP policy" : "fixture broker HTTP"}; no native; no real relay`,
       },
       queries: [],
       publications: [],
@@ -1101,6 +1095,19 @@ export const test = base.extend({
         expect(filter).toEqual({
           kinds: [30175, 30178],
           limit: 63,
+        });
+        return [];
+      }
+      // The Agents service's read of the owner's agent list.
+      if (
+        filter.kinds?.length === 1 &&
+        filter.kinds[0] === 30177 &&
+        !filter["#d"]
+      ) {
+        expect(filter).toEqual({
+          authors: [viewer],
+          kinds: [30177],
+          limit: 500,
         });
         return [];
       }
@@ -2247,7 +2254,6 @@ export const test = base.extend({
           return event;
         },
         participants,
-        managementKey,
         meAgents,
         viewer,
         relay,
@@ -2363,6 +2369,23 @@ export const test = base.extend({
           );
           targetEvents.push(event);
           relay.publish("primary", event);
+        },
+        // Relay-owned summary evidence, not a mutation of the client's row.
+        threadSummary(rootId, participants, replyCount) {
+          const event = sign(
+            39005,
+            [
+              ["h", "alpha"],
+              ["e", rootId],
+              ["d", rootId],
+            ],
+            JSON.stringify({ reply_count: replyCount, participants }),
+            relayKey,
+            Math.floor(Date.now() / 1000) + 1,
+          );
+          threadSummaries.push(event);
+          relay.publish("primary", event);
+          return event;
         },
         reply(rootId, own = false, deliver = true) {
           const replies = threadReplies.get(rootId);

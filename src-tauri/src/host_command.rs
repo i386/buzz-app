@@ -8,7 +8,7 @@ use std::os::unix::process::CommandExt as _;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::time::Duration;
-use tokio::io::AsyncReadExt;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::process::Command;
 
 #[cfg(windows)]
@@ -180,6 +180,7 @@ pub(crate) async fn plugin_host_run_command(
     id: String,
     revision: String,
     command_id: String,
+    input: Option<String>,
 ) -> Result<Option<String>, String> {
     let operation = async {
         let command = with_manager(manager, move |manager| {
@@ -192,7 +193,7 @@ pub(crate) async fn plugin_host_run_command(
         })
         .await
         .ok()?;
-        run_command(&command, DEADLINE).await
+        run_command(&command, input.as_deref(), DEADLINE).await
     };
     Ok(tokio::time::timeout(DEADLINE, operation)
         .await
@@ -209,7 +210,7 @@ pub(crate) fn effective_path() -> OsString {
         } else {
             path
         };
-        // Per-user installs, such as Claude Code's official installer, come first:
+        // Per-user installs, such as Claude's official installer, come first:
         // an older system-wide copy in /usr/local/bin would otherwise run instead,
         // and installing again could not replace it.
         let mut directories = std::env::var_os("HOME")
@@ -249,7 +250,22 @@ pub(crate) fn resolve_program(program: &str, effective_path: &OsStr) -> PathBuf 
     PathBuf::from(program)
 }
 
-async fn run_command(command: &HostCommand, deadline: Duration) -> Option<String> {
+async fn run_command(
+    command: &HostCommand,
+    input: Option<&str>,
+    deadline: Duration,
+) -> Option<String> {
+    if command
+        .max_input_bytes
+        .is_some_and(|limit| !(1..=buzzodz_plugins::MAX_HOST_COMMAND_INPUT_BYTES).contains(&limit))
+        || input.is_some_and(|value| {
+            command
+                .max_input_bytes
+                .map_or(true, |limit| value.len() as u64 > limit)
+        })
+    {
+        return None;
+    }
     let path = effective_path();
     let max_output_bytes = command
         .max_output_bytes
@@ -263,6 +279,7 @@ async fn run_command(command: &HostCommand, deadline: Duration) -> Option<String
         deadline,
         &path,
         max_output_bytes,
+        input,
     )
     .await
 }
@@ -273,23 +290,29 @@ async fn run(
     deadline: Duration,
     path: &OsStr,
     max_output_bytes: u64,
+    input: Option<&str>,
 ) -> Option<String> {
-    let (output, status) = run_output(executable, args, deadline, path, max_output_bytes).await?;
+    let (output, status) =
+        run_output_with_input(executable, args, deadline, path, max_output_bytes, input).await?;
     status.success().then_some(output)
 }
 
-/// Bounded stdout and exit status; callers must project away private command output.
-pub(crate) async fn run_output(
+async fn run_output_with_input(
     executable: &Path,
     args: &[String],
     deadline: Duration,
     path: &OsStr,
     max_output_bytes: u64,
+    input: Option<&str>,
 ) -> Option<(String, std::process::ExitStatus)> {
     let mut command = Command::new(executable);
     command
         .args(args)
-        .stdin(Stdio::null())
+        .stdin(if input.is_some() {
+            Stdio::piped()
+        } else {
+            Stdio::null()
+        })
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
         .kill_on_drop(true);
@@ -312,15 +335,30 @@ pub(crate) async fn run_output(
     };
     let stdout = child.stdout.take()?;
     let output = tokio::time::timeout(deadline, async {
-        let mut bytes = Vec::new();
-        stdout
-            .take(max_output_bytes + 1)
-            .read_to_end(&mut bytes)
-            .await
-            .ok()?;
-        if bytes.len() as u64 > max_output_bytes {
-            return None;
-        }
+        let writer = async {
+            if let Some(input) = input {
+                let mut stdin = child.stdin.take()?;
+                stdin.write_all(input.as_bytes()).await.ok()?;
+                stdin.shutdown().await.ok()?;
+            }
+            Some(())
+        };
+        let reader = async {
+            let mut bytes = Vec::new();
+            stdout
+                .take(max_output_bytes + 1)
+                .read_to_end(&mut bytes)
+                .await
+                .ok()?;
+            if bytes.len() as u64 > max_output_bytes {
+                return None;
+            }
+            Some(bytes)
+        };
+        // A command may produce output before reading its input.
+        let (written, bytes) = tokio::join!(writer, reader);
+        written?;
+        let bytes = bytes?;
         let status = child.wait().await.ok()?;
         #[cfg(unix)]
         {
@@ -359,6 +397,7 @@ mod tests {
             deadline,
             &effective_path(),
             super::DEFAULT_HOST_COMMAND_OUTPUT_BYTES,
+            None,
         )
         .await
     }
@@ -390,28 +429,80 @@ mod tests {
             program: "env".into(),
             args: vec![path.to_string_lossy().into_owned()],
             max_output_bytes: None,
+            max_input_bytes: None,
         };
         assert_eq!(
-            super::run_command(&command, Duration::from_secs(2)).await,
+            super::run_command(&command, None, Duration::from_secs(2)).await,
             None
         );
         command.max_output_bytes = Some(5000);
         assert_eq!(
-            super::run_command(&command, Duration::from_secs(2)).await,
+            super::run_command(&command, None, Duration::from_secs(2)).await,
             Some("x".repeat(5000))
         );
         command.max_output_bytes = Some(4999);
         assert_eq!(
-            super::run_command(&command, Duration::from_secs(2)).await,
+            super::run_command(&command, None, Duration::from_secs(2)).await,
             None
         );
         for limit in [0, super::MAX_HOST_COMMAND_OUTPUT_BYTES + 1] {
             command.max_output_bytes = Some(limit);
             assert_eq!(
-                super::run_command(&command, Duration::from_secs(2)).await,
+                super::run_command(&command, None, Duration::from_secs(2)).await,
                 None
             );
         }
+    }
+
+    #[tokio::test]
+    async fn stdin_is_exact_data_and_output_is_drained_concurrently() {
+        let (_directory, path) = executable("printf 'prefix'; cat");
+        let input = "$(touch injected)\nreview decision";
+        assert_eq!(
+            run_with_path(
+                &path,
+                &[],
+                Duration::from_secs(1),
+                &effective_path(),
+                65536,
+                Some(input)
+            )
+            .await,
+            Some(format!("prefix{input}"))
+        );
+        let (_directory, path) = executable("head -c 16384 /dev/zero; cat");
+        let input = "x".repeat(16384);
+        let output = run_with_path(
+            &path,
+            &[],
+            Duration::from_secs(2),
+            &effective_path(),
+            65536,
+            Some(&input),
+        )
+        .await
+        .unwrap();
+        assert_eq!(output.len(), 32768);
+    }
+
+    #[tokio::test]
+    async fn undeclared_and_oversized_input_do_not_launch_the_command() {
+        let directory = tempfile::tempdir().unwrap();
+        let marker = directory.path().join("executed");
+        let mut command: buzzodz_plugins::HostCommand = serde_json::from_value(serde_json::json!({
+            "id": "review", "program": "touch", "args": [marker]
+        }))
+        .unwrap();
+        assert_eq!(
+            super::run_command(&command, Some("data"), Duration::from_secs(1)).await,
+            None
+        );
+        command.max_input_bytes = Some(1);
+        assert_eq!(
+            super::run_command(&command, Some("data"), Duration::from_secs(1)).await,
+            None
+        );
+        assert!(!marker.exists());
     }
 
     #[tokio::test]
@@ -452,7 +543,8 @@ mod tests {
                 &[],
                 Duration::from_secs(5),
                 &path,
-                super::DEFAULT_HOST_COMMAND_OUTPUT_BYTES
+                super::DEFAULT_HOST_COMMAND_OUTPUT_BYTES,
+                None
             )
             .await,
             Some("ready\n".into())
@@ -687,6 +779,7 @@ mod windows_tests {
                 Duration::from_secs(10),
                 &effective_path(),
                 super::DEFAULT_HOST_COMMAND_OUTPUT_BYTES,
+                None,
             )
             .await
         });
@@ -714,6 +807,7 @@ mod windows_tests {
                 Duration::from_secs(5),
                 &effective_path(),
                 super::DEFAULT_HOST_COMMAND_OUTPUT_BYTES,
+                None,
             )
             .await
         });

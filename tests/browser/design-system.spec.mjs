@@ -85,13 +85,13 @@ test("shared tokens reach app controls without history or chip overrides", async
         positioner.append(surface);
         probes.append(positioner);
       } else {
+        // The completion surface owns the data-mention variant. Other features
+        // also name classes popup, so stylesheet order is not an identity.
         const selector = selectors.find((s) =>
-          new RegExp(`\\._${name}_`).test(s),
+          /\._popup_[\w]+\[data-mention\]/.test(s),
         );
-        if (!selector) throw new Error(`Missing popup style: ${name}`);
-        surface.className = selector.match(
-          new RegExp(`\\.(_${name}_[\\w]+)`),
-        )[1];
+        if (!selector) throw new Error("Missing completion popup style");
+        surface.className = selector.match(/\.(_popup_[\w]+)/)[1];
         probes.append(surface);
       }
     }

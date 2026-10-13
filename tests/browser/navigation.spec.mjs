@@ -9,6 +9,28 @@ const composer = (page, name) =>
 const entry = (page) =>
   page.evaluate(() => history.state.buzzNavigationV1.entry);
 
+test("a collapsible sidebar yields to narrow drawer styles during resize", async ({
+  page,
+  app,
+}) => {
+  await open(page, app);
+  const navigation = page.locator("#shell-navigation");
+  await expect(navigation).toHaveAttribute("data-sidebar-collapsible", "true");
+
+  await page.setViewportSize({ width: 390, height: 900 });
+  // Model the desktop marker remaining for a frame until React observes the
+  // media-query change; narrow drawer CSS must still win during that interval.
+  await navigation.evaluate((element) => {
+    element.setAttribute("data-sidebar-collapsible", "true");
+  });
+  await expect(navigation).toHaveCSS("display", "none");
+
+  await button(page, "Show navigation").click();
+  await expect(navigation).toHaveAttribute("data-expanded", "true");
+  await expect(navigation).toHaveCSS("display", "flex");
+  await expect(navigation).toBeVisible();
+});
+
 test("a retired contributed Settings destination fails promptly on Back", async ({
   page,
   app,
@@ -18,21 +40,21 @@ test("a retired contributed Settings destination fails promptly on Back", async 
   await page.getByRole("menuitem", { name: "Settings", exact: true }).click();
   const sections = page.getByRole("navigation", { name: "Settings sections" });
   await sections.getByRole("button", { name: "Plugins", exact: true }).click();
-  const templatesEnabled = page.getByRole("switch", {
-    name: "Enable Templates & teams",
+  const pairingEnabled = page.getByRole("switch", {
+    name: "Enable Pair mobile",
     exact: true,
   });
-  if (!(await templatesEnabled.isChecked())) await templatesEnabled.click();
-  const templates = sections.getByRole("button", {
-    name: "Templates",
+  if (!(await pairingEnabled.isChecked())) await pairingEnabled.click();
+  const pairing = sections.getByRole("button", {
+    name: "Pair mobile",
     exact: true,
   });
-  await expect(templates).toBeVisible();
-  await templates.click();
-  await expect(templates).toHaveAttribute("aria-current", "page");
+  await expect(pairing).toBeVisible();
+  await pairing.click();
+  await expect(pairing).toHaveAttribute("aria-current", "page");
   await sections.getByRole("button", { name: "Plugins", exact: true }).click();
-  await templatesEnabled.click();
-  await expect(templates).toHaveCount(0);
+  await pairingEnabled.click();
+  await expect(pairing).toHaveCount(0);
   await button(page, "Go back").click();
   await expect(
     page.getByRole("alert").getByRole("heading", {

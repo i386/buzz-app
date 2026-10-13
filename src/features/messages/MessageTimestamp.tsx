@@ -1,30 +1,12 @@
 import { Tooltip } from "../../shared/design-system/ui/Tooltip";
 import {
   formatDayGroupLabel,
+  formatCompactTime,
   formatFullTimestamp,
   formatItemTimestamp,
 } from "../../shared/datetime";
 import { useLocalDay } from "../../shared/use-local-day";
 import styles from "./Messages.module.css";
-
-// Retain only the current locale/zone pair, never message content. Resolve the
-// defaults on each render so a running app still follows OS timezone changes.
-let clockFormat:
-  | { locale: string; timeZone: string; clock: Intl.DateTimeFormat }
-  | undefined;
-function clock() {
-  const { locale, timeZone } = new Intl.DateTimeFormat().resolvedOptions();
-  if (clockFormat?.locale !== locale || clockFormat.timeZone !== timeZone)
-    clockFormat = {
-      locale,
-      timeZone,
-      clock: new Intl.DateTimeFormat(undefined, {
-        hour: "numeric",
-        minute: "2-digit",
-      }),
-    };
-  return clockFormat.clock;
-}
 
 /** The divider above a day's first row: "Today", "Monday", "June 20, 2025".
  * `data-day` carries the local calendar day. */
@@ -55,12 +37,7 @@ export function MessageTimestamp({
   useLocalDay();
   const date = new Date(createdAt * 1000);
   const label = compact
-    ? clock()
-        .formatToParts(date)
-        .filter((part) => part.type !== "dayPeriod")
-        .map((part) => part.value)
-        .join("")
-        .trim()
+    ? formatCompactTime(createdAt)
     : formatItemTimestamp(createdAt, { withTime: true });
   const fullDate = formatFullTimestamp(createdAt);
   return (

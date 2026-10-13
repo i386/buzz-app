@@ -55,7 +55,9 @@ test("ordinary thread reveals its first content already positioned at the bottom
     );
     await seen;
     await expect(
-      page.getByRole("tab", { name: "Thread", exact: true }),
+      page.locator(
+        '[role="tab"][data-tab-value^="thread:"][aria-selected="true"]',
+      ),
     ).toBeFocused();
     await expect(history).toHaveAttribute("data-positioning");
     await expect(history.getByRole("status")).toHaveText("Loading thread…");

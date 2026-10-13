@@ -17,6 +17,7 @@ import {
   useState,
   useSyncExternalStore,
   type ReactElement,
+  type ComponentProps,
 } from "react";
 import { selectProfiles } from "../../features/relay/profile-selection";
 import type { Profile } from "../../features/relay/contracts";
@@ -196,6 +197,11 @@ export function ChannelActivityPopover({
   const agentIds = activeAgents.join(",");
   const [open, setOpen] = useState(false);
   const triggerPointerType = useRef<string | null>(null);
+  const actions =
+    useRef<
+      NonNullable<ComponentProps<typeof PopoverRoot>["actionsRef"]>["current"]
+    >(null);
+  const pressedOpen = useRef(false);
   const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
     if (!open || !activeAgents.length) return;
@@ -221,7 +227,12 @@ export function ChannelActivityPopover({
       getTargets,
       getTargets,
     ),
-  ) as ({ startedAt: number; messageId?: string } | null)[];
+  ) as ({
+    startedAt: number;
+    messageId?: string;
+    label?: string;
+    local?: boolean;
+  } | null)[];
   // Typing alone lists an agent while the Agent Activity plugin is off, when
   // no activity panel is registered to open.
   const openAgentActivity = useSyncExternalStore(
@@ -236,10 +247,17 @@ export function ChannelActivityPopover({
     if (!hasActivity) setOpen(false);
   }, [hasActivity]);
   const stale = items.length > 0 && snapshot.freshness === "stale";
+  // Row actions close through Base UI so its hover/press state resets; the
+  // sidebar trigger stays mounted after the navigation they start.
+  const close = () => {
+    if (actions.current) actions.current.close();
+    else setOpen(false);
+  };
   return (
     <PopoverRoot
       modal={false}
       open={open}
+      actionsRef={actions}
       onOpenChange={(next, details) => {
         if (next && !hasActivity) return;
         if (details.reason === "trigger-press") {
@@ -253,6 +271,16 @@ export function ChannelActivityPopover({
             return;
           }
         }
+        // A queued hover dismissal must not close a newer keyboard/touch opening.
+        if (
+          !next &&
+          details.reason === "trigger-hover" &&
+          pressedOpen.current
+        ) {
+          details.cancel();
+          return;
+        }
+        pressedOpen.current = next && details.reason === "trigger-press";
         setOpen(next);
         if (next) setNow(Date.now());
         if (next && items.length)
@@ -302,7 +330,8 @@ export function ChannelActivityPopover({
                 {activeAgents.map((agent, index) => {
                   const profile = agentProfiles?.get(agent);
                   const name = profile?.name ?? keyLabels.get(agent) ?? "Agent";
-                  const { messageId, startedAt } = details[index] ?? {};
+                  const { messageId, startedAt, label, local } =
+                    details[index] ?? {};
                   return (
                     <AgentActivityRow
                       key={agent}
@@ -312,7 +341,7 @@ export function ChannelActivityPopover({
                           ? session.media(profile.picture, "small")
                           : undefined
                       }
-                      status="Working"
+                      status={label ?? "Working"}
                       meta={
                         startedAt === undefined
                           ? "—"
@@ -320,13 +349,13 @@ export function ChannelActivityPopover({
                       }
                       openLabel={`Open ${messageId ? "thread" : "conversation"} for ${name} in ${channelName}`}
                       onOpen={() => {
-                        setOpen(false);
+                        close();
                         onOpenWorkingAgent?.(channelId, agent, messageId);
                       }}
                       onOpenActivity={
-                        openAgentActivity
+                        openAgentActivity && !local
                           ? () => {
-                              setOpen(false);
+                              close();
                               openAgentActivity(channelId, agent);
                             }
                           : undefined
@@ -348,7 +377,7 @@ export function ChannelActivityPopover({
                     session={session}
                     agents={activeAgents}
                     onOpen={(selected) => {
-                      setOpen(false);
+                      close();
                       onOpenThread(selected);
                     }}
                   />

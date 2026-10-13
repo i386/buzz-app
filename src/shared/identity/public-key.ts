@@ -1,6 +1,7 @@
 import { npubEncode } from "nostr-tools/nip19";
 
-function canonicalPublicKey(pubkey: string): string | undefined {
+/** The full npub of a hex public key, or undefined for anything else. */
+export function canonicalPublicKey(pubkey: string): string | undefined {
   return /^[0-9a-f]{64}$/i.test(pubkey)
     ? npubEncode(pubkey.toLowerCase())
     : undefined;

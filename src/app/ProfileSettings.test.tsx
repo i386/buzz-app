@@ -110,7 +110,7 @@ it("loads and publishes the selected community profile before updating the local
     picture: "",
     about: "Community bio",
   });
-  expect(screen.getByText("Profile updated")).toBeVisible();
+  expect(await screen.findByText("Profile updated")).toBeVisible();
   expect(inspect).toHaveBeenCalledWith("community-id");
 });
 
@@ -298,7 +298,7 @@ it("edits and trims the profile description with a visible limit", async () => {
     picture: "",
     about: "Building with Buzz",
   });
-  expect(screen.getByText("Profile updated")).toBeVisible();
+  expect(await screen.findByText("Profile updated")).toBeVisible();
 });
 
 it("preserves an over-limit remote description and blocks unrelated saves", async () => {
@@ -495,7 +495,7 @@ it("shows Cancel then Save only for edits, including picture edits, and restores
   expect(saveProfile).not.toHaveBeenCalled();
 });
 
-it("retains edits on failure and hides actions after a successful retry", () => {
+it("retains edits on failure and hides actions after a successful retry", async () => {
   const { name, saveProfile } = setup();
   fireEvent.change(name, { target: { value: "Updated" } });
   saveProfile.mockImplementationOnce(() => {
@@ -508,7 +508,7 @@ it("retains edits on failure and hides actions after a successful retry", () => 
   expect(
     screen.queryByRole("button", { name: "Save" }),
   ).not.toBeInTheDocument();
-  expect(screen.getByText("Profile updated")).toBeVisible();
+  expect(await screen.findByText("Profile updated")).toBeVisible();
 });
 
 it("keeps cancel available for invalid edits and refuses unchanged form submission", () => {

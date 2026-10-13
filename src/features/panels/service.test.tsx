@@ -5,8 +5,6 @@ import { PagesService } from "../pages/service";
 import { PanelsService } from "../panels/service";
 import { ConversationService } from "../conversation/service";
 import { SettingsCardsService } from "../settings/service";
-import { TemplateProvidersService } from "../channel-templates/provider";
-import { provideAgentControl } from "../agents/control-service";
 import { provideRelay } from "../relay/service";
 import { provideNavigation } from "../navigation/service";
 import * as channelsPlugin from "../../bundled/channels";
@@ -32,9 +30,12 @@ it("independently unloads panels without removing the page or shared data", asyn
     panels = new PanelsService(root);
   new ConversationService(root);
   new SettingsCardsService(root);
-  new TemplateProvidersService(root);
+  // Channels adds teams of agents from the members dialog.
+  root.provide("agents", {
+    subscribe: () => () => {},
+    snapshot: () => undefined,
+  });
   provideNavigation(root);
-  provideAgentControl(root);
   const relay = provideRelay(root);
   const desired = (ids: string[]) => ids.map(plugin);
   try {

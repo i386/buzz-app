@@ -1,5 +1,5 @@
 use super::*;
-use crate::{config::agent_id, Imports, Store};
+use crate::{config::agent_id, AppAgents, OldStores, PortSource};
 use serde_json::json;
 use std::sync::Mutex;
 const KEY: &str = "0000000000000000000000000000000000000000000000000000000000000001";
@@ -273,7 +273,7 @@ fn destination_is_separate_exact_bound_create_only_and_verified() {
 }
 
 #[test]
-fn preview_commit_uses_production_adapter_and_reads_back_create_only_destination() {
+fn adoption_uses_production_adapter_and_reads_back_create_only_destination() {
     let legacy = tempfile::tempdir().unwrap();
     let dest = tempfile::tempdir().unwrap();
     let root = legacy
@@ -291,26 +291,15 @@ fn preview_commit_uses_production_adapter_and_reads_back_create_only_destination
     .unwrap();
     let (credentials, fake) = fixture();
     fake.put("buzz-desktop-dev", "secrets", blob());
-    let mut imports = Imports::default();
-    let preview = imports
-        .preview(
-            LegacySource::Development,
-            legacy.path().into(),
-            dest.path().into(),
-            "wss://relay.example",
-        )
-        .unwrap();
+    let old = OldStores {
+        harness: dest.path().join("missing.json"),
+        data_dir: legacy.path().into(),
+    };
+    assert_eq!(old.list().agents.len(), 1);
     assert!(fake.calls.lock().unwrap().is_empty());
-    let id = preview.candidates[0].id.clone();
-    let mut store = Store::open(dest.path().into()).unwrap();
-    imports
-        .commit(
-            &preview.token,
-            std::slice::from_ref(&id),
-            &mut store,
-            &credentials,
-        )
-        .unwrap();
+    let store = AppAgents::open(dest.path().join("identities.json"));
+    adopt(&old, &store, &credentials);
+    let id = agent_id(PUB, "wss://relay.example");
     let account = format!("agent:{id}");
     assert_eq!(
         *fake.calls.lock().unwrap(),
@@ -333,8 +322,8 @@ fn preview_commit_uses_production_adapter_and_reads_back_create_only_destination
             ),
         ]
     );
-    let snapshot = store.snapshot().unwrap();
-    assert!(!snapshot.agents[0].enabled);
+    let snapshot = store.list().unwrap();
+    assert_eq!(snapshot[0].pubkey, PUB);
     assert!(!serde_json::to_string(&snapshot).unwrap().contains(KEY));
 }
 
@@ -503,25 +492,14 @@ fn rollback_delete_then_reimport_reuses_retained_bundle_without_writing() {
     .unwrap();
     let (old_credentials, fake) = fixture();
     fake.put("buzz-desktop-dev", "secrets", blob());
-    let mut store = Store::open(dest.path().into()).unwrap();
-    let mut imports = Imports::default();
-    let preview = imports
-        .preview(
-            LegacySource::Development,
-            legacy.path().into(),
-            dest.path().into(),
-            "wss://relay.example",
-        )
-        .unwrap();
-    let id = preview.candidates[0].id.clone();
-    imports
-        .commit(
-            &preview.token,
-            std::slice::from_ref(&id),
-            &mut store,
-            &old_credentials,
-        )
-        .unwrap();
+    let path = dest.path().join("identities.json");
+    let store = AppAgents::open(path.clone());
+    let old = OldStores {
+        harness: dest.path().join("missing.json"),
+        data_dir: legacy.path().into(),
+    };
+    adopt(&old, &store, &old_credentials);
+    let id = agent_id(PUB, "wss://relay.example");
 
     // Upgrade migrates the individual credential, retaining the rollback copy.
     let credentials = bundled(fake.clone());
@@ -529,35 +507,18 @@ fn rollback_delete_then_reimport_reuses_retained_bundle_without_writing() {
     drop(credentials);
     // An older Foundation build removes only the individual item and settings.
     old_credentials.delete(&id, PUB).unwrap();
-    store
-        .remove(&id, store.agents().unwrap()[0].revision)
-        .unwrap();
-    assert!(store.agents().unwrap().is_empty());
+    std::fs::remove_file(&path).unwrap();
+    assert!(store.list().unwrap().is_empty());
     assert!(old_credentials.read(&id, PUB).unwrap().is_none());
     let before = fake.entries.lock().unwrap().clone();
     assert!(before.contains_key(&(SERVICE.into(), bundle::ACCOUNT.into())));
 
     // Re-upgrade takes the actual native import path, not a direct add probe.
     let credentials = bundled(fake.clone());
-    let preview = imports
-        .preview(
-            LegacySource::Development,
-            legacy.path().into(),
-            dest.path().into(),
-            "wss://relay.example",
-        )
-        .unwrap();
     fake.calls.lock().unwrap().clear();
-    imports
-        .prepare(&preview.token, std::slice::from_ref(&id), &store)
-        .unwrap()
-        .acquire(&credentials)
-        .unwrap()
-        .commit(&mut store)
-        .unwrap();
-    assert_eq!(store.agents().unwrap().len(), 1);
-    assert_eq!(store.agents().unwrap()[0].id, id);
-    assert!(!store.agents().unwrap()[0].enabled);
+    adopt(&old, &store, &credentials);
+    assert_eq!(store.list().unwrap().len(), 1);
+    assert_eq!(store.list().unwrap()[0].pubkey, PUB);
     assert_eq!(
         *fake.calls.lock().unwrap(),
         vec![
@@ -570,4 +531,21 @@ fn rollback_delete_then_reimport_reuses_retained_bundle_without_writing() {
     assert!(credentials
         .add(&id, &Secret::parse(KEY, PUB).unwrap())
         .is_err());
+}
+
+/// Exercise adoption through the real OS adapter with an isolated keychain.
+fn adopt(old: &OldStores, store: &AppAgents, credentials: &PlatformCredentials) {
+    let (found, key) = old.take(PortSource::Development, PUB, credentials).unwrap();
+    let auth: Vec<String> = serde_json::from_str(&crate::secret::test_attestation(PUB)).unwrap();
+    let prepared = AppAgents::adopt(
+        "wss://relay.example",
+        &auth[1],
+        "p/t",
+        key,
+        &found.name,
+        found.picture,
+        found.about,
+    )
+    .unwrap();
+    store.commit(prepared, &auth, credentials).unwrap();
 }

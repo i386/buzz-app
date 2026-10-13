@@ -309,3 +309,43 @@ describe("completion capacity", () => {
     expect(vi.getTimerCount()).toBe(0);
   });
 });
+// STOPGAP(agent-local-typing): delete with agents/local-typing.ts.
+it("shows a local pulse like a live one, through the agent's posts until a local end", () => {
+  const { owner, snapshot } = setup();
+  const local = {
+    id: "",
+    pubkey: agent.pubkey,
+    content: "",
+    created_at: epoch,
+  };
+  owner.capability.local({ ...local, kind: 7, tags: [["h", "a"]] });
+  expect(snapshot()).toEqual([]);
+  owner.capability.local({ ...local, kind: 20002, tags: [["h", "a"]] });
+  expect(snapshot()).toEqual([{ channelId: "a", pubkey: agent.pubkey }]);
+  // A progress post leaves it typing, and the next pulse still counts.
+  owner.accept([message(agent, "a", "progress", epoch)], true);
+  expect(snapshot()).toHaveLength(1);
+  vi.advanceTimersByTime(3_000);
+  owner.capability.local({
+    ...local,
+    created_at: epoch + 3,
+    kind: 20002,
+    tags: [["h", "a"]],
+  });
+  vi.advanceTimersByTime(6_000);
+  expect(snapshot()).toHaveLength(1);
+  // The local end hides it at once, and the agent's posts end it as usual
+  // once this app has stopped driving it.
+  owner.capability.local({
+    ...local,
+    created_at: epoch + 9,
+    kind: 9,
+    tags: [["h", "a"]],
+  });
+  expect(snapshot()).toEqual([]);
+  vi.advanceTimersByTime(3_000);
+  owner.accept([pulse(undefined, epoch + 12)], true);
+  expect(snapshot()).toHaveLength(1);
+  owner.accept([message(agent, "a", "done", epoch + 12)], true);
+  expect(snapshot()).toEqual([]);
+});

@@ -258,3 +258,155 @@ index ef202bd782287091b2a7d0d179fe5d43c4ff73a3..34d5f2b811eb9412c071f3340c575d14
    const defaultProps = {
      id: idProp,
      role: 'radiogroup',
+diff --git a/floating-ui-react/hooks/useHoverReferenceInteraction.d.mts b/floating-ui-react/hooks/useHoverReferenceInteraction.d.mts
+index 9f3ac4b14b6bd2caeef52ce284e1d22d1ba007fe..f12bffd0ef926ade984240b9a1e2c4b1cc13babc 100644
+--- a/floating-ui-react/hooks/useHoverReferenceInteraction.d.mts
++++ b/floating-ui-react/hooks/useHoverReferenceInteraction.d.mts
+@@ -25,7 +25,7 @@ export interface UseHoverReferenceInteractionProps {
+    * Called before each hover-driven open attempt (immediate, delayed, and rest-ms
+    * paths). Return `false` to veto; any other return value permits the open.
+    */
+-  shouldOpen?: (() => boolean) | undefined;
++  shouldOpen?: ((event: MouseEvent) => boolean) | undefined;
+   /**
+    * Regression workaround (#5152): also cancels a pending hover-open from the
+    * trigger's `mouseout`, backing up a `mouseleave` that Chrome can drop during
+diff --git a/floating-ui-react/hooks/useHoverReferenceInteraction.d.ts b/floating-ui-react/hooks/useHoverReferenceInteraction.d.ts
+index 7551ed4a6cc55fe7c2c9973670c8dcaff650ba2f..c9a80f623b357233e5eeeadcf0762697175f84d9 100644
+--- a/floating-ui-react/hooks/useHoverReferenceInteraction.d.ts
++++ b/floating-ui-react/hooks/useHoverReferenceInteraction.d.ts
+@@ -25,7 +25,7 @@ export interface UseHoverReferenceInteractionProps {
+    * Called before each hover-driven open attempt (immediate, delayed, and rest-ms
+    * paths). Return `false` to veto; any other return value permits the open.
+    */
+-  shouldOpen?: (() => boolean) | undefined;
++  shouldOpen?: ((event: MouseEvent) => boolean) | undefined;
+   /**
+    * Regression workaround (#5152): also cancels a pending hover-open from the
+    * trigger's `mouseout`, backing up a `mouseleave` that Chrome can drop during
+diff --git a/floating-ui-react/hooks/useHoverReferenceInteraction.js b/floating-ui-react/hooks/useHoverReferenceInteraction.js
+index 9c5f5bae91441c732a0def38caf2ca655c7d7aae..1be80667032ff899e5cb11db652bf9063077900f 100644
+--- a/floating-ui-react/hooks/useHoverReferenceInteraction.js
++++ b/floating-ui-react/hooks/useHoverReferenceInteraction.js
+@@ -62,8 +62,8 @@ function useHoverReferenceInteraction(context, props = {}) {
+   const isClickLikeOpenEvent = (0, _useStableCallback.useStableCallback)(() => {
+     return (0, _useHoverShared.isClickLikeOpenEvent)(dataRef.current.openEvent?.type, instance.interactedInside);
+   });
+-  const checkShouldOpen = (0, _useStableCallback.useStableCallback)(() => {
+-    return shouldOpenRef.current?.() !== false;
++  const checkShouldOpen = (0, _useStableCallback.useStableCallback)(event => {
++    return shouldOpenRef.current?.(event) !== false;
+   });
+   const isOverInactiveTrigger = (0, _useStableCallback.useStableCallback)((currentDomReference, currentTarget, target) => {
+     const allTriggers = store.context.triggerElements;
+@@ -184,7 +184,7 @@ function useHoverReferenceInteraction(context, props = {}) {
+       // Open immediately when moving between triggers while open, or during
+       // a hover-driven close transition (including same-trigger re-entry).
+       if (shouldOpenImmediately) {
+-        if (checkShouldOpen()) {
++        if (checkShouldOpen(event)) {
+           store.setOpen(true, (0, _createBaseUIEventDetails.createChangeEventDetails)(_reasons.REASONS.triggerHover, event, triggerNode));
+         }
+         return;
+@@ -194,12 +194,12 @@ function useHoverReferenceInteraction(context, props = {}) {
+       }
+       if (openDelay) {
+         instance.openChangeTimeout.start(openDelay, () => {
+-          if (shouldOpen && checkShouldOpen()) {
++          if (shouldOpen && checkShouldOpen(event)) {
+             store.setOpen(true, (0, _createBaseUIEventDetails.createChangeEventDetails)(_reasons.REASONS.triggerHover, event, triggerNode));
+           }
+         });
+       } else if (shouldOpen) {
+-        if (checkShouldOpen()) {
++        if (checkShouldOpen(event)) {
+           store.setOpen(true, (0, _createBaseUIEventDetails.createChangeEventDetails)(_reasons.REASONS.triggerHover, event, triggerNode));
+         }
+       }
+@@ -312,7 +312,7 @@ function useHoverReferenceInteraction(context, props = {}) {
+             return;
+           }
+           const latestOpen = store.select('open');
+-          if (!instance.blockMouseMove && (!latestOpen || isOverInactive) && checkShouldOpen()) {
++          if (!instance.blockMouseMove && (!latestOpen || isOverInactive) && checkShouldOpen(nativeEvent)) {
+             store.setOpen(true, (0, _createBaseUIEventDetails.createChangeEventDetails)(_reasons.REASONS.triggerHover, nativeEvent, trigger));
+           }
+         }
+diff --git a/floating-ui-react/hooks/useHoverReferenceInteraction.mjs b/floating-ui-react/hooks/useHoverReferenceInteraction.mjs
+index 01ec377e5046cf1645dbd2203e8c6dc99a89ea18..659a8dc07135f8a82e03b654d514c4f2a010cb4c 100644
+--- a/floating-ui-react/hooks/useHoverReferenceInteraction.mjs
++++ b/floating-ui-react/hooks/useHoverReferenceInteraction.mjs
+@@ -56,8 +56,8 @@ export function useHoverReferenceInteraction(context, props = {}) {
+   const isClickLikeOpenEvent = useStableCallback(() => {
+     return isClickLikeOpenEventShared(dataRef.current.openEvent?.type, instance.interactedInside);
+   });
+-  const checkShouldOpen = useStableCallback(() => {
+-    return shouldOpenRef.current?.() !== false;
++  const checkShouldOpen = useStableCallback(event => {
++    return shouldOpenRef.current?.(event) !== false;
+   });
+   const isOverInactiveTrigger = useStableCallback((currentDomReference, currentTarget, target) => {
+     const allTriggers = store.context.triggerElements;
+@@ -178,7 +178,7 @@ export function useHoverReferenceInteraction(context, props = {}) {
+       // Open immediately when moving between triggers while open, or during
+       // a hover-driven close transition (including same-trigger re-entry).
+       if (shouldOpenImmediately) {
+-        if (checkShouldOpen()) {
++        if (checkShouldOpen(event)) {
+           store.setOpen(true, createChangeEventDetails(REASONS.triggerHover, event, triggerNode));
+         }
+         return;
+@@ -188,12 +188,12 @@ export function useHoverReferenceInteraction(context, props = {}) {
+       }
+       if (openDelay) {
+         instance.openChangeTimeout.start(openDelay, () => {
+-          if (shouldOpen && checkShouldOpen()) {
++          if (shouldOpen && checkShouldOpen(event)) {
+             store.setOpen(true, createChangeEventDetails(REASONS.triggerHover, event, triggerNode));
+           }
+         });
+       } else if (shouldOpen) {
+-        if (checkShouldOpen()) {
++        if (checkShouldOpen(event)) {
+           store.setOpen(true, createChangeEventDetails(REASONS.triggerHover, event, triggerNode));
+         }
+       }
+@@ -306,7 +306,7 @@ export function useHoverReferenceInteraction(context, props = {}) {
+             return;
+           }
+           const latestOpen = store.select('open');
+-          if (!instance.blockMouseMove && (!latestOpen || isOverInactive) && checkShouldOpen()) {
++          if (!instance.blockMouseMove && (!latestOpen || isOverInactive) && checkShouldOpen(nativeEvent)) {
+             store.setOpen(true, createChangeEventDetails(REASONS.triggerHover, nativeEvent, trigger));
+           }
+         }
+diff --git a/menu/submenu-trigger/MenuSubmenuTrigger.js b/menu/submenu-trigger/MenuSubmenuTrigger.js
+index 76610266064c56e99741296140b0db02d8b7ab04..66f90d4389411580f5aef91a8198686ee814011b 100644
+--- a/menu/submenu-trigger/MenuSubmenuTrigger.js
++++ b/menu/submenu-trigger/MenuSubmenuTrigger.js
+@@ -146,7 +146,9 @@ const MenuSubmenuTrigger = exports.MenuSubmenuTrigger = /*#__PURE__*/React.forwa
+       open: delay,
+       close: closeDelay
+     },
+-    shouldOpen: delay > 0 ? () => parentMenuStore.select('allowMouseEnter') : undefined,
++    // A newly opened parent can appear beneath a stationary pointer.
++    // Zero delay still requires pointer movement before activating its submenu.
++    shouldOpen: event => parentMenuStore.select('allowMouseEnter') || delay === 0 && event.type === 'mousemove',
+     triggerElementRef,
+     externalTree: floatingTreeRoot,
+     isClosing: () => store.select('transitionStatus') === 'ending',
+diff --git a/menu/submenu-trigger/MenuSubmenuTrigger.mjs b/menu/submenu-trigger/MenuSubmenuTrigger.mjs
+index 243ee5ac67bbb0297a3ede21f3963372c43c0150..341beb1f7a2093e68d1bd65fae62c7712a657d11 100644
+--- a/menu/submenu-trigger/MenuSubmenuTrigger.mjs
++++ b/menu/submenu-trigger/MenuSubmenuTrigger.mjs
+@@ -139,7 +139,9 @@ export const MenuSubmenuTrigger = /*#__PURE__*/React.forwardRef(function MenuSub
+       open: delay,
+       close: closeDelay
+     },
+-    shouldOpen: delay > 0 ? () => parentMenuStore.select('allowMouseEnter') : undefined,
++    // A newly opened parent can appear beneath a stationary pointer.
++    // Zero delay still requires pointer movement before activating its submenu.
++    shouldOpen: event => parentMenuStore.select('allowMouseEnter') || delay === 0 && event.type === 'mousemove',
+     triggerElementRef,
+     externalTree: floatingTreeRoot,
+     isClosing: () => store.select('transitionStatus') === 'ending',

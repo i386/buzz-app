@@ -1,9 +1,7 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { createHash } from "node:crypto";
 import {
   copyFileSync,
-  cpSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
@@ -21,41 +19,13 @@ import test from "node:test";
 function fixture(t) {
   const root = mkdtempSync(join(tmpdir(), "buzz-appimage-repair-"));
   t.after(() => rmSync(root, { recursive: true, force: true }));
-  for (const name of ["scripts", "runtime", "tools"])
-    mkdirSync(join(root, name));
-  for (const name of [
-    "scripts/fix-appimage.sh",
-    "scripts/verify-runtime-bundle.mjs",
-    "runtime/agent-runtime.json",
-  ])
-    copyFileSync(new URL(`../../${name}`, import.meta.url), join(root, name));
-  const source = join(root, "src-tauri/resources/agent-runtime");
-  mkdirSync(source, { recursive: true });
-  const spec = JSON.parse(
-    readFileSync(join(root, "runtime/agent-runtime.json")),
-  );
-  const files = {};
-  for (const name of spec.tools) {
-    writeFileSync(join(source, name), `original ${name}`, { mode: 0o755 });
-    files[name] = createHash("sha256").update(`original ${name}`).digest("hex");
-  }
-  writeFileSync(
-    join(source, "manifest.json"),
-    JSON.stringify({
-      version: 2,
-      revision: spec.revision,
-      goose: spec.goose,
-      target: "x86_64-unknown-linux-gnu",
-      files,
-    }),
+  for (const name of ["scripts", "tools"]) mkdirSync(join(root, name));
+  copyFileSync(
+    new URL("../../scripts/fix-appimage.sh", import.meta.url),
+    join(root, "scripts/fix-appimage.sh"),
   );
   const extracted = join(root, "extracted");
-  const resource = "usr/lib/Buzz Foundation/agent-runtime";
-  const destination = join(extracted, resource);
-  mkdirSync(dirname(destination), { recursive: true });
-  cpSync(source, destination, { recursive: true });
-  writeFileSync(join(destination, "buzz-agent"), "linuxdeploy changed RPATH");
-  writeFileSync(join(destination, "unexpected-tool"), "stale");
+  mkdirSync(join(extracted, "usr/lib"), { recursive: true });
   writeFileSync(join(extracted, "usr/lib/libwayland-client.so.0"), "fixture");
   writeFileSync(
     join(extracted, "AppRun.wrapped"),
@@ -99,22 +69,13 @@ NODE
         APPIMAGETOOL_RUNTIME_FILE: join(root, "pinned-runtime"),
       },
     });
-  return { source, destination, repacked, resource, run };
+  return { extracted, repacked, run };
 }
 
-test("AppImage repair restores original runtime bytes and removes transformed leftovers before repack", (t) => {
+test("AppImage repair fixes libraries and installs the launch shim without an agent runtime", (t) => {
   const f = fixture(t);
   const result = f.run();
   assert.equal(result.status, 0, result.stderr);
-  for (const name of ["manifest.json", "buzz-agent"])
-    assert.deepEqual(
-      readFileSync(join(f.repacked, f.resource, name)),
-      readFileSync(join(f.source, name)),
-    );
-  assert.equal(
-    existsSync(join(f.repacked, f.resource, "unexpected-tool")),
-    false,
-  );
   assert.equal(
     existsSync(join(f.repacked, "usr/lib/libwayland-client.so.0")),
     false,
@@ -125,20 +86,9 @@ test("AppImage repair restores original runtime bytes and removes transformed le
   );
 });
 
-for (const condition of [
-  "missing packaged manifest",
-  "mismatched manifest",
-  "corrupt source",
-]) {
-  test(`AppImage repair refuses ${condition} before repack`, (t) => {
-    const f = fixture(t);
-    if (condition === "missing packaged manifest")
-      rmSync(join(f.destination, "manifest.json"));
-    if (condition === "mismatched manifest")
-      writeFileSync(join(f.destination, "manifest.json"), "{}");
-    if (condition === "corrupt source")
-      writeFileSync(join(f.source, "buzz-agent"), "corrupt");
-    assert.notEqual(f.run().status, 0);
-    assert.equal(existsSync(f.repacked), false);
-  });
-}
+test("AppImage repair refuses a missing app executable before repack", (t) => {
+  const f = fixture(t);
+  rmSync(join(f.extracted, "usr/bin/buzz-foundation"));
+  assert.notEqual(f.run().status, 0);
+  assert.equal(existsSync(f.repacked), false);
+});

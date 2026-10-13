@@ -249,6 +249,27 @@ it("only the owning selected tab earns dwell; inactive and restored content does
   const count = h.reading.mock.calls.length;
   vi.advanceTimersByTime(300);
   expect(h.reading).toHaveBeenCalledTimes(count);
+  // A retained thread moves without changing any hook dependencies. The new
+  // pane's selected header must earn dwell; the former header must not.
+  const destination = document.createElement("div");
+  destination.setAttribute("role", "tabpanel");
+  destination.setAttribute("aria-labelledby", "moved-thread-tab");
+  const movedTab = document.createElement("button");
+  movedTab.id = "moved-thread-tab";
+  movedTab.setAttribute("role", "tab");
+  movedTab.setAttribute("aria-selected", "true");
+  document.body.append(movedTab, destination);
+  if (surface) destination.append(surface);
+  tab.focus();
+  vi.advanceTimersByTime(300);
+  expect(h.reading).toHaveBeenCalledTimes(count);
+  movedTab.focus();
+  const movedLease = h.leases.at(-1);
+  expect(h.reading).toHaveBeenCalledTimes(count + 1);
+  vi.advanceTimersByTime(299);
+  expect(movedLease?.observe).not.toHaveBeenCalled();
+  vi.advanceTimersByTime(1);
+  expect(movedLease?.observe).toHaveBeenCalledExactlyOnceWith(["visible"]);
 });
 it("focus moving from the list to its composer keeps reading; another surface's composer cancels it", () => {
   const h = setup();

@@ -128,6 +128,33 @@ it("normalization revokes the old presentation but not its caller, and disposal 
   expect(next.request.signal.aborted).toBe(true);
 });
 
+it("preserves opening focus through session binding, resolution and retry, not later openings or history", async () => {
+  const t = setup();
+  const nav = t.host.navigation;
+  void nav.open(target, { focus: "preserve" });
+  const relay = provideRelay(t.ctx);
+  const request = () => t.host.request(nav.snapshot().attempt, t.owner).request;
+  const bound = request().forSession(relay, relay.snapshot());
+  expect(bound.focus).toBe("preserve");
+  expect(bound.resolve(settings)).toBe(true);
+  expect(request().focus).toBe("preserve");
+  const retry = nav.retry();
+  expect(request().forSession(relay, relay.snapshot()).focus).toBe("preserve");
+  expect(request().complete({ status: "opened" })).toBe(true);
+  await expect(retry).resolves.toEqual({ status: "opened" });
+  // Explicit New conversation can open the same target but requests content focus.
+  const explicit = nav.open(settings);
+  expect(request().focus).toBe("content");
+  expect(request().complete({ status: "opened" })).toBe(true);
+  await expect(explicit).resolves.toEqual({ status: "opened" });
+  void nav.open(target, { focus: "preserve" });
+  expect(request().focus).toBe("preserve");
+  nav.back();
+  expect(request().focus).toBe("content");
+  nav.forward();
+  expect(request().focus).toBe("content");
+});
+
 it("returning to a retained connection mints fresh authority without reviving its old request", async () => {
   const t = setup();
   const source = provideRelay(t.ctx);

@@ -1,7 +1,6 @@
 import "../../src/shared/styles/globals.css";
 import { useKeyboardFocusVisibility } from "../../src/shared/design-system/useKeyboardFocusVisibility";
 import { AgentSettings } from "../../src/app/AgentSettings";
-import { createAgentControl } from "../../src/features/agents/control";
 import { StrictMode, useState, useLayoutEffect } from "react";
 import { createRoot } from "react-dom/client";
 import { finalizeEvent } from "nostr-tools";
@@ -10,7 +9,6 @@ import { createPluginManager } from "../../src/plugins/manager";
 import { PagesService } from "../../src/features/pages/service";
 import { PanelsService } from "../../src/features/panels/service";
 import { SettingsCardsService } from "../../src/features/settings/service";
-import { TemplateProvidersService } from "../../src/features/channel-templates/provider";
 import { provideNavigation } from "../../src/features/navigation/service";
 import { ConversationService } from "../../src/features/conversation/service";
 import { bundledPlugins } from "../../src/bundled";
@@ -35,7 +33,6 @@ const viewer = keypair(),
   first = keypair(),
   second = keypair(),
   outsider = keypair();
-const browserControl = createAgentControl(null);
 let members = [viewer.pubkey, first.pubkey, second.pubkey];
 let time = 1700000000;
 const publications: RelayEvent[] = [];
@@ -55,6 +52,16 @@ const admission = new URLSearchParams(location.search).has(
 const dm = new URLSearchParams(location.search).has("dm");
 const naming = new URLSearchParams(location.search).has("identity-names");
 let colliding = false;
+const secondProfile = () =>
+  profile(
+    second,
+    {
+      name: naming && !colliding ? "Other Honey" : "Honey",
+      is_agent: true,
+      picture: "https://avatars.test/app-icon.png",
+    },
+    time,
+  );
 const delayed = new URLSearchParams(location.search).has("delayed-profiles");
 const testControls = new URLSearchParams(location.search).has("test-controls");
 const channels = new URLSearchParams(location.search).has("channels");
@@ -194,11 +201,7 @@ const owner = createRelaySession(
             name: delayed ? "Mary Jane" : "Honey",
             picture: "https://avatars.test/bestie.png",
           }),
-          profile(second, {
-            name: "Honey",
-            is_agent: true,
-            picture: "https://avatars.test/app-icon.png",
-          }),
+          secondProfile(),
           ...(admission ? [profile(outsider, { name: "Outside Person" })] : []),
           ...extraChannels,
           ...openChannels,
@@ -331,9 +334,9 @@ if (channels) {
   new PagesService(context);
   new PanelsService(context);
   new SettingsCardsService(context);
-  new TemplateProvidersService(context);
   provideNavigation(context);
-  context.provide("agentControl", browserControl);
+  // Channels requires Agents for its page/settings, neither mounted here.
+  context.provide("agents", {});
   // Only the composer is mounted; the Channels page never consumes this service.
   context.provide("relay", {
     snapshot: () => ({ session: namedSession }),
@@ -344,6 +347,8 @@ Object.assign(window, {
   mentionFixture: {
     async collide(value: boolean) {
       colliding = value;
+      ++time;
+      incoming([secondProfile()]);
       await owner.session.agentLibrary.refresh();
     },
     qualifier: (key: string) => names?.lookup(key)?.qualifier,
@@ -451,7 +456,7 @@ function Fixture() {
         />
       </div>
       {new URLSearchParams(location.search).has("settings") && (
-        <AgentSettings control={browserControl} />
+        <AgentSettings />
       )}
     </main>
   );

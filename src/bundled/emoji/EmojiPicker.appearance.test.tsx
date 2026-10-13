@@ -111,6 +111,6 @@ it("uses smiley-plus for message reactions while leaving composer emoji unchange
     screen.getByRole("button", { name: "Add reaction" }).querySelector("svg"),
   ).toHaveClass("tabler-icon-mood-plus");
   expect(
-    screen.getByRole("button", { name: "Insert emoji" }).querySelector("svg"),
+    screen.getByRole("button", { name: "Emoji and GIFS" }).querySelector("svg"),
   ).toHaveClass("tabler-icon-mood-smile");
 });

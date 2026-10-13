@@ -12,6 +12,44 @@ import {
   scriptedTransport,
 } from "./testing";
 
+it("clears retained project homes on live recovery, cache clearing, and disposal", async () => {
+  const relay = keypair(),
+    viewer = keypair();
+  const wire = scriptedTransport(viewer.pubkey, relay.pubkey);
+  let live!: LiveCallbacks;
+  const owner = createRelaySession({
+    ...wire.transport,
+    subscribe(callbacks) {
+      live = callbacks;
+      return { update() {}, retry() {}, dispose() {} };
+    },
+  });
+  const seed = async () => {
+    const pending = owner.session.projects.home(
+      "project-channel",
+      new AbortController().signal,
+    );
+    wire.next().respond([]);
+    await pending;
+    expect(owner.session.projects.peekHome("project-channel")).toEqual({
+      status: "none",
+    });
+  };
+  try {
+    await seed();
+    live.state({ status: "connected", routes: [] });
+    live.state({ status: "retrying", routes: [] });
+    expect(owner.session.projects.peekHome("project-channel")).toBeUndefined();
+    await seed();
+    await owner.clearCache();
+    expect(owner.session.projects.peekHome("project-channel")).toBeUndefined();
+    await seed();
+  } finally {
+    owner.dispose();
+  }
+  expect(owner.session.projects.peekHome("project-channel")).toBeUndefined();
+});
+
 it("establishing a large roster reads only retained windows, not every channel head", async () => {
   const relay = keypair(),
     viewer = keypair();

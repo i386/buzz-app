@@ -22,8 +22,10 @@ test("focuses an in-head DM after effect cleanup and setup replay", async ({
   await openPage(page, "Inbox");
   const inbox = page.getByRole("region", { name: "Inbox", exact: true });
   await expect(inbox.getByText("Checking recent activity…")).toHaveCount(0);
-  await inbox.getByRole("combobox", { name: "Activity type" }).click();
-  await page.getByRole("option", { name: "DMs", exact: true }).click();
+  await inbox
+    .getByRole("button", { name: "Inbox filters", exact: true })
+    .click();
+  await page.getByRole("menuitemradio", { name: "DMs", exact: true }).click();
   await inbox
     .getByRole("list", { name: "Inbox conversations" })
     .getByRole("listitem")

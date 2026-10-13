@@ -391,6 +391,9 @@ fn closes(mut stream: std::net::TcpStream) -> bool {
         match stream.read(&mut buffer) {
             Ok(0) => return true,
             Ok(_) => continue,
+            // Terminating a process that owns a TCP connection may reset it
+            // rather than finish a graceful shutdown. Both end the connection.
+            Err(error) if error.kind() == std::io::ErrorKind::ConnectionReset => return true,
             Err(_) => return false,
         }
     }

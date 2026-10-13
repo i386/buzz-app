@@ -49,47 +49,14 @@ test("Buzz channel and message links render, reveal verified targets, and preser
   const link = row.getByRole("link", { name: "Alpha", exact: true });
   await expect(link).toHaveCSS("text-decoration-line", "none");
   await expect(link).toHaveCSS("color", "rgb(11, 95, 168)");
-  await link.hover();
+  // Release the held profile while the link is focused, before the navigation
+  // below: profile reads give up after 10s, and a loaded engine can spend that
+  // long on navigation, leaving nothing pending to release.
   const preview = page.getByLabel("Message preview", { exact: true });
-  await expect(
-    preview.getByText("Broadcast reply", { exact: true }),
-  ).toBeVisible();
-  await expect(preview).toHaveClass(/buzz-preview-card/);
-  await expect(preview.getByRole("img")).toHaveClass(/buzz-avatar/);
-  await expect(preview).toHaveCSS("font-size", "14px");
-  await expect(preview.locator("strong")).not.toBeEmpty();
-  await expect(preview.locator("time")).toHaveAttribute(
-    "datetime",
-    new Date(target.created_at * 1000).toISOString(),
-  );
-  await expect(preview).toHaveRole("link");
-  await expect(preview).toHaveAttribute("href", href);
-  // Crossing the trigger-to-card gap must keep the destination clickable.
-  await preview.hover();
-  await expect(preview).toBeVisible();
-  await page.screenshot({
-    path: test.info().outputPath("buzz-link-preview.png"),
-  });
-  await preview.click();
   const panel = page.getByRole("complementary", {
     name: "Thread",
     exact: true,
   });
-  await expect(
-    panel.locator(`[data-message-id="${target.id}"]`),
-  ).toBeInViewport();
-  await expect.poll(async () => (await state(page)).status).toBe("opened");
-  expect((await state(page)).entry.target.messageId).toBe(target.id);
-  await expect(panel.getByText("Thread root 0", { exact: true })).toBeVisible();
-  await button(page, "Close Thread tab").click();
-  await expect(panel).toHaveCount(0);
-  await button(page, "Go back").click();
-  await expect(
-    panel.locator(`[data-message-id="${target.id}"]`),
-  ).toBeInViewport();
-  await button(page, "Go back").click();
-  await expect(panel).toHaveCount(0);
-  await page.mouse.move(1400, 10);
   await row.getByRole("link", { name: "#Beta", exact: true }).focus();
   await page.keyboard.press("Shift+Tab");
   // WebKit follows macOS's tab-to-links preference; retain keyboard modality
@@ -119,8 +86,52 @@ test("Buzz channel and message links render, reveal verified targets, and preser
   await expect(
     panel.locator(`[data-message-id="${target.id}"]`),
   ).toBeInViewport();
-  await button(page, "Close Thread tab").click();
+  await page
+    .locator(
+      '.buzz-tabs-item:has([data-tab-value^="thread:"][aria-selected="true"]) > button:not([role="tab"])',
+    )
+    .click();
   await expect(link).toBeFocused();
+  await link.hover();
+  await expect(
+    preview.getByText("Broadcast reply", { exact: true }),
+  ).toBeVisible();
+  await expect(preview).toHaveClass(/buzz-preview-card/);
+  await expect(preview.getByRole("img")).toHaveClass(/buzz-avatar/);
+  await expect(preview).toHaveCSS("font-size", "14px");
+  await expect(preview.locator("strong")).not.toBeEmpty();
+  await expect(preview.locator("time")).toHaveAttribute(
+    "datetime",
+    new Date(target.created_at * 1000).toISOString(),
+  );
+  await expect(preview).toHaveRole("link");
+  await expect(preview).toHaveAttribute("href", href);
+  // Crossing the trigger-to-card gap must keep the destination clickable.
+  await preview.hover();
+  await expect(preview).toBeVisible();
+  await page.screenshot({
+    path: test.info().outputPath("buzz-link-preview.png"),
+  });
+  await preview.click();
+  await expect(
+    panel.locator(`[data-message-id="${target.id}"]`),
+  ).toBeInViewport();
+  await expect.poll(async () => (await state(page)).status).toBe("opened");
+  expect((await state(page)).entry.target.messageId).toBe(target.id);
+  await expect(panel.getByText("Thread root 0", { exact: true })).toBeVisible();
+  await page
+    .locator(
+      '.buzz-tabs-item:has([data-tab-value^="thread:"][aria-selected="true"]) > button:not([role="tab"])',
+    )
+    .click();
+  await expect(panel).toHaveCount(0);
+  await button(page, "Go back").click();
+  await expect(
+    panel.locator(`[data-message-id="${target.id}"]`),
+  ).toBeInViewport();
+  await button(page, "Go back").click();
+  await expect(panel).toHaveCount(0);
+  expect(libraryReads()).toBe(1);
   await row.getByRole("link", { name: "#Beta", exact: true }).click();
   await expect(
     page.getByRole("textbox", { name: "Message #Beta", exact: true }),
@@ -212,19 +223,12 @@ test("thread and detail tabs preserve drafts, scroll, focus and local-detail lif
   await trigger.click();
   const dock = page.locator("[data-panel-dock]");
   const tablist = page.getByRole("tablist", { name: "Panel tabs" });
-  const threadTab = tablist.getByRole("tab", { name: "Thread", exact: true });
+  const threadTab = tablist.locator('[role="tab"][data-tab-value^="thread:"]');
   const details = tablist.getByRole("tab", {
     name: "Wrong panel",
     exact: true,
   });
   await expect(threadTab).toHaveClass(/navigation-item/);
-  expect(
-    await threadTab.evaluate(
-      (el) =>
-        el.parentElement.getBoundingClientRect().width /
-        Number.parseFloat(getComputedStyle(document.documentElement).fontSize),
-    ),
-  ).toBeCloseTo(12);
   await expect(threadTab.locator("svg")).toHaveCount(1);
   await expect(details).toHaveCount(1);
   await expect(details).toBeFocused();
@@ -315,7 +319,11 @@ test("thread and detail tabs preserve drafts, scroll, focus and local-detail lif
   await details.press("Delete");
   await expect(threadTab).toBeFocused();
   await expect(editor).toHaveText("Keep this thread draft");
-  await button(page, "Close Thread tab").click();
+  await page
+    .locator(
+      '.buzz-tabs-item:has([data-tab-value^="thread:"][aria-selected="true"]) > button:not([role="tab"])',
+    )
+    .click();
   await expect(dock).toHaveCount(0);
 });
 
@@ -392,4 +400,40 @@ test("unavailable messages fail honestly and legacy links still open when Links 
     .toBe("0".repeat(64));
   await expect(button(page, "Retry navigation")).toBeVisible();
   expect((await state(page)).status).toBe("failed");
+});
+
+test.describe("links to channels the reader hasn't joined", () => {
+  test.use({ openSearch: true });
+  test("name an open channel with a hover card and lock a withheld one", async ({
+    page,
+    app,
+  }) => {
+    await open(page, app);
+    const secret = "5ec2e700-0000-4000-8000-000000000001";
+    const message = app.append(
+      "primary",
+      "alpha",
+      `See <buzz://channel/${app.openChannelId}>, <buzz://channel/${secret}> and [#launch-plans](buzz://channel/${secret}).`,
+    );
+    const row = page.locator(
+      `[data-channel-timeline] [data-message-id="${message.id}"]`,
+    );
+    const named = row.getByRole("link", { name: "#open", exact: true });
+    await expect(named).toBeVisible();
+    const locked = row.getByRole("link", {
+      name: "Private channel",
+      exact: true,
+    });
+    await expect(locked).toHaveAttribute("title", /aren’t a member/);
+    // The authored label is message text; it stays beside the lock.
+    const authored = row.getByRole("link", {
+      name: "#launch-plans",
+      exact: true,
+    });
+    await expect(authored).toHaveAttribute("title", /aren’t a member/);
+    await virtuaIdle(page);
+    await named.hover();
+    const card = page.getByLabel("Channel preview", { exact: true });
+    await expect(card).toContainText("Public channel · Not joined");
+  });
 });

@@ -306,7 +306,6 @@ test("failed upload survives disabling the plugin and switching conversations", 
     window.voiceFixture.report.failUpload = true;
   });
   await record(page);
-  await page.getByRole("button", { name: "Send message", exact: true }).click();
   await expect(
     page.getByRole("button", { name: "Retry voice note upload", exact: true }),
   ).toBeVisible();

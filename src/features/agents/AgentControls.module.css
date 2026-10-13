@@ -1,0 +1,80 @@
+/* A compact model choice keeps a steady frame sized to its text. */
+.compactModel {
+  position: relative;
+  display: flex;
+  justify-content: flex-end;
+  max-width: 100%;
+}
+.measure {
+  position: absolute;
+  visibility: hidden;
+  pointer-events: none;
+  white-space: pre;
+  font: inherit;
+}
+.modelOptions {
+  width: max-content;
+  min-width: min(14rem, var(--available-width));
+  max-width: min(var(--available-width), calc(100vw - var(--space-6)));
+}
+
+/* Instructions in the New agent card: a preview that opens into an editor. */
+.instructionEntry {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 50%;
+  min-height: 6rem;
+  margin-inline: auto;
+}
+.instructionCopy {
+  display: grid;
+  gap: var(--space-2);
+  text-align: center;
+}
+.instructionPreview {
+  display: -webkit-box;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+  white-space: pre-wrap;
+}
+.example {
+  display: grid;
+  align-items: center;
+  min-height: 3em;
+  color: var(--text-unavailable);
+}
+.instructionAction {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+@media (hover: hover) and (pointer: fine) {
+  .instructionAction {
+    opacity: 0;
+    pointer-events: none;
+  }
+  .instructionEntry:hover .instructionAction,
+  .instructionEntry:has(:focus-visible) .instructionAction {
+    opacity: 1;
+    pointer-events: auto;
+  }
+}
+.instructionEditor,
+.instructionEditor > *,
+.instructionEditor textarea {
+  height: 100%;
+}
+.instructionEditor textarea {
+  resize: none;
+}
+@media (max-width: 540px) {
+  .instructionEntry {
+    width: 100%;
+  }
+}

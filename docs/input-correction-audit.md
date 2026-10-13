@@ -11,7 +11,6 @@ also degrade messages, descriptions, profile bios, feedback, and instructions.
 - `SearchField` and `Combobox.Control` default to exact-text entry, with explicit
   caller overrides still supported.
 - `Textarea variant="code"` applies the same defaults; its prose variant does not.
-- `channel-templates/TemplateFields.tsx` disables correction for agent name/npub search.
 - Member search inherits the shared `SearchField` defaults.
 
 ## Follow-up candidates, not repaired by this change
@@ -23,17 +22,11 @@ capitalization, but do not explicitly disable autocorrect.
 | Source | Exact-text fields |
 | --- | --- |
 | `app/PluginImport.tsx` | Repository URL, branch/tag |
-| `app/AgentDefaultsCard.tsx` | Provider/model/effort, environment keys and values |
 | `features/identity/IdentitySetup.tsx` | Secret-key import |
 | `features/communities/CommunityDialog.tsx` | Relay URL and invite code |
 | `features/browser/BrowserHostView.tsx` | Address bar |
 | `features/profiles/AvatarEditor.tsx` | Picture URL and emoji |
 | `bundled/hosted-communities/HostedCommunities.tsx` | Domain slug, transfer recipient npub |
-| `bundled/agents/AgentSettingsFields.tsx` | API key including revealed state, workspace path, arguments JSON |
-| `bundled/agents/AgentHarnessEditor.tsx` | Harness argument text |
-| `bundled/agents/AgentEnvironmentEditor.tsx` | Environment keys and values |
-| `bundled/agents/AgentModelPicker.tsx` | Model ID, host, model filter |
-| `bundled/agents/AgentImport.tsx` | Import destination path |
 | `bundled/channels/CreateChannelDialog.tsx` | Channel name |
 | `bundled/channels/ChannelLifecycleDialog.tsx` | Exact channel-name confirmation |
 | `bundled/workflows/WorkflowEditor.tsx` | Workflow identifiers and YAML |

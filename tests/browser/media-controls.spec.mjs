@@ -200,6 +200,12 @@ test("mute glides the volume knob and keyboard changes stay immediate", async ({
     name: "Video review",
     exact: true,
   });
+  // Playback hides the controls and, on CI's Linux WebKit, restarts the ended
+  // clip when it is muted. Keep the clip still so only the volume UI moves.
+  await dialog.locator("[data-review-media]").evaluate((video) => {
+    video.autoplay = false;
+    video.pause();
+  });
   await dialog
     .getByRole("button", { name: "Video volume", exact: true })
     .hover();
@@ -215,18 +221,9 @@ test("mute glides the volume knob and keyboard changes stay immediate", async ({
     .last();
   await expect(volume).toHaveValue("1");
   // Hold the actual CSS transition at its midpoint instead of racing its duration.
-  await knob.evaluate((el) => {
-    el.addEventListener(
-      "transitionrun",
-      () => {
-        for (const animation of el.getAnimations()) {
-          animation.pause();
-          animation.currentTime = animation.effect.getTiming().duration / 2;
-        }
-      },
-      { once: true },
-    );
-  });
+  // Pause from the poll, not a transitionrun listener, and stretch the 120ms
+  // glide so a slow runner cannot finish it before the first poll.
+  await knob.evaluate((el) => el.style.setProperty("--duration-fast", "60s"));
   try {
     await popup
       .getByRole("button", { name: "Mute video", exact: true })
@@ -236,18 +233,21 @@ test("mute glides the volume knob and keyboard changes stay immediate", async ({
       .poll(() =>
         knob.evaluate((el) => {
           const animation = el.getAnimations()[0];
-          if (animation?.playState !== "paused") return false;
+          if (!animation) return false;
+          animation.pause();
+          animation.currentTime = animation.effect.getTiming().duration / 2;
           const y = new DOMMatrix(getComputedStyle(el).transform).m42;
           return y < 0 && y > -el.getBoundingClientRect().height;
         }),
       )
       .toBe(true);
   } finally {
-    await knob.evaluate((el) =>
+    await knob.evaluate((el) => {
       el.getAnimations().forEach((animation) => {
         animation.finish();
-      }),
-    );
+      });
+      el.style.removeProperty("--duration-fast");
+    });
   }
   await popup
     .getByRole("button", { name: "Unmute video", exact: true })

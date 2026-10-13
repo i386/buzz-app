@@ -1,3 +1,4 @@
+import { CanvasConflictError } from "../../src/features/channel-templates/canvas-conflict";
 import { createRoot } from "react-dom/client";
 import { useState } from "react";
 import "../../src/shared/styles/globals.css";
@@ -6,8 +7,12 @@ import { TodosPanel } from "../../src/bundled/todos/TodosPanel";
 import type { RelayEvent } from "../../src/features/relay/events";
 import { Button } from "../../src/shared/design-system/ui/Button";
 const initial =
-  "# Launch notes\n\nThis text is outside the todo list.\n\n## Todos\n\n- [ ] Review the first working version\n- [/] Build the Doing column\n- [ ] Try a longer task label that wraps naturally on a narrow screen without squashing the checkbox\n- [x] Keep the list readable without the plugin\n\n## Decisions\n\nKeep it simple.\n";
-let head = { id: "preview-1", content: initial, created_at: 0 } as RelayEvent;
+  "# Launch notes\n\nThis text is outside the todo list.\n\n## Todos\n\n- [ ] Review the first working version\n- [/] Build the In progress column\n- [ ] Try a longer task label that wraps naturally on a narrow screen without squashing the checkbox\n- [x] Keep the list readable without the plugin\n\n## Decisions\n\nKeep it simple.\n";
+let head = {
+  id: "preview-1",
+  content: new URLSearchParams(location.search).has("empty") ? "" : initial,
+  created_at: 0,
+} as RelayEvent;
 let revision = 1;
 const canvas = {
   available: true,
@@ -15,8 +20,7 @@ const canvas = {
     return head;
   },
   async save(_channel: string, content: string, expected: string | undefined) {
-    if (expected !== head.id)
-      throw new Error("Canvas changed. Refresh before saving.");
+    if (expected !== head.id) throw new CanvasConflictError();
     if (head.created_at >= Math.floor(Date.now() / 1000))
       throw new Error("Please wait a second before saving Canvas again");
     head = {
@@ -46,6 +50,8 @@ const people = {
 };
 function Preview() {
   const [open, setOpen] = useState(true);
+  const [wide, setWide] = useState(false);
+  const [large, setLarge] = useState(false);
   return (
     <main style={{ maxWidth: 1100, margin: "auto", padding: 24 }}>
       <div
@@ -62,6 +68,15 @@ function Preview() {
           Toggle theme
         </Button>
         <Button onClick={() => setOpen(!open)}>Toggle panel</Button>
+        <Button onClick={() => setWide(!wide)}>Toggle width</Button>
+        <Button
+          onClick={() => {
+            document.documentElement.style.fontSize = large ? "16px" : "24px";
+            setLarge(!large);
+          }}
+        >
+          Toggle text size
+        </Button>
         <Button
           onClick={() => {
             head = {
@@ -78,7 +93,12 @@ function Preview() {
         Local preview only. No relay reads or writes.
       </p>
       <div
-        style={{ height: "75vh", width: 380, maxWidth: "100%", marginTop: 16 }}
+        style={{
+          height: "75vh",
+          width: wide ? "100%" : 380,
+          maxWidth: "100%",
+          marginTop: 16,
+        }}
       >
         {open && (
           <TodosPanel

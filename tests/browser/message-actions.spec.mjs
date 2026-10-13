@@ -254,7 +254,9 @@ test("message actions reveal, copy, restore focus and reply across responsive la
     panel.getByRole("textbox", { name: "Reply to thread", exact: true }),
   ).toBeFocused();
   await page
-    .getByRole("button", { name: /^Close (?:thread|Thread tab)$/, exact: true })
+    .locator(
+      '.buzz-tabs-item:has([data-tab-value^="thread:"][aria-selected="true"]) > button:not([role="tab"]), button[aria-label="Close thread"]',
+    )
     .click();
   await expect(
     row.getByRole("button", { name: "Reply", exact: true }),
@@ -278,14 +280,18 @@ test("message actions reveal, copy, restore focus and reply across responsive la
     .click();
   await expect(replyBox).toBeFocused();
   await page
-    .getByRole("button", { name: /^Close (?:thread|Thread tab)$/, exact: true })
+    .locator(
+      '.buzz-tabs-item:has([data-tab-value^="thread:"][aria-selected="true"]) > button:not([role="tab"]), button[aria-label="Close thread"]',
+    )
     .click();
   await broadcastRow.getByRole("button", { name: /^View thread:/ }).click();
   await expect(
     panel.locator(`[data-message-id="${broadcast.id}"]`),
   ).toBeFocused();
   await page
-    .getByRole("button", { name: /^Close (?:thread|Thread tab)$/, exact: true })
+    .locator(
+      '.buzz-tabs-item:has([data-tab-value^="thread:"][aria-selected="true"]) > button:not([role="tab"]), button[aria-label="Close thread"]',
+    )
     .click();
   for (const width of [900, 603, 390]) {
     await page.setViewportSize({ width, height: 850 });
@@ -468,6 +474,24 @@ test("narrow timeline continuation actions never cover prose or move adjacent ro
   await page.mouse.move(0, 0);
   await expect(actions).toHaveCSS("opacity", "0");
   await settle(page);
+  const expectClockAligned = async () => {
+    // The caption-sized clock is centered beside the first prose line, including
+    // when interface scaling changes their independently owned type roles.
+    await expect
+      .poll(() =>
+        row.evaluate((element) => {
+          const clock = element
+            .querySelector('time > span[aria-hidden="true"]')
+            .getBoundingClientRect();
+          const prose = element.querySelector("p");
+          const firstLineCenter =
+            prose.getBoundingClientRect().top +
+            Number.parseFloat(getComputedStyle(prose).lineHeight) / 2;
+          return Math.abs(clock.top + clock.height / 2 - firstLineCenter);
+        }),
+      )
+      .toBeLessThan(0.5);
+  };
   const baseline = await following.boundingBox();
   for (const mode of ["hover", "focus"]) {
     if (mode === "hover") await row.hover();
@@ -481,6 +505,7 @@ test("narrow timeline continuation actions never cover prose or move adjacent ro
     expect(toolbar.y + toolbar.height).toBeLessThanOrEqual(prose.y);
     await expect(actions).toHaveCSS("position", "fixed");
     expect((await following.boundingBox()).y).toBe(baseline.y);
+    await expectClockAligned();
     await expect
       .poll(() =>
         link.evaluate((node) => {
@@ -495,6 +520,12 @@ test("narrow timeline continuation actions never cover prose or move adjacent ro
       )
       .toBe(true);
   }
+  await page.evaluate(() =>
+    document.documentElement.style.setProperty("--buzz-text-scale", "2"),
+  );
+  await row.scrollIntoViewIfNeeded();
+  await settle(page);
+  await expectClockAligned();
 });
 
 test("historical single-day DMs and their threads expose dates without hover", async ({

@@ -182,6 +182,7 @@ export function useReviewEntrance(
   origin: ReviewOrigin | undefined,
   close: () => void,
   returnToOrigin: boolean,
+  returnOrigin?: () => ReviewOrigin | undefined,
 ) {
   const entranceCancel = useRef<() => void>(() => {});
   const exitAnimations = useRef<Animation[]>([]);
@@ -212,7 +213,9 @@ export function useReviewEntrance(
   }, [frame, origin]);
   useLayoutEffect(() => {
     const panel = frame.current;
-    const media = panel?.querySelector<HTMLElement>("[data-review-media]");
+    const media = Array.from(
+      panel?.querySelectorAll<HTMLElement>("[data-review-media]") ?? [],
+    ).find((element) => !element.closest("[inert]"));
     const reducedMotion = window.matchMedia?.(
       "(prefers-reduced-motion: reduce)",
     );
@@ -340,7 +343,9 @@ export function useReviewEntrance(
   }, [frame, origin]);
   const dismiss = (pointer: boolean) => {
     const panel = frame.current;
-    const media = panel?.querySelector<HTMLElement>("[data-review-media]");
+    const media = Array.from(
+      panel?.querySelectorAll<HTMLElement>("[data-review-media]") ?? [],
+    ).find((element) => !element.closest("[inert]"));
     if (media instanceof HTMLVideoElement) media.pause();
     if (
       !pointer ||
@@ -394,7 +399,8 @@ export function useReviewEntrance(
     );
     const scrimOpacity = scrim ? getComputedStyle(scrim).opacity : "1";
     entranceCancel.current();
-    const destination = origin?.preview.getBoundingClientRect();
+    const targetOrigin = returnOrigin ? returnOrigin() : origin;
+    const destination = targetOrigin?.preview.getBoundingClientRect();
     const visible =
       destination &&
       destination.width > 0 &&
@@ -406,19 +412,36 @@ export function useReviewEntrance(
     // A different gallery image or a zoomed crop has no matching chat rectangle.
     const zoomed = media.closest("[data-review-zoomed]");
     const frames =
-      origin?.preview.isConnected && visible && returnToOrigin && !zoomed
+      targetOrigin?.preview.isConnected && visible && returnToOrigin && !zoomed
         ? pictureFrames(
             media,
-            previewPicture(origin.preview, destination, origin.aspect),
-            origin.aspect,
+            previewPicture(
+              targetOrigin.preview,
+              destination,
+              targetOrigin.aspect,
+            ),
+            targetOrigin.aspect,
             destination,
-            previewRadius(origin.preview),
-            origin.smooth,
+            previewRadius(targetOrigin.preview),
+            targetOrigin.smooth,
           )
         : undefined;
     panel.dataset.reviewClosing = frames ? "shared" : "fade";
     const animations = exitAnimations.current;
     if (frames) {
+      if (
+        targetOrigin?.preview instanceof HTMLElement &&
+        targetOrigin.preview !== origin?.preview
+      ) {
+        const preview = targetOrigin.preview;
+        const opacity = preview.style.opacity;
+        const reveal = revealPreview.current;
+        preview.style.opacity = "0";
+        revealPreview.current = () => {
+          reveal();
+          preview.style.opacity = opacity;
+        };
+      }
       animations.push(
         media.animate(
           [

@@ -1,4 +1,5 @@
 @import "./composer.css" layer(components);
+@import "./tab-drag.css";
 
 @layer components {
   /* Optical alignment: lift Robot face artwork without moving its layout box. */
@@ -62,6 +63,20 @@
     width: var(--space-4);
     height: var(--space-4);
   }
+  /* Inline caption choices, such as the composer's model label. */
+  .buzz-button[data-size="inline"] {
+    @apply text-caption;
+    min-height: var(--space-6);
+    padding: 0 var(--space-1);
+  }
+  .buzz-button[data-size="inline"] .buzz-button-label {
+    gap: var(--space-1);
+  }
+  .buzz-button[data-size="inline"] .buzz-button-label > svg,
+  .buzz-button[data-size="inline"] .buzz-button-spinner {
+    width: var(--space-3);
+    height: var(--space-3);
+  }
   .buzz-button[data-size="sm"] {
     @apply text-label-sm;
     min-height: var(--size-control-sm);
@@ -112,7 +127,8 @@
         [data-disabled],
         [data-icon-variant="chrome"],
         [data-icon-variant="avatar"],
-        [data-icon-variant="media"]
+        [data-icon-variant="media"],
+        [data-icon-variant="bare"]
       ) {
       background: var(--interaction-hover);
     }
@@ -140,7 +156,8 @@
   ):not(
     [data-disabled],
     [data-icon-variant="avatar"],
-    [data-icon-variant="media"]
+    [data-icon-variant="media"],
+    [data-icon-variant="bare"]
   ) {
     background: var(--interaction-pressed);
   }
@@ -253,6 +270,18 @@
     [data-disabled]
   ) {
     background: var(--interaction-selected);
+  }
+
+  /* Glyph-state toggles stay unfilled; their caller supplies outline/filled art.
+     Keep the 32px small hit area with slightly larger 20px artwork. */
+  .buzz-button[data-icon-variant="bare"] {
+    background: transparent;
+  }
+  .buzz-button[data-icon-variant="bare"][data-size="sm"]
+    .buzz-button-label
+    > svg {
+    width: var(--space-5);
+    height: var(--space-5);
   }
 
   /* Buzz's existing composer and workspace treatments remain explicit. */
@@ -388,6 +417,13 @@
     color: var(--text-subtle);
   }
 
+  /* Matches reply-stack artwork inside its 24px slot and 1.5px ring. */
+  .buzz-avatar[data-size="compact"] {
+    @apply text-caption;
+    width: 1.3125rem;
+    height: 1.3125rem;
+  }
+
   .buzz-avatar[data-size="small"] {
     @apply text-caption;
     width: 1.5rem;
@@ -421,6 +457,8 @@
   .buzz-avatar-status {
     position: relative;
     display: inline-grid;
+    /* Artwork/fallback changes must not change the inline box's baseline. */
+    vertical-align: middle;
     flex: 0 0 auto;
     width: max-content;
     height: max-content;
@@ -990,9 +1028,9 @@
   .buzz-tabs[data-variant="navigation"] .buzz-tabs-item {
     display: flex;
     position: relative;
-    flex: 0 0 12rem;
-    width: 12rem;
-    max-width: 100%;
+    flex: 0 0 auto;
+    width: max-content;
+    max-width: min(12rem, 100%);
   }
   .buzz-tabs[data-variant="navigation"] .navigation-item {
     border-radius: var(--radius-icon-button);
@@ -1043,6 +1081,7 @@
     justify-content: center;
   }
 
+  html[data-keyboard-navigation] .buzz-surface-button:focus-visible,
   html[data-keyboard-navigation] .buzz-button:focus-visible,
   html[data-keyboard-navigation] .navigation-item:focus-visible,
   html[data-keyboard-navigation] .buzz-tabs-tab:focus-visible {
@@ -1122,6 +1161,9 @@
     --text-metadata: var(--text-standard);
     background: var(--interaction-row-hover);
   }
+  .buzz-menu-item[data-selection="highlight"][data-checked] {
+    background: var(--affordance-popover-selected);
+  }
   .buzz-menu-item[data-tone="danger"] {
     color: var(--text-danger);
   }
@@ -1157,6 +1199,9 @@
   .buzz-menu-group-label {
     padding: var(--space-2) var(--space-2) var(--space-1);
     color: var(--text-subtle);
+  }
+  .buzz-menu-group-label[data-emphasis="quiet"] {
+    color: var(--text-metadata);
   }
   .buzz-menu-separator {
     height: 1px;
@@ -1682,6 +1727,68 @@
   @media (prefers-reduced-motion: reduce) {
     .buzz-tabs-arrival {
       animation-timing-function: steps(1, end);
+    }
+  }
+
+  /* Activity arrival: a quiet fade. data-arrive="grow" (standalone pills)
+     also opens and closes its space with the same settle timing, so content
+     below moves instead of jumping. */
+  .buzz-arrive {
+    animation: buzz-arrive var(--duration-state) var(--easing-enter) both;
+  }
+  .buzz-arrive[data-arrive="grow"] {
+    display: grid;
+    grid-template-rows: 1fr;
+    animation: buzz-arrive-grow var(--duration-settle) var(--easing-settle) both;
+  }
+  .buzz-arrive[data-arrive="grow"] > * {
+    min-height: 0;
+    animation: buzz-arrive-reveal var(--duration-settle) var(--easing-settle)
+      backwards;
+  }
+  @keyframes buzz-arrive {
+    from {
+      opacity: 0;
+    }
+  }
+  @keyframes buzz-arrive-grow {
+    from {
+      grid-template-rows: 0fr;
+      margin-block: 0;
+      opacity: 0;
+    }
+    to {
+      grid-template-rows: 1fr;
+    }
+  }
+  /* Clips only while the space animates (discrete, held for the duration), so
+     hidden content never adds scroll height and focus rings are unclipped at rest. */
+  @keyframes buzz-arrive-reveal {
+    from,
+    to {
+      overflow: clip;
+    }
+  }
+  /* Leaving: the owner keeps the element mounted until this finishes. */
+  .buzz-arrive[data-arrive="grow"][data-leaving] {
+    pointer-events: none;
+    animation: buzz-leave var(--duration-settle) var(--easing-settle) forwards;
+  }
+  .buzz-arrive[data-arrive="grow"][data-leaving] > * {
+    animation: buzz-arrive-reveal var(--duration-settle) var(--easing-settle)
+      reverse forwards;
+  }
+  @keyframes buzz-leave {
+    to {
+      grid-template-rows: 0fr;
+      margin-block: 0;
+      opacity: 0;
+    }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .buzz-arrive,
+    .buzz-arrive[data-leaving] {
+      animation: none;
     }
   }
 }

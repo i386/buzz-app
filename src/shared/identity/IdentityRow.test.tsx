@@ -2,7 +2,6 @@
 import "@testing-library/jest-dom/vitest";
 import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { useEffect } from "react";
 import { beforeEach, afterEach, expect, it, vi } from "vitest";
 import { npubEncode } from "nostr-tools/nip19";
 import { ToastProvider } from "../design-system/ui/Toast";
@@ -14,53 +13,28 @@ afterEach(() => {
 });
 const pubkey = "ab".repeat(32);
 
-it("loads supplemental evidence only during the preview lifetime and copies the full npub without activating the row", async () => {
+it("previews on hover and copies the full npub", async () => {
   const user = userEvent.setup();
   const write = vi.spyOn(navigator.clipboard, "writeText").mockResolvedValue();
-  const mount = vi.fn();
-  const dispose = vi.fn();
-  const add = vi.fn();
-  function Evidence() {
-    useEffect(() => {
-      mount();
-      return dispose;
-    }, []);
-    return <span>Managed by Morgan</span>;
-  }
-  const view = render(
+  render(
     <ToastProvider>
-      <IdentityRow
-        pubkey={pubkey}
-        name="Agent"
-        isAgent
-        previewDetail={<Evidence />}
-        render={(content, previewProps) => (
-          <button {...previewProps} type="button" onClick={add}>
-            {content}
-          </button>
-        )}
-      />
+      <IdentityRow pubkey={pubkey} name="Agent" isAgent />
     </ToastProvider>,
   );
-  expect(mount).not.toHaveBeenCalled();
-  const trigger = screen.getByRole("button", { name: /Agent/ });
+  const trigger = screen.getByRole("button", {
+    name: "Preview Agent identity",
+  });
   expect(trigger).toHaveAccessibleDescription(
     /Identity preview opens on focus/,
   );
-  expect(trigger).not.toHaveAttribute("aria-haspopup");
   expect(trigger).not.toHaveAttribute("aria-details");
   await user.hover(trigger);
   const card = await screen.findByRole("dialog", { name: "Agent identity" });
   expect(card).toHaveTextContent(npubEncode(pubkey));
-  expect(card).toHaveTextContent("Managed by Morgan");
   expect(trigger).toHaveAttribute("aria-details", card.id);
-  expect(mount).toHaveBeenCalledOnce();
   await user.click(screen.getByRole("button", { name: "Copy npub" }));
   await waitFor(() => expect(write).toHaveBeenCalledWith(npubEncode(pubkey)));
   expect(await screen.findByText("Copied npub")).toBeVisible();
-  expect(add).not.toHaveBeenCalled();
-  view.unmount();
-  expect(dispose).toHaveBeenCalledOnce();
 });
 
 it("reports clipboard denial and leaves the full key available for manual copy", async () => {

@@ -283,30 +283,40 @@ it("fails a completed ordinary-member read without exposing Membership", async (
   expect(screen.queryByRole("button", { name: "Membership" })).toBeNull();
   expect(screen.queryByRole("heading", { name: "Membership" })).toBeNull();
 });
-it("Retry navigation starts a fresh permission read after a failed roster", async () => {
-  const fixture = membershipFixture();
-  fixture.fail();
-  const current = restoreMembership();
-  await screen.findByRole("button", { name: "Retry navigation" });
-  const before = fixture.rosterReads.length;
-  expect(before).toBeGreaterThan(0);
-  const release = fixture.hold();
-  try {
-    fireEvent.click(screen.getByRole("button", { name: "Retry navigation" }));
+it.each([true, false])(
+  "Retry navigation refreshes permission and hands off only its own focus (focused: %s)",
+  async (focused) => {
+    const fixture = membershipFixture();
+    fixture.fail();
+    const current = restoreMembership();
+    const retry = await screen.findByRole("button", {
+      name: "Retry navigation",
+    });
+    const main = screen.getByRole("main");
+    const elsewhere = screen.getByRole("link", { name: "Skip to content" });
+    (focused ? retry : elsewhere).focus();
+    const before = fixture.rosterReads.length;
+    expect(before).toBeGreaterThan(0);
+    const release = fixture.hold();
+    try {
+      fireEvent.click(retry);
+      expect(focused ? main : elsewhere).toHaveFocus();
+      await waitFor(() =>
+        expect(fixture.rosterReads.length).toBeGreaterThan(before),
+      );
+      expectPending(current);
+      expect(focused ? main : elsewhere).toHaveFocus();
+    } finally {
+      await act(async () => release());
+    }
+    expect(
+      await screen.findByRole("heading", { name: "Membership" }),
+    ).toBeVisible();
     await waitFor(() =>
-      expect(fixture.rosterReads.length).toBeGreaterThan(before),
+      expect(current.navigation.snapshot().status).toBe("opened"),
     );
-    expectPending(current);
-  } finally {
-    await act(async () => release());
-  }
-  expect(
-    await screen.findByRole("heading", { name: "Membership" }),
-  ).toBeVisible();
-  await waitFor(() =>
-    expect(current.navigation.snapshot().status).toBe("opened"),
-  );
-});
+  },
+);
 
 it("reconnects the selected Membership community after its transport fails", async () => {
   const fixture = membershipFixture();

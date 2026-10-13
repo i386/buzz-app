@@ -27,7 +27,6 @@ import { ShortcutSettings } from "./ShortcutSettings";
 import { DeveloperSettings } from "./DeveloperSettings";
 import { ArchiveSettings } from "./ArchiveSettings";
 import { AgentSettings } from "./AgentSettings";
-import type { AgentControl } from "../features/agents/control";
 import type { SettingsCards } from "../features/settings/service";
 import { OwnedContribution } from "../plugins/OwnedContribution";
 import type { Updates } from "../features/updates/updates";
@@ -43,14 +42,12 @@ export function Settings({
   shortcuts,
   shortcutBindings,
   notifications,
-  agentControl,
   updates,
   navigation,
   onSection,
   navigationPane = false,
 }: {
   cards: SettingsCards;
-  agentControl: AgentControl;
   plugins: PluginManager;
   communities: Communities;
   identity?: Identity | undefined;
@@ -163,7 +160,6 @@ export function Settings({
             </div>
             <div hidden={selected !== "agents"}>
               <AgentSettings
-                control={agentControl}
                 archive={
                   <ArchiveSettings
                     relay={communities.relay}

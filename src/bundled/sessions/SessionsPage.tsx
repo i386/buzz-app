@@ -1,3 +1,5 @@
+import { useChannelNavigation } from "../../features/channel-navigation/ChannelNavigationState";
+import { activityTarget } from "../../features/agents/activity-target";
 import { useConversationTabs } from "../channels/useConversationTabs";
 import { useChannelTabState } from "../channels/useChannelTabState";
 import { useChannelLabels } from "../channels/useChannelLabels";
@@ -163,7 +165,9 @@ function LiveSessions({
             pendingDraft.startsWith("me:")
           }
           standalone
-          focusRequest={navigation?.signal ?? 1}
+          focusRequest={
+            navigation?.focus === "preserve" ? 0 : (navigation?.signal ?? 0)
+          }
           key={pendingDraft ?? newSection ?? "unfiled"}
           resumeDraftKey={pendingDraft}
           sectionId={
@@ -306,9 +310,9 @@ function SessionWork({
     scope,
     channels,
     extensions,
-    personalWorkspace: true,
     leadingIds: [],
     continuingVisit: continuing.current,
+    navigationSignal: navigation?.signal,
     isLive: () => !navigation?.signal.aborted,
     openLink: (url) => openLink(url),
     conversationIcon: (item) => {
@@ -317,6 +321,25 @@ function SessionWork({
     },
   });
   const { drawer, splitTrigger } = secondary;
+  const handoff = useChannelNavigation();
+  const { open, panelTrigger } = secondary;
+  useLayoutEffect(() => {
+    const intent = handoff?.activityAgent.current;
+    if (
+      !intent ||
+      intent.channelId !== channel.id ||
+      navigation?.signal.aborted
+    )
+      return;
+    const target = activityTarget(intent.agent, intent.channelId);
+    const panel = panels.resolve(target);
+    if (panel) {
+      panelTrigger.current = intent.trigger;
+      open({ channelId: intent.channelId, panel, target }, true);
+    }
+    handoff.activityAgent.current = undefined;
+  }, [handoff, channel.id, navigation, panels, open, panelTrigger]);
+
   const canOpenLink = (url: string) =>
     !!panels.resolve(url) ||
     (!!navigator && !!sessionLinkTarget(url, scope, session.viewer));
@@ -423,10 +446,9 @@ function SessionWork({
               title={showingPanel ? "Close tab pane" : "Open tab pane"}
               aria-expanded={!!showingPanel}
               icon={<SidebarRightIcon size="1rem" />}
-              onClick={() => {
-                tabState.setPaneOpen(!showingPanel);
-                if (!showingPanel && !hasTabs) secondary.addTab();
-              }}
+              disabled={!hasLocalPanel}
+              focusableWhenDisabled
+              onClick={() => tabState.setPaneOpen(!showingPanel)}
             />
           </SessionHeading>
           {renameOpen && (
@@ -532,10 +554,12 @@ function SessionWork({
               className={channelStyles.retainedPanel}
               hidden={!!companion && !showingPanel}
             >
+              {secondary.drag.feedback}
+              {secondary.hosts}
               <PanelWorkspace
+                drag={secondary.drag.side}
                 value={secondary.selectedTab}
                 select={secondary.selectPanelTab}
-                add={secondary.addTab}
                 items={secondary.items}
                 focusOnMount={continuing.current}
               />

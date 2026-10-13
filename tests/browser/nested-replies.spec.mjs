@@ -280,7 +280,9 @@ test("nested replies send, stay open, and reveal through links at readable panel
   }
   await page.setViewportSize({ width: 1440, height: 950 });
   await page
-    .getByRole("button", { name: "Close Thread tab", exact: true })
+    .locator(
+      '.buzz-tabs-item:has([data-tab-value^="thread:"][aria-selected="true"]) > button:not([role="tab"])',
+    )
     .click();
   const linked = app.append(
     "primary",
@@ -534,7 +536,9 @@ for (const width of [1492, 1280, 1024, 700, 390])
     ).toBeVisible();
     const clock = continuationRow.locator("time");
     await panel.getByRole("textbox", { name: "Reply to thread" }).focus();
-    await page.getByRole("tab", { name: "Thread", exact: true }).hover();
+    await page
+      .locator('[role="tab"][data-tab-value^="thread:"][aria-selected="true"]')
+      .hover();
     await expect(clock).toHaveCSS("opacity", "0");
     await continuationRow.hover();
     await expect(clock).toHaveCSS("opacity", "1");
@@ -543,13 +547,19 @@ for (const width of [1492, 1280, 1024, 700, 390])
     await continuationRow
       .getByRole("button", { name: "More message actions", exact: true })
       .focus();
-    await page.getByRole("tab", { name: "Thread", exact: true }).hover();
+    await page
+      .locator('[role="tab"][data-tab-value^="thread:"][aria-selected="true"]')
+      .hover();
     await expect(clock).toHaveCSS("opacity", "1");
     for (const id of [...ids.slice(0, -1), continuation.id]) {
       const branch = branchFor(id);
       const row = panel.locator(`[data-message-id="${id}"]`);
       await panel.getByRole("textbox", { name: "Reply to thread" }).focus();
-      await page.getByRole("tab", { name: "Thread", exact: true }).hover();
+      await page
+        .locator(
+          '[role="tab"][data-tab-value^="thread:"][aria-selected="true"]',
+        )
+        .hover();
       await row.scrollIntoViewIfNeeded();
       // Exercise the lifted bar away from the top edge. Morgan accepted
       // clipping at that boundary; scrolling the row down restores access.
@@ -700,7 +710,9 @@ for (const width of [1492, 1280, 1024, 700, 390])
       ).toHaveCount(0);
     }
     await panel.getByRole("textbox", { name: "Reply to thread" }).focus();
-    await page.getByRole("tab", { name: "Thread", exact: true }).hover();
+    await page
+      .locator('[role="tab"][data-tab-value^="thread:"][aria-selected="true"]')
+      .hover();
     // Resting state must match the contract for every rendered reply, not just
     // the first: hidden on desktop hover-capable widths, always usable below 640.
     for (const id of [...ids.slice(0, -1), continuation.id]) {

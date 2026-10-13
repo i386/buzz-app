@@ -1,7 +1,7 @@
 import { avatarSource } from "../src/shared/avatar-source.ts";
-// Read-only compatibility with old Buzz's post-fold managed-agents.json.
-// Never call its loaders: load_managed_agents hydrates/migrates keys and
-// load_personas can merge builtins and write back. Project display fields only.
+// Read-only display projection of installed Buzz 1.0 agents. Explicit legacy
+// input remains supported for compatibility tests/import readers; never discover
+// Classic stores or call loaders that migrate keys or write configuration.
 import { constants } from "node:fs";
 import { open } from "node:fs/promises";
 import { homedir } from "node:os";
@@ -19,6 +19,39 @@ function text(value, max = 256) {
   return value;
 }
 export function projectAgentLibrary(raw) {
+  if (!Array.isArray(raw)) {
+    if (
+      raw?.version !== 1 ||
+      !Array.isArray(raw.agents) ||
+      raw.agents.length > MAX_ROWS
+    )
+      throw failure();
+    // Parked identities are import candidates, not saved Buzz 1.0 agents.
+    // Retained unconfigured custody can share a key with its configured setup.
+    // Prefer that setup; equal-status records keep document order.
+    const selected = new Map();
+    for (const row of raw.agents) {
+      if (
+        !row ||
+        typeof row !== "object" ||
+        Array.isArray(row) ||
+        !HEX.test(text(row.pubkey, 64))
+      )
+        throw failure();
+      const projected = {
+        pubkey: row.pubkey,
+        name: text(row.name),
+        avatar_url: row.picture,
+      };
+      const previous = selected.get(row.pubkey);
+      if (
+        !previous ||
+        (previous.configured === false && row.configured !== false)
+      )
+        selected.set(row.pubkey, { ...projected, configured: row.configured });
+    }
+    raw = [...selected.values()];
+  }
   if (!Array.isArray(raw) || raw.length > MAX_ROWS) throw failure();
   const definitions = [],
     identities = [];
@@ -72,18 +105,18 @@ export function installedBuzzDataDir(
   home = homedir(),
 ) {
   if (platform === "darwin")
-    return join(home, "Library/Application Support/xyz.block.buzz.app");
+    return join(home, "Library/Application Support/dev.local.buzz.foundation");
   if (platform === "linux") {
     const xdg = env.XDG_DATA_HOME;
     const base = xdg && isAbsolute(xdg) ? xdg : join(home, ".local/share");
-    return join(base, "xyz.block.buzz.app");
+    return join(base, "dev.local.buzz.foundation");
   }
   return undefined;
 }
 export async function readAgentLibrary(
   path = (() => {
     const dir = installedBuzzDataDir();
-    return dir ? join(dir, "agents/managed-agents.json") : undefined;
+    return dir ? join(dir, "agent-controller/agents.json") : undefined;
   })(),
 ) {
   if (!path) throw failure();

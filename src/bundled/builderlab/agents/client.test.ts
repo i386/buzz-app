@@ -43,31 +43,11 @@ async function fixture(subject = "user") {
   return {
     session,
     host,
-    client: createAgentClient(host, session, () => undefined),
+    client: createAgentClient(host, session),
+    retain: vi.fn(),
     signal: new AbortController().signal,
   };
 }
-it("rejects an owner proof from a different community identity before attestation", async () => {
-  const h = await fixture();
-  h.host.prepareRemoteAgentAuthorization = vi.fn(
-    async () => ["auth", "cd".repeat(32), "", "ef".repeat(64)] as const,
-  );
-  await expect(
-    h.client.attest(
-      {
-        id: "one",
-        name: "Helper",
-        pubkey: row.agent_pubkey,
-        status: "Unattested",
-      },
-      h.signal,
-      () => true,
-      "12".repeat(32),
-    ),
-  ).rejects.toThrow("identities differ");
-  expect(h.host.request).not.toHaveBeenCalled();
-});
-
 it("lists the authenticated account through the configured native host", async () => {
   const h = await fixture();
   vi.mocked(h.host.request).mockResolvedValueOnce(
@@ -283,9 +263,8 @@ it.each([
   if (error) await expect(deleting).rejects.toThrow(error);
   else await expect(deleting).resolves.toBeUndefined();
 });
-it("registers with a saved UUID and attests through the existing owner signer", async () => {
+it("registers with a saved UUID and submits the supplied owner proof", async () => {
   const h = await fixture();
-  h.host.prepareRemoteAgentAuthorization = vi.fn(async () => proof);
   vi.mocked(h.host.request)
     .mockResolvedValueOnce(
       response({
@@ -295,7 +274,7 @@ it("registers with a saved UUID and attests through the existing owner signer", 
       }),
     )
     .mockResolvedValueOnce(response({ status: "ATTEST_AGENT_STATUS_ACTIVE" }));
-  const agent = await h.client.register(" Helper ", h.signal);
+  const agent = await h.client.register(" Helper ", h.signal, h.retain);
   expect(agent).toMatchObject({ name: "Helper", status: "Unattested" });
   const input = vi.mocked(h.host.request).mock.calls[0]?.[0];
   expect(input).toMatchObject({
@@ -306,13 +285,7 @@ it("registers with a saved UUID and attests through the existing owner signer", 
     agent_name: "Helper",
     idempotency_key: expect.stringMatching(/^[0-9a-f-]{36}$/),
   });
-  expect(await h.client.attest(agent, h.signal, () => true)).toMatchObject({
-    status: "Active",
-  });
-  expect(h.host.prepareRemoteAgentAuthorization).toHaveBeenCalledWith(
-    row.agent_pubkey,
-    h.signal,
-  );
+  await h.client.activate(agent.pubkey, proof, undefined, h.signal);
   expect(h.host.request).toHaveBeenLastCalledWith(
     expect.objectContaining({
       url: expect.stringContaining("/attest-agent"),
@@ -334,7 +307,7 @@ it.each(["network", "server", "malformed", "cancel"])(
       return failure === "server" ? response({}, 503) : response({});
     });
     await expect(
-      h.client.register("Helper", controller.signal),
+      h.client.register("Helper", controller.signal, h.retain),
     ).rejects.toThrow();
     vi.mocked(h.host.request).mockResolvedValueOnce(
       response({
@@ -344,9 +317,10 @@ it.each(["network", "server", "malformed", "cancel"])(
       }),
     );
     // A fresh consumer after navigation/restart reuses the persisted intent.
-    await createAgentClient(h.host, h.session, () => undefined).register(
+    await createAgentClient(h.host, h.session).register(
       "Helper",
       h.signal,
+      h.retain,
     );
     const bodies = vi
       .mocked(h.host.request)
@@ -357,9 +331,9 @@ it.each(["network", "server", "malformed", "cancel"])(
 it("does not reuse a pending creation for another verified account with the same email", async () => {
   const first = await fixture("account-a");
   vi.mocked(first.host.request).mockRejectedValueOnce(new Error("offline"));
-  await expect(first.client.register("Helper", first.signal)).rejects.toThrow(
-    "Retry the same name",
-  );
+  await expect(
+    first.client.register("Helper", first.signal, first.retain),
+  ).rejects.toThrow("Retry the same name");
   first.session.signOut();
   const second = await fixture("account-b");
   vi.mocked(second.host.request).mockResolvedValueOnce(
@@ -369,7 +343,7 @@ it("does not reuse a pending creation for another verified account with the same
       agent_pubkey: row.agent_pubkey,
     }),
   );
-  await second.client.register("Helper", second.signal);
+  await second.client.register("Helper", second.signal, second.retain);
   const oldBody = JSON.parse(
     vi.mocked(first.host.request).mock.calls[0]?.[0].body ?? "{}",
   );
@@ -383,9 +357,9 @@ it.each([2, 3, 4, 5, "REGISTER_AGENT_STATUS_TOO_MANY_AGENTS"])(
   async (status) => {
     const h = await fixture();
     vi.mocked(h.host.request).mockResolvedValueOnce(response({ status }));
-    await expect(h.client.register("Helper", h.signal)).rejects.toThrow(
-      /disabled|setup|limit|conflicts/,
-    );
+    await expect(
+      h.client.register("Helper", h.signal, h.retain),
+    ).rejects.toThrow(/disabled|setup|limit|conflicts/);
     vi.mocked(h.host.request).mockResolvedValueOnce(
       response({
         status: 1,
@@ -393,7 +367,7 @@ it.each([2, 3, 4, 5, "REGISTER_AGENT_STATUS_TOO_MANY_AGENTS"])(
         agent_pubkey: row.agent_pubkey,
       }),
     );
-    await h.client.register("Helper", h.signal);
+    await h.client.register("Helper", h.signal, h.retain);
     const bodies = vi
       .mocked(h.host.request)
       .mock.calls.map(([input]) => JSON.parse(input.body ?? "{}"));
@@ -404,7 +378,7 @@ it.each(["", "bad/name", "x".repeat(65)])(
   "does not register invalid name %s",
   async (name) => {
     const h = await fixture();
-    await expect(h.client.register(name, h.signal)).rejects.toThrow(
+    await expect(h.client.register(name, h.signal, h.retain)).rejects.toThrow(
       "agent name",
     );
     expect(h.host.request).not.toHaveBeenCalled();
@@ -418,55 +392,8 @@ it("blocks creation when the intent cannot be stored", async () => {
       throw new Error("full");
     },
   });
-  await expect(h.client.register("Helper", h.signal)).rejects.toThrow(
+  await expect(h.client.register("Helper", h.signal, h.retain)).rejects.toThrow(
     "Could not save",
   );
-  expect(h.host.request).not.toHaveBeenCalled();
-});
-it.each(["sign-out", "cancel"])(
-  "does not attest after %s during owner signing",
-  async (action) => {
-    const h = await fixture();
-    const held = deferred<typeof proof>();
-    h.host.prepareRemoteAgentAuthorization = vi.fn(() => held.promise);
-    const controller = new AbortController();
-    const pending = h.client.attest(
-      {
-        id: row.agent_id,
-        name: "Helper",
-        pubkey: row.agent_pubkey,
-        status: "Unattested",
-      },
-      controller.signal,
-      () => true,
-    );
-    if (action === "cancel") controller.abort();
-    else h.session.signOut();
-    held.resolve(proof);
-    await expect(pending).rejects.toMatchObject({ name: "AbortError" });
-    expect(h.host.request).not.toHaveBeenCalled();
-  },
-);
-
-it("does not enroll into a previous community after a switch during signing", async () => {
-  const h = await fixture();
-  let community = "wss://community.example";
-  const client = createAgentClient(h.host, h.session, () => community);
-  const held = deferred<typeof proof>();
-  h.host.prepareRemoteAgentAuthorization = vi.fn(() => held.promise);
-  const pending = client.attest(
-    {
-      id: row.agent_id,
-      name: row.agent_name,
-      pubkey: row.agent_pubkey,
-      status: "Unattested",
-    },
-    h.signal,
-    () => true,
-  );
-  expect(h.host.prepareRemoteAgentAuthorization).toHaveBeenCalledOnce();
-  community = "wss://other.example";
-  held.resolve(proof);
-  await expect(pending).rejects.toThrow("Community changed");
   expect(h.host.request).not.toHaveBeenCalled();
 });

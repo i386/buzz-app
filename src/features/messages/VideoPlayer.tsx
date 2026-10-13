@@ -189,6 +189,7 @@ export function VideoControls({
       <div
         ref={inline ? corners : undefined}
         className={styles.controls}
+        data-video-controls=""
         data-inline={inline || undefined}
         data-playing={playing || undefined}
         data-review-chrome={inline ? undefined : ""}

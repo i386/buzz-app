@@ -6,8 +6,6 @@ import { Button } from "../../shared/design-system/ui/Button";
 import { Dialog } from "../../shared/design-system/ui/Dialog";
 import { Field } from "../../shared/design-system/ui/Field";
 import { Input } from "../../shared/design-system/ui/Input";
-import type { TemplateProviders } from "../../features/channel-templates/provider";
-import { OwnedContribution } from "../../plugins/OwnedContribution";
 import styles from "./ChannelTemplates.module.css";
 
 export function ChannelGroupsDialog({
@@ -15,10 +13,8 @@ export function ChannelGroupsDialog({
   onOpenChange,
   kit,
   legacy,
-  providers,
   active,
 }: {
-  providers: TemplateProviders;
   active(): boolean;
   open: boolean;
   onOpenChange(open: boolean): void;
@@ -48,11 +44,6 @@ export function ChannelGroupsDialog({
   const [base] = useState(entry?.eventId);
   const [busy, setBusy] = useState(false),
     [error, setError] = useState("");
-  const available = useSyncExternalStore(
-    providers.subscribe,
-    providers.snapshot,
-  );
-  const provider = available.length === 1 ? available[0] : undefined;
   const save = async () => {
     if (!live.current || !active()) return;
     setBusy(true);
@@ -89,8 +80,8 @@ export function ChannelGroupsDialog({
     >
       <div className={styles.stack} inert={busy}>
         <p className="text-secondary">
-          Personal organization only. Defaults apply to new channels; moving
-          channels never changes their members or Canvas.
+          Personal organization only. Moving channels never changes their
+          members or Canvas.
         </p>
         {!entry && (
           <>
@@ -149,38 +140,6 @@ export function ChannelGroupsDialog({
                 }
               />
             </Field>
-            {provider ? (
-              <OwnedContribution entry={provider} registry={providers}>
-                {(entry, present) => {
-                  const Default = entry.groupDefault;
-                  return (
-                    <Default
-                      value={group.defaultTemplateId}
-                      entries={state.entries}
-                      active={() => active() && present()}
-                      onChange={(defaultTemplateId) => {
-                        if (active() && present())
-                          setDraft((previous) => ({
-                            ...previous,
-                            groups: previous.groups.map((g) =>
-                              g.id === group.id
-                                ? { ...g, defaultTemplateId }
-                                : g,
-                            ),
-                          }));
-                      }}
-                    />
-                  );
-                }}
-              </OwnedContribution>
-            ) : (
-              group.defaultTemplateId && (
-                <p className="text-secondary">
-                  Saved template default is preserved but inactive. Enable
-                  Templates &amp; teams to edit or apply it.
-                </p>
-              )
-            )}
             <div className={styles.actions}>
               <Button
                 disabled={index === 0}

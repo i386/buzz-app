@@ -251,3 +251,58 @@ for (const scope of ["channel", "thread"]) {
     expect(app.report.publications).toEqual([]);
   });
 }
+
+for (const scope of ["channel", "thread"]) {
+  test(`a growing ${scope} composer lifts history with it at the bottom`, async ({
+    page,
+    app,
+  }) => {
+    await open(page, app);
+    const history = page.getByRole("region", {
+      name: scope === "thread" ? "Thread messages" : "Channel message history",
+      exact: true,
+    });
+    if (scope === "thread") {
+      const root = app.histories
+        .get("primary/alpha")
+        .find((e) => e.content === "Thread root 0");
+      for (let i = 0; i < 30; i++) app.reply(root.id);
+      await page
+        .locator(`[data-channel-timeline] [data-message-id="${root.id}"]`)
+        .getByRole("button", { name: /^View thread:/ })
+        .click();
+      await expect(history.locator("[data-message-id]")).toHaveCount(33);
+    }
+    await edge(page, 1, history);
+    // Created after the app's observers, so it reports each resize as painted.
+    await history.evaluate((element) => {
+      window.composerGrowth = [];
+      new ResizeObserver(() =>
+        window.composerGrowth.push({
+          viewport: element.clientHeight,
+          gap: element.scrollHeight - element.clientHeight - element.scrollTop,
+        }),
+      ).observe(element);
+    });
+    // Wrapped text and new lines grow the composer, shrinking history above it.
+    await page
+      .getByRole("textbox", {
+        name: scope === "thread" ? "Reply to thread" : "Message #Alpha",
+        exact: true,
+      })
+      .click();
+    await page.keyboard.type("Lorem ipsum dolor sit amet. ".repeat(8));
+    for (const line of ["Second line", "Third line"]) {
+      await page.keyboard.press("Shift+Enter");
+      await page.keyboard.type(line);
+    }
+    const growth = () => page.evaluate(() => window.composerGrowth);
+    await expect
+      .poll(async () => new Set((await growth()).map((s) => s.viewport)).size)
+      .toBeGreaterThan(2);
+    for (const sample of await growth())
+      expect(sample.gap, `bottom at viewport ${sample.viewport}`).toBeLessThan(
+        2,
+      );
+  });
+}

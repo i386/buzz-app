@@ -6,6 +6,8 @@ import {
 import type { mentionCandidates } from "./mention-candidates";
 export type MentionChoice = ReturnType<typeof mentionCandidates>[number] & {
   label: string;
+  /** The generated key suffix that ends `label` (`Honey · 4prr`), if any. */
+  qualifier?: string | undefined;
 };
 const normalized = normalizeName;
 const compare = (a: string, b: string) => (a < b ? -1 : a > b ? 1 : 0);
@@ -79,14 +81,31 @@ export function rankMentions(
     )
     .map((k) => k.c);
 }
-/** Space is intent only for one exact key across the full, uncapped choice set. */
+/**
+ * Space is intent only for one exact key across the full, uncapped choice set.
+ * Every choice can continue the name; only choices `among` can equal it. A key
+ * qualifier or generated `(agent)` suffix only tells namesakes apart, so it
+ * never continues the name.
+ */
 export const exactMention = (
   choices: readonly MentionChoice[],
   query: string,
+  among: (choice: MentionChoice) => boolean = () => true,
 ) =>
   exactName(
     choices,
     (c) => [...c.aliases, c.label],
     query,
-    (c) => c.aliases.length > 0,
+    (c) => c.aliases.length > 0 && among(c),
+    (c) => {
+      const label =
+        c.qualifier && c.label.endsWith(` · ${c.qualifier}`)
+          ? c.label.slice(0, -(c.qualifier.length + 3))
+          : c.label;
+      // Literal names still block through aliases; generated suffixes do not.
+      return c.agent &&
+        c.aliases.some((name) => `${name.trim()} (agent)` === label)
+        ? c.aliases
+        : [...c.aliases, label];
+    },
   )?.recipient.pubkey;

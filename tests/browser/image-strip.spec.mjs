@@ -72,7 +72,7 @@ test("posted image strips keep counts visible and every image reachable beside d
       },
       ...pictures,
     ]);
-    await expect(form.getByText(/Queued$/)).toHaveCount(10);
+    await expect(form.getByText(/Ready$/)).toHaveCount(10);
     await form.getByRole("textbox").fill("Design references and review notes");
     await form
       .getByRole("button", { name: "Send message", exact: true })

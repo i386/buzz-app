@@ -21,7 +21,7 @@ import { SidebarSection } from "../../bundled/channels/SidebarSection";
 const Writable = createContext(false);
 
 /**
- * Pointer moves between saved groups and Channels. A drop only reports its
+ * Pointer moves between saved groups, Starred and Channels. A drop only reports its
  * destination, so the caller saves it exactly like the row menu's move; that
  * menu remains the keyboard path.
  */

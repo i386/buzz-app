@@ -41,6 +41,44 @@ const fulfillGifImage = (route) =>
     body: '<svg xmlns="http://www.w3.org/2000/svg" width="160" height="120"><rect width="160" height="120" fill="#8aa6b4"/></svg>',
   });
 
+// Settled bounds miss a one-frame overlap of outgoing and incoming panels.
+const watchPickerLayout = (picker) =>
+  picker.evaluateHandle((popup) => {
+    const frames = [];
+    let frame;
+    const sample = () => {
+      const bounds = popup.getBoundingClientRect();
+      frames.push({
+        x: bounds.x,
+        y: bounds.y,
+        width: bounds.width,
+        height: bounds.height,
+        visiblePanels: [...popup.querySelectorAll('[role="tabpanel"]')].filter(
+          (panel) => panel.getBoundingClientRect().height > 0,
+        ).length,
+      });
+      frame = requestAnimationFrame(sample);
+    };
+    sample();
+    return {
+      stop() {
+        cancelAnimationFrame(frame);
+        return frames;
+      },
+    };
+  });
+
+const expectStablePickerLayout = async (watch) => {
+  const frames = await watch.evaluate((observer) => observer.stop());
+  await watch.dispose();
+  expect(frames.length).toBeGreaterThan(1);
+  for (const frame of frames) {
+    expect(frame.visiblePanels).toBe(1);
+    for (const dimension of ["x", "y", "width", "height"])
+      expect(frame[dimension]).toBeCloseTo(frames[0][dimension], 0);
+  }
+};
+
 test.use({ historyCounts: { alpha: 1, beta: 0 } });
 test("relay-backed GIF tab searches KLIPY and inserts URL-only media", async ({
   page,
@@ -86,7 +124,7 @@ test("relay-backed GIF tab searches KLIPY and inserts URL-only media", async ({
     exact: true,
   });
   const emojiTrigger = page.getByRole("button", {
-    name: "Insert emoji",
+    name: "Emoji and GIFS",
     exact: true,
   });
   await draft.fill("unfinished draft");
@@ -172,6 +210,7 @@ test("relay-backed GIF tab searches KLIPY and inserts URL-only media", async ({
   await emojiTab.focus();
   await emojiTab.press("ArrowRight");
   await expect(gifTab).toBeFocused();
+  const switchingToGifs = await watchPickerLayout(picker);
   await gifTab.press("Enter");
   await expect(gifTab).toHaveAttribute("aria-selected", "true");
   await expect(
@@ -186,6 +225,7 @@ test("relay-backed GIF tab searches KLIPY and inserts URL-only media", async ({
   const search = page.getByRole("searchbox", { name: "Search GIFs" });
   await expect(search).toBeFocused();
   await expect(search).toHaveValue("hello");
+  await expectStablePickerLayout(switchingToGifs);
   // Observe the real key's browser-default boundary, not a guessed network delay.
   await draft.evaluate((input) => {
     window.gifEnter = { prevented: false, submits: 0 };
@@ -293,6 +333,7 @@ test("relay-backed GIF tab searches KLIPY and inserts URL-only media", async ({
   await search.fill("celebrate");
   await expect.poll(() => requests.length).toBe(2);
   expect(requests[1]).toMatchObject({ query: "celebrate" });
+  const switchingToEmoji = await watchPickerLayout(picker);
   await emojiTab.click();
   await expect(emojiTab).toHaveAttribute("aria-selected", "true");
   const returningEmojiSearch = page.getByRole("searchbox", {
@@ -300,6 +341,11 @@ test("relay-backed GIF tab searches KLIPY and inserts URL-only media", async ({
     exact: true,
   });
   await expect(returningEmojiSearch).toHaveValue("celebrate");
+  await expect(returningEmojiSearch).toBeFocused();
+  await expect(
+    picker.getByRole("tabpanel", { name: "GIF", exact: true }),
+  ).toHaveCount(0);
+  await expectStablePickerLayout(switchingToEmoji);
   await expect(returningEmojiSearch).toHaveCSS("animation-name", "none");
   const returningEmojiSearchPosition = await returningEmojiSearch
     .locator("..")
@@ -387,7 +433,7 @@ for (const initial of ["invalid response", "unsupported relay"]) {
     await page.goto(app.origin);
     await openPage(page, "Messages");
     const trigger = page.getByRole("button", {
-      name: "Insert emoji",
+      name: "Emoji and GIFS",
       exact: true,
     });
     const gifTab = page.getByRole("tab", { name: "GIF", exact: true });
@@ -452,7 +498,7 @@ test.describe("GIF send roundtrip", () => {
       exact: true,
     });
     const trigger = page.getByRole("button", {
-      name: "Insert emoji",
+      name: "Emoji and GIFS",
       exact: true,
     });
     await trigger.click();

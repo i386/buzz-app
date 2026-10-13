@@ -1,9 +1,14 @@
-# View a Claude Code session started by Buzz
+# View a Claude session started by Buzz
+
+For the live viewer, run `bin/node scripts/session-debug.mjs '<Buzz thread ID or link>'`
+from the repository root. See [session debugging](session-debugging.md) for wall
+time, token use and live updates. The commands below remain useful for
+standalone snapshots and manual transcript inspection.
 
 This guide is for agents investigating a Buzz conversation. All commands run
 non-interactively and read the saved transcript without invoking Claude or tools.
 
-Buzz runs Claude Code through `claude-agent-acp`. Claude Code saves transcripts
+Buzz runs Claude through `claude-agent-acp`. Claude saves transcripts
 as JSONL under `~/.claude/projects/<project>/<session-id>.jsonl`. The project
 directory derives from the agent's working directory, with non-alphanumeric
 characters replaced by `-` (long paths also get truncated and hashed). For
@@ -81,8 +86,13 @@ bin/node scripts/export-claude-session.mjs "$session" /tmp/claude-session.html
 ```
 
 Give the human the absolute output path, or open it with the app's file viewer.
-On macOS, `open /tmp/claude-session.html` opens it in a browser. Messages are
-visible in order; tool inputs, results, and recorded thinking expand on click.
+On macOS, `open /tmp/claude-session.html` opens it in a browser. The exporter
+renders through the shared session viewer (`scripts/session-viewer.mjs`): a
+searchable sidebar with Default, No-tools, User, and All filters, and the
+conversation in order. Buzz turns show their `Content:` text, with the full turn
+context expandable. Each tool call shows its input and paired result, marked
+when the result is an error; long text expands on click. Meta records appear
+only under All.
 The viewer contains escaped text, requires no server or network resources, and
 does not execute transcript content. It includes every recorded message in the
 matched session, which can contain other Buzz threads; non-message metadata

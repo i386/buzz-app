@@ -21,8 +21,7 @@ import {
   privateTag,
   privateCoordinate,
   parsePrivateRecord,
-  type PayloadRecord,
-  type KitRecord,
+  type PrivateRecord,
 } from "../channel-templates/model";
 import type { RelayWriter } from "./transport";
 import { communityGitRepository } from "../projects/git";
@@ -478,7 +477,7 @@ export async function connectNativeTransport(
       return id;
     },
     channelKit: {
-      async prepare(record: KitRecord | PayloadRecord, signal) {
+      async prepare(record: PrivateRecord, signal) {
         signal.throwIfAborted();
         const valid = parsePrivateRecord(record, origin);
         const content = await invoke<string>("relay_kit_prepare", {
@@ -496,7 +495,7 @@ export async function connectNativeTransport(
           throw new Error("Recipe decode capacity exceeded");
         const owned = events.map(eventDto);
         const decoded = await invoke<
-          { eventId: string; record: KitRecord | PayloadRecord }[]
+          { eventId: string; record: PrivateRecord }[]
         >("relay_kit_decode", {
           community: origin,
           events: owned,

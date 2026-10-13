@@ -185,7 +185,7 @@ test("reaction previews use the delayed first open, immediate warm switch, and r
   try {
     await custom.hover();
     await expect(tooltip).toHaveCount(0);
-    await page.clock.runFor(1199);
+    await page.clock.runFor(99);
     await expect(tooltip).toHaveCount(0);
     await page.clock.runFor(1);
     await expect(tooltip).toBeVisible();
@@ -195,7 +195,7 @@ test("reaction previews use the delayed first open, immediate warm switch, and r
     await expect(tooltip).toHaveCount(0);
     await page.clock.runFor(151);
     await custom.hover();
-    await page.clock.runFor(1199);
+    await page.clock.runFor(99);
     await expect(tooltip).toHaveCount(0);
     await page.clock.runFor(1);
     await expect(tooltip).toBeVisible();

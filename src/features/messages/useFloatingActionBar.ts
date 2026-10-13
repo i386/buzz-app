@@ -166,8 +166,6 @@ export function useFloatingActionBar(
     if (!floating || !revealed || !row || !bar || !slot) return;
     const scroller = row.closest<HTMLElement>("[data-message-scroller]");
     let frame = 0;
-    let needsPosition = true;
-    let previousAnchor: DOMRect | undefined;
     const hide = () => {
       if (bar.hasAttribute("popover")) bar.hidePopover?.();
       // Closed popovers return to their slot's containing block. Viewport offsets
@@ -176,7 +174,8 @@ export function useFloatingActionBar(
       bar.style.left = "";
       bar.style.right = "";
     };
-    const position = (anchor: DOMRect) => {
+    const position = () => {
+      const anchor = slot.getBoundingClientRect();
       // A top-layer toolbar can retain hover above a portalled modal's backdrop.
       // Keep actions in the active viewer usable, but suppress background rows.
       if (behindActiveModal(row)) {
@@ -201,42 +200,82 @@ export function useFloatingActionBar(
         : `${document.documentElement.clientWidth - anchor.right}px`;
       bar.showPopover?.();
     };
+    // A transition or animation on the slot or an ancestor (such as a sliding
+    // drawer) moves it without resizing, mutating or scrolling anything.
+    const moving = () => {
+      for (let node: Element | null = slot; node; node = node.parentElement)
+        for (const animation of node.getAnimations?.() ?? [])
+          if (
+            animation.playState === "running" &&
+            Number.isFinite(animation.effect?.getComputedTiming().endTime)
+          )
+            return true;
+      return false;
+    };
+    let following = false;
+    // Every move of the slot arrives through an event or observer below. Read
+    // its rect once per frame from those, rather than polling it every frame and
+    // forcing a layout whenever the timeline is mid-mutation. Only while finite
+    // motion is in flight does it follow every frame, ending with a realignment
+    // at the resting position.
     const schedule = () => {
-      needsPosition = true;
+      if (frame) return;
+      frame = requestAnimationFrame(() => {
+        frame = 0;
+        position();
+        if (following) following = moving();
+        if (following) schedule();
+      });
     };
-    const trackAnchor = () => {
-      // Sibling edits/media can move the slot without resizing any observed node.
-      // Read only while revealed; avoid positioning work when nothing changed.
-      const anchor = slot.getBoundingClientRect();
-      if (
-        needsPosition ||
-        !previousAnchor ||
-        anchor.x !== previousAnchor.x ||
-        anchor.y !== previousAnchor.y ||
-        anchor.width !== previousAnchor.width ||
-        anchor.height !== previousAnchor.height
-      ) {
-        needsPosition = false;
-        position(anchor);
-        previousAnchor = anchor;
-      }
-      frame = requestAnimationFrame(trackAnchor);
+    const follow = () => {
+      following = true;
+      schedule();
     };
-    trackAnchor();
+    const motion = (event: Event) => {
+      if (event.target instanceof Node && event.target.contains(slot)) follow();
+    };
+    const motionEvents = [
+      "transitionrun",
+      "transitionend",
+      "transitioncancel",
+      "animationstart",
+      "animationend",
+      "animationcancel",
+    ];
+    position();
+    if (moving()) follow();
+    for (const type of motionEvents)
+      document.addEventListener(type, motion, true);
     document.addEventListener("scroll", schedule, true);
     window.addEventListener("resize", schedule);
     const observer = new ResizeObserver(schedule);
     observer.observe(slot);
     observer.observe(row);
-    if (scroller) observer.observe(scroller);
+    // Sibling edits and media measurements move the slot without resizing any
+    // observed node. The toolbar's own positioning writes must not retrigger it.
+    const siblings = new MutationObserver((records) => {
+      if (records.some((record) => !bar.contains(record.target))) schedule();
+    });
+    if (scroller) {
+      observer.observe(scroller);
+      siblings.observe(scroller, {
+        subtree: true,
+        childList: true,
+        characterData: true,
+        attributes: true,
+      });
+    }
     // Observe modals only while reveal is requested, and share the existing
     // coalesced positioning update.
     const unobserveModals = observeModals(schedule);
     return () => {
       cancelAnimationFrame(frame);
+      for (const type of motionEvents)
+        document.removeEventListener(type, motion, true);
       document.removeEventListener("scroll", schedule, true);
       window.removeEventListener("resize", schedule);
       observer.disconnect();
+      siblings.disconnect();
       unobserveModals();
       hide();
     };

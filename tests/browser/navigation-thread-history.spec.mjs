@@ -90,14 +90,11 @@ test("Back restores each thread visit before the previous channel", async ({
 
   await page.goBack();
   await expect(panel.getByText("Thread root 1", { exact: true })).toBeVisible();
-  const threadPanel = await panel.elementHandle();
+  // Back switches to the earlier thread's tab; the later one stays open.
+  const laterThread = await panel.elementHandle();
   await page.goBack();
   await expect(panel.getByText("Thread root 0", { exact: true })).toBeVisible();
-  expect(
-    await threadPanel.evaluate(
-      (node) => node === document.querySelector('aside[aria-label="Thread"]'),
-    ),
-  ).toBe(true);
+  expect(await laterThread.evaluate((node) => node.isConnected)).toBe(true);
 });
 
 for (const reading of [false, true]) {
@@ -207,7 +204,9 @@ for (const reading of [false, true]) {
           region.locator(`[data-message-id="${last.id}"]`),
         ).toBeInViewport();
         await expect(
-          page.getByRole("tab", { name: "Thread", exact: true }),
+          page.locator(
+            '[role="tab"][data-tab-value^="thread:"][aria-selected="true"]',
+          ),
         ).toBeFocused();
       }
       const live = app.reply(root.id);
@@ -282,3 +281,474 @@ for (const reading of [false, true]) {
     }
   });
 }
+
+// Browser-only: native focus steps keep a caret already inside the editing
+// root, and inert tab panes are real layout; jsdom models neither.
+test("choosing a thread tab resumes typing where its reply was left", async ({
+  page,
+  app,
+}) => {
+  await open(page, app);
+  const roots = app.histories
+    .get("primary/alpha")
+    .filter((row) => row.content.startsWith("Thread root"));
+  const panel = page.getByRole("complementary", {
+    name: "Thread",
+    exact: true,
+  });
+  for (const [index, root] of roots.slice(0, 2).entries()) {
+    await page
+      .locator(`[data-channel-timeline] [data-message-id="${root.id}"]`)
+      .getByRole("button", { name: /^View thread:/ })
+      .click();
+    await expect(
+      panel.getByText(`Thread root ${index}`, { exact: true }),
+    ).toBeVisible();
+  }
+  const reply = panel.getByRole("textbox", {
+    name: "Reply to thread",
+    exact: true,
+  });
+  const workspace = page.locator("[data-panel-workspace]");
+  const selected = workspace.locator(
+    '[role="tab"][data-tab-value^="thread:"][aria-selected="true"]',
+  );
+  const tabValue = await selected.getAttribute("data-tab-value");
+  await reply.click();
+  await page.keyboard.type("here is a message");
+  for (let step = 0; step < 15; step++) await page.keyboard.press("ArrowLeft");
+  await workspace
+    .locator('[role="tab"][data-tab-value^="thread:"][aria-selected="false"]')
+    .click();
+  await expect(reply).toBeFocused();
+  await expect(reply).toHaveText("");
+  await workspace.locator(`[role="tab"][data-tab-value="${tabValue}"]`).click();
+  await expect(reply).toBeFocused();
+  await page.keyboard.type("X");
+  await expect(reply).toHaveText("heXre is a message");
+
+  // Keyboard selection stays in the tab list.
+  await selected.focus();
+  await page.keyboard.press("ArrowLeft");
+  await page.keyboard.press("Enter");
+  await expect(selected).toBeFocused();
+});
+
+// Real pointer capture, hit testing and retained editor DOM are browser-only.
+test("dragging thread tabs reorders and crosses panes without losing the reply", async ({
+  page,
+  app,
+}) => {
+  await open(page, app);
+  const roots = app.histories
+    .get("primary/alpha")
+    .filter((row) => row.content.startsWith("Thread root"));
+  for (const root of roots.slice(0, 2)) {
+    await page
+      .locator(`[data-channel-timeline] [data-message-id="${root.id}"]`)
+      .getByRole("button", { name: /^View thread:/ })
+      .click();
+    await expect(
+      page.getByRole("complementary", { name: "Thread", exact: true }),
+    ).toBeVisible();
+  }
+  const side = page.locator("[data-panel-workspace]");
+  const main = page.locator("[data-main-workspace]");
+  const threadTabs = (host) =>
+    host.locator('[role="tab"][data-tab-value^="thread:"]');
+  const ids = await threadTabs(side).evaluateAll((tabs) =>
+    tabs.map((tab) => tab.dataset.tabValue),
+  );
+  const moving = () => page.locator(`[role="tab"][data-tab-value="${ids[1]}"]`);
+  const reply = page
+    .getByRole("complementary", { name: "Thread", exact: true })
+    .getByRole("textbox", { name: "Reply to thread", exact: true });
+  await reply.fill("Keep this reply");
+  const retained = await reply.elementHandle();
+  async function begin() {
+    const box = await moving().boundingBox();
+    await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+    await page.mouse.down();
+  }
+  const first = await threadTabs(side).first().boundingBox();
+  await begin();
+  await page.mouse.move(first.x + 2, first.y + first.height / 2, { steps: 8 });
+  await expect(page.locator(".buzz-tab-drag-insertion")).toBeVisible();
+  await expect(threadTabs(side)).toHaveCount(2); // no changes before release
+  await page.mouse.up();
+  await expect
+    .poll(() =>
+      threadTabs(side).evaluateAll((tabs) =>
+        tabs.map((tab) => tab.dataset.tabValue),
+      ),
+    )
+    .toEqual([ids[1], ids[0]]);
+
+  // The empty header beyond the compact tab strip accepts a transfer too.
+  const header = await main.locator("header").first().boundingBox();
+  await begin();
+  await page.mouse.move(
+    header.x + header.width / 2,
+    header.y + header.height / 2,
+    { steps: 8 },
+  );
+  await expect(page.locator(".buzz-tab-drag-insertion")).toBeVisible();
+  await page.mouse.up();
+  await expect(threadTabs(main)).toHaveCount(1);
+  await expect(threadTabs(side)).toHaveCount(1);
+  expect(await retained.evaluate((editor) => editor.isConnected)).toBe(true);
+  await expect(
+    main.getByRole("textbox", { name: "Reply to thread", exact: true }),
+  ).toHaveText("Keep this reply");
+
+  const destination = await threadTabs(side).first().boundingBox();
+  await begin();
+  await page.mouse.move(
+    destination.x + 2,
+    destination.y + destination.height / 2,
+    { steps: 8 },
+  );
+  await expect(page.locator(".buzz-tab-drag-insertion")).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(page.locator(".buzz-tab-drag-insertion")).toHaveCount(0);
+  await page.mouse.up();
+  await expect(threadTabs(main)).toHaveCount(1);
+  await expect(
+    main.getByRole("textbox", { name: "Reply to thread", exact: true }),
+  ).toHaveText("Keep this reply");
+
+  // With the side pane closed there is no header to drop onto. Separating
+  // at the main workspace's right edge reveals it without creating a blank tab.
+  await main
+    .getByRole("button", { name: "Toggle tab pane", exact: true })
+    .click();
+  await expect(side).toBeHidden();
+  const bounds = await main.boundingBox();
+  const closedHeader = await main.locator("header").first().boundingBox();
+  await begin();
+  // Even near the right edge, the full header remains an insertion target.
+  await page.mouse.move(
+    bounds.x + bounds.width - 4,
+    closedHeader.y + closedHeader.height / 2,
+    { steps: 8 },
+  );
+  await expect(page.locator(".buzz-tab-drag-insertion")).toBeVisible();
+  await expect(page.locator(".buzz-tab-drag-edge")).toHaveCount(0);
+  await page.mouse.move(
+    bounds.x + bounds.width - 110,
+    bounds.y + bounds.height / 2,
+    { steps: 8 },
+  );
+  await expect(page.locator(".buzz-tab-drag-edge")).toBeVisible();
+  await expect(side).toBeHidden();
+  await page.mouse.up();
+  await expect(side).toBeVisible();
+  await expect(threadTabs(main)).toHaveCount(0);
+  await expect(threadTabs(side)).toHaveCount(2);
+  await expect(
+    side.getByRole("tab", { name: "New tab", exact: true }),
+  ).toHaveCount(0);
+  await expect(
+    side.getByRole("textbox", { name: "Reply to thread", exact: true }),
+  ).toHaveText("Keep this reply");
+  expect(await retained.evaluate((editor) => editor.isConnected)).toBe(true);
+
+  // Moving the last side tab away also removes the pane, without toggling it.
+  for (let remaining = 2; remaining > 0; remaining--) {
+    const moved = await threadTabs(side).first().getAttribute("data-tab-value");
+    await threadTabs(side).first().focus();
+    await page.keyboard.press("Alt+Shift+ArrowLeft");
+    await expect(threadTabs(side)).toHaveCount(remaining - 1);
+    // Placement commits before moveBy's animation-frame focus handoff. Finish
+    // that handoff before focusing another tab for the next shortcut.
+    await page.evaluate(() => new Promise(requestAnimationFrame));
+    await expect(
+      main.locator(`[role="tab"][data-tab-value="${moved}"]`),
+    ).toBeFocused();
+  }
+  await expect(side).toBeHidden();
+  const emptyBounds = await main.boundingBox();
+  await begin();
+  await page.mouse.move(
+    emptyBounds.x + emptyBounds.width - 4,
+    emptyBounds.y + emptyBounds.height / 2,
+    { steps: 8 },
+  );
+  await expect(page.locator(".buzz-tab-drag-edge")).toBeVisible();
+  await page.mouse.up();
+  await expect(side).toBeVisible();
+  await expect(threadTabs(side)).toHaveCount(1);
+  await expect(
+    side.getByRole("textbox", { name: "Reply to thread", exact: true }),
+  ).toHaveText("Keep this reply");
+});
+
+// Native frontmost hit testing and pointer capture across history navigation
+// cannot be established in jsdom. Keep both regressions on actual pane wiring.
+for (const scenario of ["narrow overlay", "same-channel history"]) {
+  test(`thread dragging respects ${scenario}`, async ({ page, app }) => {
+    await open(page, app);
+    const roots = app.histories
+      .get("primary/alpha")
+      .filter((row) => row.content.startsWith("Thread root"));
+    const side = page.locator("[data-panel-workspace]");
+    const main = page.locator("[data-main-workspace]");
+    const tabs = (host) =>
+      host.locator('[role="tab"][data-tab-value^="thread:"]');
+    for (const root of roots.slice(0, 2)) {
+      await page
+        .locator(`[data-channel-timeline] [data-message-id="${root.id}"]`)
+        .getByRole("button", { name: /^View thread:/ })
+        .click();
+      await expect(
+        side.getByRole("complementary", { name: "Thread", exact: true }),
+      ).toBeVisible();
+    }
+    const ids = await tabs(side).evaluateAll((rows) =>
+      rows.map((row) => row.dataset.tabValue),
+    );
+    if (scenario === "narrow overlay") {
+      await page.setViewportSize({ width: 800, height: 700 });
+      // Establish the overlay, not just a small viewport that might stack panes.
+      await expect
+        .poll(async () => {
+          const a = await main.boundingBox(),
+            b = await side.boundingBox();
+          return !!a && !!b && b.x < a.x + a.width && a.y < b.y + b.height;
+        })
+        .toBe(true);
+    }
+    const source = await tabs(side).nth(1).boundingBox();
+    const destination = await tabs(side).first().boundingBox();
+    await page.mouse.move(
+      source.x + source.width / 2,
+      source.y + source.height / 2,
+    );
+    await page.mouse.down();
+    try {
+      await page.mouse.move(
+        destination.x + 2,
+        destination.y + destination.height / 2,
+        { steps: 8 },
+      );
+      await expect(page.locator(".buzz-tab-drag-insertion")).toBeVisible();
+      if (scenario === "same-channel history") {
+        await page.goBack();
+        await expect(
+          side
+            .getByRole("complementary", { name: "Thread", exact: true })
+            .getByText("Thread root 0", { exact: true }),
+        ).toBeVisible();
+        await expect(page.locator(".buzz-tab-drag-insertion")).toHaveCount(0);
+        await expect(page.locator("html")).not.toHaveAttribute(
+          "data-tab-dragging",
+          "",
+        );
+      }
+    } finally {
+      await page.mouse.up();
+    }
+    await expect(tabs(main)).toHaveCount(0);
+    await expect
+      .poll(() =>
+        tabs(side).evaluateAll((rows) =>
+          rows.map((row) => row.dataset.tabValue),
+        ),
+      )
+      .toEqual(scenario === "narrow overlay" ? [ids[1], ids[0]] : ids);
+    if (scenario === "same-channel history") {
+      await expect(
+        side.locator('[role="tab"][aria-selected="true"]'),
+      ).toHaveAttribute("data-tab-value", ids[0]);
+    }
+  });
+}
+
+// Paint and actual viewport intersection cannot be established in jsdom.
+test("closing an active thread highlights its visible channel origin without scrolling", async ({
+  page,
+  app,
+}) => {
+  await open(page, app);
+  const roots = app.histories
+    .get("primary/alpha")
+    .filter((row) => row.content.startsWith("Thread root"));
+  const timeline = page.locator('[data-channel-timeline="alpha"]');
+  const item = timeline.locator(`[data-message-id="${roots[0].id}"]`);
+  const origin = item.locator(":scope > [data-layout]");
+  // Keep another side tab open so closing does not change the channel width
+  // and rewrap the history independently of the highlight.
+  await timeline
+    .locator(`[data-message-id="${roots[1].id}"]`)
+    .getByRole("button", { name: /^View thread:/ })
+    .click();
+  await item.getByRole("button", { name: /^View thread:/ }).click();
+  const side = page.locator("[data-panel-workspace]");
+  await expect(
+    side.locator('[role="tab"][data-tab-value^="thread:"]'),
+  ).toHaveCount(2);
+  await virtuaIdle(page, timeline);
+  const scroll = await timeline.evaluate((element) => element.scrollTop);
+  // Observe paint admission before triggering close; the cue is transient.
+  await origin.evaluate((element) => {
+    window.returnHighlightPainted = false;
+    const observer = new MutationObserver(() => {
+      if (
+        getComputedStyle(element, "::after").animationName.includes(
+          "return-message-highlight",
+        )
+      ) {
+        window.returnHighlightPainted = true;
+        observer.disconnect();
+      }
+    });
+    observer.observe(element, { attributes: true, attributeFilter: ["class"] });
+  });
+  await side
+    .locator(
+      '.buzz-tabs-item:has([role="tab"][aria-selected="true"]) > button:not([role="tab"])',
+    )
+    .click();
+  await expect
+    .poll(() => page.evaluate(() => window.returnHighlightPainted))
+    .toBe(true);
+  await expect
+    .poll(() => timeline.evaluate((element) => element.scrollTop))
+    .toBe(scroll);
+  await expect
+    .poll(() =>
+      origin.evaluate(
+        (element) => getComputedStyle(element, "::after").animationName,
+      ),
+    )
+    .toBe("none");
+});
+
+// Real retained main-pane selection/focus order differs from DOM-emulator steps.
+test("closing a main-pane thread with Escape returns keyboard focus to its opener", async ({
+  page,
+  app,
+}) => {
+  await page.addInitScript(() =>
+    localStorage.setItem("buzz-thread-placement.v1", "main"),
+  );
+  await open(page, app);
+  const root = app.histories
+    .get("primary/alpha")
+    .find((row) => row.content.startsWith("Thread root"));
+  const trigger = page
+    .locator(`[data-channel-timeline="alpha"] [data-message-id="${root.id}"]`)
+    .getByRole("button", { name: /^View thread:/ });
+  await trigger.focus();
+  await trigger.press("Enter");
+  const main = page.locator("[data-main-workspace]");
+  const editor = main.getByRole("textbox", {
+    name: "Reply to thread",
+    exact: true,
+  });
+  await expect(editor).toBeVisible();
+  await editor.focus();
+  await page.keyboard.press("Escape");
+  await expect(
+    main.getByRole("textbox", { name: "Message #Alpha", exact: true }),
+  ).toBeVisible();
+  await expect(trigger).toBeFocused();
+});
+
+// Header openings reset a retained main-pane thread selection after mount;
+// only real layout-effect order shows whether that steals the tab's focus.
+test("header openings keep focus while a main-pane thread is retained", async ({
+  page,
+  app,
+}) => {
+  await page.addInitScript(() =>
+    localStorage.setItem("buzz-thread-placement.v1", "main"),
+  );
+  await open(page, app);
+  const root = app.histories
+    .get("primary/alpha")
+    .find((row) => row.content.startsWith("Thread root"));
+  const main = page.locator("[data-main-workspace]");
+  const topbar = page.getByRole("navigation", { name: "Topbar pages" });
+  const messages = topbar.getByRole("tab", { name: "Messages", exact: true });
+  const me = topbar.getByRole("tab", { name: "Me", exact: true });
+  const inbox = page
+    .getByRole("navigation", { name: "Pages" })
+    .getByRole("button", { name: "Inbox", exact: true });
+  for (const leave of [inbox, me]) {
+    await page
+      .locator(`[data-channel-timeline="alpha"] [data-message-id="${root.id}"]`)
+      .getByRole("button", { name: /^View thread:/ })
+      .click();
+    await expect(
+      main.getByRole("textbox", { name: "Reply to thread", exact: true }),
+    ).toBeVisible();
+    await leave.click();
+    await messages.focus();
+    await messages.press("Enter");
+    await expect(
+      main.getByRole("tab", { name: "Alpha", exact: true }),
+    ).toHaveAttribute("aria-selected", "true");
+    await messages.evaluate(
+      () => new Promise((resolve) => requestAnimationFrame(resolve)),
+    );
+    await expect(messages).toBeFocused();
+  }
+});
+
+// A malformed root hint crosses real navigation/reader/store/portal wiring;
+// only the verified message ancestry may replace selection, never an old editor.
+test("a wrong link hint preserves both open thread editors and selects the verified destination", async ({
+  page,
+  app,
+}) => {
+  await open(page, app);
+  const roots = app.histories
+    .get("primary/alpha")
+    .filter((row) => row.content.startsWith("Thread root"));
+  const target = app.histories
+    .get("primary/alpha")
+    .find((row) => row.content === "Broadcast reply");
+  const threadButton = (root) =>
+    page
+      .locator(`[data-channel-timeline="alpha"] [data-message-id="${root.id}"]`)
+      .getByRole("button", { name: /^View thread:/ });
+  const side = page.locator("[data-panel-workspace]");
+  const main = page.locator("[data-main-workspace]");
+  const reply = (host) =>
+    host.getByRole("textbox", { name: "Reply to thread", exact: true });
+  await threadButton(roots[0]).click();
+  await reply(side).fill("Destination draft");
+  const destinationEditor = await reply(side).elementHandle();
+  await threadButton(roots[1]).click();
+  await reply(side).fill("Keep original draft");
+  const originalEditor = await reply(side).elementHandle();
+  await side.locator('[role="tab"][aria-selected="true"]').focus();
+  await page.keyboard.press("Alt+Shift+ArrowLeft");
+  await page.keyboard.press("Alt+Shift+ArrowLeft");
+  await expect(reply(main)).toHaveText("Keep original draft");
+  const linked = app.append(
+    "primary",
+    "alpha",
+    `Open <buzz://message?channel=alpha&id=${target.id}&thread=${roots[1].id}>.`,
+  );
+  await main.getByRole("tab", { name: "Alpha", exact: true }).click();
+  await page
+    .locator(`[data-channel-timeline="alpha"] [data-message-id="${linked.id}"]`)
+    .getByRole("link", { name: "Alpha", exact: true })
+    .click();
+  await expect
+    .poll(() => page.evaluate(() => window.fixtureNavigation.snapshot().status))
+    .toBe("opened");
+  await expect(
+    side.locator(`[data-message-id="${target.id}"]`),
+  ).toBeInViewport();
+  await expect(reply(side)).toHaveText("Destination draft");
+  await expect(
+    main.locator('[role="tab"][data-tab-value^="thread:"]'),
+  ).toHaveCount(1);
+  expect(await originalEditor.evaluate((el) => el.isConnected)).toBe(true);
+  expect(await destinationEditor.evaluate((el) => el.isConnected)).toBe(true);
+  await main.locator('[role="tab"][data-tab-value^="thread:"]').click();
+  await expect(reply(main)).toHaveText("Keep original draft");
+});

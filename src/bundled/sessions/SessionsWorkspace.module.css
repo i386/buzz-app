@@ -344,3 +344,32 @@
     opacity: 0;
   }
 }
+
+/* Working occupies the same trailing action slot as attention, as in Messages. */
+.organizedRow [data-me-working-indicator] {
+  position: absolute;
+  inset-inline-end: 0;
+  top: 50%;
+  transform: translateY(-50%);
+  width: var(--session-action-size);
+  pointer-events: none;
+}
+@media (hover: hover) {
+  .organizedRow:is(
+      :hover,
+      :focus-within,
+      :has([aria-expanded="true"][aria-haspopup="menu"])
+    )
+    [data-me-working-indicator] {
+    opacity: 0;
+  }
+}
+@media (hover: none) {
+  /* Touch always shows the overflow action; reserve a separate visible slot. */
+  .organizedRow [data-me-working-indicator] {
+    inset-inline-end: var(--session-action-size);
+  }
+  .organizedRow:has([data-channel-working]) .sessionRow {
+    padding-inline-end: var(--session-action-size);
+  }
+}

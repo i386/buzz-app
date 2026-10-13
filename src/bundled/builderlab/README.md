@@ -1,6 +1,33 @@
 # Builderlab
 
 The bundled `block.builderlab` plugin adds Settings → Integrations → Builderlab.
+With a valid `BUZZ_BUILDERLAB_URL` build input, it also registers
+`block.builderlab/builderlab` in Agents' new-agent type picker.
+`adapter-type/` connects this hosted type to Beekeeper: provision registers the
+agent, activation submits the owner proof and community supplied by Agents, and
+removal deletes the provider runtime. Agents owns unfinished setup recovery and
+the runtime-tagged community registration; the provider keeps the key and runs
+the agent even while Buzz is closed. On desktop, Create agent and confirmed
+deletion start browser sign-in when needed, then continue the action. Both share
+an existing Settings sign-in attempt; a failed or canceled login leaves the
+action available for retry. Settings still provides sign-in and sign-out.
+Canceling an action's wait does not cancel a shared login; disabling the plugin
+or closing Buzz cancels it.
+The agent's Instructions tab reads its current instructions from Builderlab and
+saves changes directly to the provider. Loading and saving use the same login;
+failed saves keep the draft, and switching accounts requires the original
+account before saving. Empty instructions can be saved to clear them.
+Profile updates remain TODO and report an unsupported-operation error.
+
+The adapter retains the provider agent ID, server, verified account subject and
+provisioning replay reference in `buzz.builderlab.adapter-identity.v1:` records.
+No credentials or owner proofs are saved. These records survive restart and
+deletion so retries can confirm an already-missing runtime without assuming
+absence from another account's list. Registration retains its replay UUID until
+Agents has saved unfinished setup and begins activation, or provider deletion
+is confirmed. On another device, removal resolves the ID from the signed-in
+account's list; an unknown key is refused. Existing Settings-created
+agents are not migrated into this type.
 
 - `oauth/` owns browser handoff, code exchange, account verification, and the
   plugin-lifetime session. `browserCredential()` returns a verified `Credential`;
@@ -8,62 +35,16 @@ The bundled `block.builderlab` plugin adds Settings → Integrations → Builder
   sign-out, and disposal.
 - `login/` owns the login experience: pending state, cancellation, retry, email
   display, and sign-out.
-- `agents/` lists the signed-in account's remote agents beneath login. Requests
-  reuse the OAuth credential through native host HTTP; sign-out and navigation
-  discard late results. Existing catalog agents are not automatically registered
-  into Buzz communities.
-  Creation registers a name, then attests its key using the host's existing
-  owner authorization. When a community is selected, attestation includes its
-  WebSocket URL to enroll with Beekeeper; Personal space omits it. An unattested
-  row offers **Finish setup**; no second registration is needed. Pending
-  registration UUIDs survive restart and are scoped to server, verified account
-  and name. Retry the same name after an
-  uncertain failure within the server's seven-day replay window. Credentials
-  and owner proofs are never stored.
-  With a connected community selected, activation is followed by owner-signed
-  kind-30177 registration through the session's durable outbox. Completion waits
-  for relay acceptance and shared agent discovery. Names use the existing shared
-  naming service; picker, archive and membership policies remain in their owners.
-  Pending enrollment intent is scoped to server, account, community and Buzz
-  identity. Opening Settings after reconnect/restart resumes intended Active
-  creations; **Retry community setup** reuses a pending publication without
-  registering or attesting again. Personal space skips relay registration.
-  Creation never adds channel membership.
-  Optional **Agent instructions** are saved through Beekeeper's `update-agent`
-  after activation and community setup. Active rows offer **Edit**
-  with Save and Cancel; saving replaces the text, and an empty value clears it.
-  `list-agents` requests `include_instructions: true` to populate the editor.
-  Instructions affect newly accepted tasks and are never published to the relay.
-  Drafts stay in memory across setup/save retries and refreshes; a failed save
-  can be retried on the same agent without creating another. Navigation, restart
-  or sign-out discards drafts. Text is limited to 20,000 characters.
-  **Delete** confirms owner-signed kind-5 deletion of the selected
-  community's registration, refreshes discovery, then deletes the runtime through
-  Beekeeper. Personal space only deletes from Beekeeper. Failure leaves the row
-  available for manual retry; an already-missing Beekeeper agent counts as success.
-  Account-scoped deletion tombstones (`buzz.builderlab.deletion.v1:`) persist to
-  fence new enrollment after restart or in another community. They contain only
-  server/account scope and agent pubkey. Standard Web Locks, also used by the
-  app's read-state sync, order registration and deletion
-  for the same scope across app windows; deletion waits for an issued registration
-  attempt to settle, even when its caller cancels. If that session retires, the
-  lock drain ends without confirming or discarding its receipt; a ten-second
-  bound also covers disposal without notification. Setup requires Web Locks.
-  Successful deletion retires failed or confirmed registration receipts.
-  Deletion does not archive identities, remove channel memberships, erase history,
-  or clean registrations in other communities.
-
-Deletion follow-ups requiring shared relay/outbox support:
-
-- Relay acceptance alone does not prove coordinate absence: clock skew can leave
-  a newer registration advertised after the runtime is deleted. A fresh strong
-  relay-only read is needed; `session.read()` includes local evidence. Failed
-  discovery reads currently stop backend deletion, but are not absence proof.
-- Web Locks do not cover other devices or survive process exit. A request whose
-  delivery becomes unknown may arrive after its lock is released. The tombstone
-  fences later admission, not that issued request; durable reconciliation is
-  needed to compensate late arrival. Unknown registration receipts are retained
-  because the shared outbox cannot safely retire them, and still consume a slot.
+- `agents/` lists the signed-in account's remote agents beneath login, with
+  refresh and retry. Settings directs people to the **Agents** tab to create,
+  edit instructions and delete agents. Listing does not activate agents or
+  publish community registrations. Requests reuse the OAuth credential through
+  native host HTTP; sign-out and navigation discard late results.
+  The client also supplies the hosted adapter's Beekeeper operations. Pending
+  registration UUIDs survive restart, scoped to server, verified account and
+  name. Retry the same name after an uncertain failure within the server's
+  seven-day replay window. Instructions are limited to 20,000 characters,
+  affect newly accepted tasks and are never published to the relay.
 
 The plugin uses the `BUZZ_BUILDERLAB_URL` [build input](../../../docs/configuration.md#builderlab-url-build-input)
 as its server address and appends `/api/goose`.

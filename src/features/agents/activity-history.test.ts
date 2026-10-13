@@ -58,7 +58,6 @@ function harness(initial: ReturnType<typeof captured>[] = []) {
     observe,
     () => allowed,
     undefined,
-    undefined,
     { host, canRestore: (channel) => allowed && known && channel !== "denied" },
   );
   const activate = () => activity.queries.activate();
@@ -276,119 +275,25 @@ it("preserves host arrival order for chunks captured in the same millisecond", a
   );
   f.activity.dispose();
 });
-
-it("restored management requests stay passive without suppressing their live delivery", async () => {
-  const request = {
-    type: "agent_management_request",
-    action: "update",
-    requestId: "saved-request",
-    request: { channelId: "alpha", agentName: "Sol", model: "gpt-6-sol" },
-  };
+it("keeps saved and live agent-management requests out of activity", async () => {
   const item = {
     ...captured(),
     plaintext: JSON.stringify({
       kind: "agent_management_request",
       channelId: "alpha",
-      payload: request,
+      payload: { type: "agent_management_request", action: "update" },
     }),
   };
   const f = harness([item]);
-  const receive = vi.fn();
-  f.activity.management.activate();
-  f.activity.management.subscribe(receive);
   try {
     f.start();
     await settle();
     expect(f.read).toHaveBeenCalledOnce();
     expect(f.activity.queries.snapshot().records).toEqual([]);
+    f.activity.receive(item, f.generation());
+    expect(f.activity.queries.snapshot().records).toEqual([]);
     expect(f.activity.queries.snapshot().turns).toEqual([]);
-    expect(receive).not.toHaveBeenCalled();
-    f.activity.receive(item, f.generation());
-    f.activity.receive(item, f.generation());
-    expect(receive).toHaveBeenCalledExactlyOnceWith(agent, request);
-    expect(f.activity.queries.snapshot().records).toEqual([]);
-    f.release();
-    f.start();
-    await settle();
-    expect(f.read).toHaveBeenCalledTimes(2);
-    expect(f.activity.queries.snapshot().records).toEqual([]);
-    expect(receive).toHaveBeenCalledOnce();
   } finally {
     f.activity.dispose();
   }
 });
-
-it("clearing saved history preserves management-only demand without loading or displaying activity", async () => {
-  const f = harness([captured()]);
-  const receive = vi.fn();
-  f.activity.management.activate();
-  f.activity.management.subscribe(receive);
-  const old = f.generation();
-  try {
-    await settle();
-    expect(f.read).not.toHaveBeenCalled();
-    await f.activity.queries.clearHistory();
-    const current = f.generation();
-    expect(current).toBeGreaterThan(old);
-    const request = {
-      type: "agent_management_request",
-      action: "update",
-      requestId: "after-clear",
-      request: { channelId: "alpha", agentName: "Sol", model: "gpt-6-sol" },
-    };
-    const item = {
-      ...captured(1),
-      plaintext: JSON.stringify({
-        kind: "agent_management_request",
-        channelId: "alpha",
-        payload: request,
-      }),
-    };
-    f.activity.receive(item, old);
-    expect(receive).not.toHaveBeenCalled();
-    f.activity.receive(item, current);
-    expect(receive).toHaveBeenCalledExactlyOnceWith(agent, request);
-    f.activity.receive(captured(2), current);
-    expect(f.activity.queries.snapshot().records).toEqual([]);
-    expect(f.activity.queries.snapshot().turns).toEqual([]);
-    expect(f.read).not.toHaveBeenCalled();
-  } finally {
-    f.activity.dispose();
-  }
-});
-
-it.each([undefined, "alpha"])(
-  "does not restore management payloads for denied channels with envelope channel %s",
-  async (channelId) => {
-    const f = harness([
-      {
-        ...captured(),
-        plaintext: JSON.stringify({
-          kind: "agent_management_request",
-          channelId,
-          payload: {
-            type: "agent_management_request",
-            action: "update",
-            requestId: "denied-payload",
-            request: {
-              channelId: "denied",
-              agentName: "Sol",
-              systemPrompt: "Private channel instructions",
-            },
-          },
-        }),
-      },
-    ]);
-    const receive = vi.fn();
-    f.activity.management.subscribe(receive);
-    try {
-      f.start();
-      await settle();
-      expect(f.read).toHaveBeenCalledOnce();
-      expect(f.activity.queries.snapshot().records).toEqual([]);
-      expect(receive).not.toHaveBeenCalled();
-    } finally {
-      f.activity.dispose();
-    }
-  },
-);

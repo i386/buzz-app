@@ -1,6 +1,6 @@
 import { createNameProvider } from "./directory";
 import type { NamingIdentity } from "./policy";
-import type { AgentControl } from "../agents/control";
+import type { LocalAgents } from "../agents/local";
 import { Service, type Context } from "@deepseek-ai/cordis";
 import type { ProfileQueries } from "../relay/profile-directory";
 import type { AgentLibrary } from "../agents/library";
@@ -83,7 +83,7 @@ export class IdentityNamesService extends Service implements IdentityNames {
 
   constructor(
     ctx: Context,
-    private readonly control?: AgentControl,
+    private readonly control?: LocalAgents,
   ) {
     super(ctx, "identityNames");
     this.entries = createContributions<NameProvider>(ctx);
@@ -149,13 +149,29 @@ export function bindNames(
   const stops = [source.profiles.subscribe(emit)];
   if (providers) stops.push(providers.subscribe(select));
   select();
+  // Callers resolve many keys against one candidate array (a channel's
+  // participants or members). Reuse that array's scope so each key does not
+  // renormalize the candidates; the scope re-reads live state per lookup.
+  let last:
+    | {
+        candidates: readonly string[] | undefined;
+        displayFacts: readonly NamingIdentity[] | undefined;
+        scoped: (pubkey: string) => IdentityName | undefined;
+      }
+    | undefined;
   const scope = (
     candidates?: readonly string[],
     displayFacts?: readonly NamingIdentity[],
   ) => {
+    if (
+      last &&
+      last.candidates === candidates &&
+      last.displayFacts === displayFacts
+    )
+      return last.scoped;
     let owner: NameProvider | undefined;
     let local: ReturnType<NameProvider["scope"]> | undefined;
-    return (pubkey: string): IdentityName | undefined => {
+    const scoped = (pubkey: string): IdentityName | undefined => {
       if (closed) return undefined;
       if (owner !== provider) {
         owner = provider;
@@ -171,6 +187,8 @@ export function bindNames(
       const name = source.profiles.snapshot().get(pubkey.toLowerCase())?.name;
       return name ? { name, source: "public-profile" } : undefined;
     };
+    last = { candidates, displayFacts, scoped };
+    return scoped;
   };
   const lookup = (
     pubkey: string,

@@ -1,18 +1,20 @@
 import { Button } from "../../shared/design-system/ui/Button";
 import { useSyncExternalStore } from "react";
 import type { RelaySession } from "../../features/relay/session";
-import { ToastNotice } from "../../shared/design-system/ui/Toast";
+import styles from "./LiveStatus.module.css";
 
 export function LiveStatus({
   live,
   channelId,
   partialRoster,
   diagnostics = false,
+  onRetry,
 }: {
   live: RelaySession["live"];
   channelId: string | undefined;
   partialRoster: boolean;
   diagnostics?: boolean;
+  onRetry?: (() => void) | undefined;
 }) {
   const snapshot = useSyncExternalStore(
     live.subscribe,
@@ -85,15 +87,29 @@ export function LiveStatus({
   // Startup and bounded automatic quota recovery do not need user attention.
   if (!issue) return null;
   return (
-    <ToastNotice
-      key={channelId}
-      title="Live updates need attention"
-      description={`${reason} Only currently accessible messages remain readable.`}
-      tone="warning"
+    <section
+      role="status"
+      aria-label="Live updates need attention"
+      className={styles.recovery}
     >
-      <Button type="button" size="sm" onClick={live.retry}>
+      <div className={styles.message}>
+        <p className="text-label-sm text-warning">
+          Live updates need attention
+        </p>
+        <p className="text-body-sm text-subtle">
+          {reason} Only currently accessible messages remain readable.
+        </p>
+      </div>
+      <Button
+        type="button"
+        size="sm"
+        onClick={() => {
+          live.retry();
+          onRetry?.();
+        }}
+      >
         Retry live updates
       </Button>
-    </ToastNotice>
+    </section>
   );
 }

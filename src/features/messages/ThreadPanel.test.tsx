@@ -21,6 +21,7 @@ import { createNavigationController } from "../navigation/controller";
 import { createMemoryHistory } from "../navigation/history";
 import type { ThreadSnapshot, ThreadView } from "../relay/threads";
 import type { ChannelMessage } from "../relay/contracts";
+import { formatPublicKey } from "../../shared/identity/public-key";
 
 // Real React owns effects, refs and subscriptions. Only independent child UI is
 // reduced here; MessageRow/MessageComposer retain their own mounted suites.
@@ -80,6 +81,7 @@ vi.mock("./MessageComposer", () => ({
     personalConversation,
     activityClickOpensPanel,
     disabled,
+    placeholder,
   }: MessageComposerProps) => (
     <section
       aria-label="Composer"
@@ -89,6 +91,7 @@ vi.mock("./MessageComposer", () => ({
       data-personal={personalConversation}
       data-direct-activity={activityClickOpensPanel}
       data-disabled={disabled}
+      data-placeholder={placeholder}
     >
       <button type="button" onClick={() => onSend?.("own-reply")}>
         Send fixture reply
@@ -117,6 +120,7 @@ const row: ChannelMessage = {
   reactions: [],
   replyCount: 2,
 };
+const viewer = "c".repeat(64);
 function ordinaryNavigation() {
   return {
     entryId: "thread-visit",
@@ -155,6 +159,7 @@ function messagesHarness(
     listeners: Set<() => void>;
     refresh: ReturnType<typeof vi.fn<() => Promise<void>>>;
     loadMore: ReturnType<typeof vi.fn<() => Promise<void>>>;
+    retarget: ReturnType<typeof vi.fn<ThreadView["retarget"]>>;
     dispose: ReturnType<typeof vi.fn>;
   })[] = [];
   const makeView = () => {
@@ -169,6 +174,7 @@ function messagesHarness(
       },
       refresh: vi.fn(async () => {}),
       loadMore: vi.fn(async () => {}),
+      retarget: vi.fn<ThreadView["retarget"]>(async () => "selected"),
       dispose: vi.fn(),
       listeners,
     };
@@ -182,6 +188,7 @@ function messagesHarness(
     .mockImplementation(makeView);
   const ensure = vi.fn(async () => {});
   const session = {
+    viewer,
     thread,
     profiles: { ensure },
     agentChoices: createAgentLibrary(undefined).queries,
@@ -195,11 +202,17 @@ function messagesHarness(
     },
   } as unknown as RelaySession;
   vi.spyOn(document, "hasFocus").mockReturnValue(false);
+  const resizeObservers = new Set<() => void>();
   vi.stubGlobal(
     "ResizeObserver",
     class {
-      observe() {}
-      disconnect() {}
+      constructor(private callback: () => void) {}
+      observe() {
+        resizeObservers.add(this.callback);
+      }
+      disconnect() {
+        resizeObservers.delete(this.callback);
+      }
     },
   );
   HTMLElement.prototype.scrollIntoView = vi.fn();
@@ -280,6 +293,11 @@ function messagesHarness(
     },
     resize(value: number) {
       height = value;
+    },
+    deliverResize() {
+      act(() => {
+        for (const callback of resizeObservers) callback();
+      });
     },
     scroll(value: number) {
       element.scrollTop = value;
@@ -783,6 +801,34 @@ it("uses the resolved root with the shared composer and reveals an own send even
   expect(screen.queryByRole("region", { name: "Composer" })).toBeNull();
 });
 it.each([
+  {
+    author: "another user",
+    root: row,
+    placeholder: `Reply in thread to ${formatPublicKey(row.authorId)}`,
+  },
+  {
+    author: "the viewer",
+    root: { ...row, authorId: viewer },
+    placeholder: "Reply in thread",
+  },
+  {
+    author: "a workflow the viewer owns",
+    root: { ...row, workflowOwnerId: viewer },
+    placeholder: "Reply in thread",
+  },
+])(
+  "names the root author in the composer placeholder unless it is $author",
+  ({ root, placeholder }) => {
+    const h = messagesHarness();
+    h.snapshot.root = root;
+    h.render();
+    expect(screen.getByRole("region", { name: "Composer" })).toHaveAttribute(
+      "data-placeholder",
+      placeholder,
+    );
+  },
+);
+it.each([
   { gap: 79, follows: true },
   { gap: 80, follows: false },
 ])(
@@ -1140,4 +1186,220 @@ it("passes the Me recipient, readiness and direct Activity contract through to t
   view.rerender(<ThreadPanel {...h.props} />);
   expect(composer).not.toHaveAttribute("data-personal");
   expect(composer).not.toHaveAttribute("data-direct-activity");
+});
+
+it("retained navigation keeps the mounted editor when another message belongs to the open thread", async () => {
+  const controller = new AbortController();
+  const first = { ...ordinaryNavigation(), signal: controller.signal };
+  const h = messagesHarness(first);
+  const mounted = render(<ThreadPanel {...h.props} retainThread />);
+  const editor = within(mounted.container).getByRole("region", {
+    name: "Composer",
+  });
+  const current = h.view;
+  let release!: (value: "selected") => void;
+  current.retarget.mockImplementation(
+    () =>
+      new Promise((resolve) => {
+        release = resolve;
+      }),
+  );
+  const next = {
+    ...ordinaryNavigation(),
+    entryId: "next",
+    signal: new AbortController().signal,
+  };
+  next.target.messageId = "c".repeat(64);
+  act(() => controller.abort());
+  mounted.rerender(
+    <ThreadPanel
+      {...h.props}
+      retainThread
+      messageId={next.target.messageId}
+      navigation={next}
+    />,
+  );
+  expect(
+    within(mounted.container).getByRole("region", { name: "Composer" }),
+  ).toBe(editor);
+  await act(async () => release("selected"));
+  expect(
+    within(mounted.container).getByRole("region", { name: "Composer" }),
+  ).toBe(editor);
+  expect(current.dispose).not.toHaveBeenCalled();
+  mounted.unmount();
+  expect(current.dispose).toHaveBeenCalledOnce();
+});
+
+it.each(["unavailable", "error", "cancelled"] as const)(
+  "retained target %s keeps the same thread and reply editor",
+  async (result) => {
+    const h = messagesHarness(ordinaryNavigation());
+    const retry = vi.fn();
+    const mounted = render(
+      <ThreadPanel {...h.props} retainThread onRetryNavigation={retry} />,
+    );
+    const editor = screen.getByRole("region", { name: "Composer" });
+    const reader = h.view;
+    reader.retarget.mockResolvedValue(result);
+    const next = { ...ordinaryNavigation(), entryId: "next" };
+    next.target.messageId = "c".repeat(64);
+    await act(async () =>
+      mounted.rerender(
+        <ThreadPanel
+          {...h.props}
+          retainThread
+          onRetryNavigation={retry}
+          messageId={next.target.messageId}
+          navigation={next}
+        />,
+      ),
+    );
+    expect(screen.getByRole("region", { name: "Composer" })).toBe(editor);
+    expect(reader.dispose).not.toHaveBeenCalled();
+    expect(h.thread).toHaveBeenCalledOnce();
+    expect(screen.getAllByRole("alert")).toHaveLength(1);
+    expect(screen.getByRole("alert")).toHaveTextContent(
+      result === "unavailable"
+        ? "That message is no longer available."
+        : "Couldn’t open that message.",
+    );
+    expect(next.complete).toHaveBeenCalledWith({
+      status: "failed",
+      reason: result === "unavailable" ? "not-found" : "unavailable",
+    });
+    if (result === "unavailable") {
+      // Retrying can't restore a message that no longer exists.
+      expect(screen.queryByRole("button", { name: "Try again" })).toBeNull();
+      return;
+    }
+    const again = screen.getByRole("button", { name: "Try again" });
+    fireEvent.click(again);
+    expect(retry).toHaveBeenCalledOnce();
+    // The focused control stays mounted while the fresh attempt runs.
+    let release!: (value: "selected") => void;
+    reader.retarget.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          release = resolve;
+        }),
+    );
+    const retried = { ...ordinaryNavigation(), entryId: "retried" };
+    retried.target.messageId = next.target.messageId;
+    await act(async () =>
+      mounted.rerender(
+        <ThreadPanel
+          {...h.props}
+          retainThread
+          onRetryNavigation={retry}
+          messageId={retried.target.messageId}
+          navigation={retried}
+        />,
+      ),
+    );
+    try {
+      expect(screen.getByRole("button", { name: "Try again" })).toBe(again);
+      expect(again).toHaveAttribute("aria-busy", "true");
+    } finally {
+      await act(async () => release("selected"));
+    }
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect(screen.getByRole("region", { name: "Composer" })).toBe(editor);
+    expect(reader.dispose).not.toHaveBeenCalled();
+  },
+);
+
+it("a link into a different thread replaces the reader and its editor", async () => {
+  const h = messagesHarness(ordinaryNavigation());
+  const mounted = render(<ThreadPanel {...h.props} retainThread />);
+  const editor = screen.getByRole("region", { name: "Composer" });
+  const previous = h.view;
+  previous.retarget.mockResolvedValue("different");
+  const next = { ...ordinaryNavigation(), entryId: "other-thread" };
+  next.target.messageId = "d".repeat(64);
+  await act(async () =>
+    mounted.rerender(
+      <ThreadPanel
+        {...h.props}
+        retainThread
+        messageId={next.target.messageId}
+        navigation={next}
+      />,
+    ),
+  );
+  expect(previous.dispose).toHaveBeenCalledOnce();
+  expect(h.thread).toHaveBeenCalledTimes(2);
+  expect(h.view).not.toBe(previous);
+  expect(screen.getByRole("region", { name: "Composer" })).not.toBe(editor);
+  expect(screen.queryByRole("alert")).toBeNull();
+});
+
+it("a workspace diverts a wrong-root link without replacing its confirmed reader or editor", async () => {
+  const h = messagesHarness(ordinaryNavigation());
+  const divert = vi.fn();
+  const mounted = render(
+    <ThreadPanel {...h.props} retainThread onDifferentThread={divert} />,
+  );
+  const editor = screen.getByRole("region", { name: "Composer" });
+  const previous = h.view;
+  previous.retarget.mockResolvedValue("different");
+  const next = { ...ordinaryNavigation(), entryId: "wrong-root" };
+  next.target.messageId = "d".repeat(64);
+  await act(async () =>
+    mounted.rerender(
+      <ThreadPanel
+        {...h.props}
+        retainThread
+        onDifferentThread={divert}
+        messageId={next.target.messageId}
+        navigation={next}
+      />,
+    ),
+  );
+  expect(divert).toHaveBeenCalledWith(next.target.messageId, h.props.messageId);
+  expect(previous.dispose).not.toHaveBeenCalled();
+  expect(h.thread).toHaveBeenCalledOnce();
+  expect(screen.getByRole("region", { name: "Composer" })).toBe(editor);
+  expect(next.complete).not.toHaveBeenCalled();
+});
+
+it("an unrouted retained opening retries allocation locally", () => {
+  const h = messagesHarness();
+  const navigationRetry = vi.fn();
+  h.thread
+    .mockReset()
+    .mockImplementationOnce(() => {
+      throw new Error("capacity");
+    })
+    .mockReturnValue(h.view);
+  render(
+    <ThreadPanel
+      {...h.props}
+      retainThread
+      onRetryNavigation={navigationRetry}
+    />,
+  );
+  expect(screen.getByRole("alert")).toHaveTextContent("capacity");
+  fireEvent.click(screen.getByRole("button", { name: "Try again" }));
+  expect(screen.getByRole("region", { name: "Composer" })).toBeVisible();
+  expect(navigationRetry).not.toHaveBeenCalled();
+  expect(h.thread).toHaveBeenCalledTimes(2);
+});
+
+it("releases bottom following after a jump that included child-only resizing", () => {
+  vi.useFakeTimers();
+  const h = messagesHarness();
+  h.render();
+  h.scroll(2000);
+  fireEvent.click(screen.getByRole("button", { name: /Jump to latest/ }));
+  h.resize(4200);
+  h.deliverResize();
+  act(() => vi.advanceTimersByTime(1000));
+  expect(h.element.scrollTop).toBe(3600);
+  // The completed jump must not leave a stale geometry guard swallowing this scroll.
+  h.scroll(2000);
+  h.resize(4300);
+  h.snapshot.replies = [{ ...row, id: "new", content: "new" }];
+  h.render();
+  expect(h.element.scrollTop).toBe(2000);
 });

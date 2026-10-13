@@ -632,12 +632,33 @@ const rows = () =>
   ).queryAllByRole("listitem");
 async function chooseFilter(label: string, control = "Activity type") {
   const user = userEvent.setup();
-  await user.click(screen.getByRole("combobox", { name: control }));
-  await user.click(await screen.findByRole("option", { name: label }));
+  const trigger = screen.getByRole("button", { name: "Inbox filters" });
+  await user.click(trigger);
+  await screen.findByRole("menu", { name: "Inbox filters" });
+  if (control === "Sender") {
+    const people = screen.getByRole("menuitemcheckbox", { name: "People" });
+    const agents = screen.getByRole("menuitemcheckbox", { name: "Agents" });
+    // Enable the desired sender before disabling the other: never select none.
+    if (label !== "Agents" && people.getAttribute("aria-checked") !== "true")
+      await user.click(people);
+    if (label !== "Humans" && agents.getAttribute("aria-checked") !== "true")
+      await user.click(agents);
+    if (label === "Agents" && people.getAttribute("aria-checked") === "true")
+      await user.click(people);
+    if (label === "Humans" && agents.getAttribute("aria-checked") === "true")
+      await user.click(agents);
+    await user.keyboard("{Escape}");
+  } else {
+    await user.click(
+      screen.getByRole("menuitemradio", {
+        name: label === "All activity" ? "All" : label,
+      }),
+    );
+  }
   await waitFor(() =>
-    expect(screen.getByRole("combobox", { name: control })).toHaveTextContent(
-      label,
-    ),
+    expect(
+      screen.queryByRole("menu", { name: "Inbox filters" }),
+    ).not.toBeInTheDocument(),
   );
 }
 async function openRowMenu(
@@ -712,9 +733,7 @@ it.each(["Please review", "A thread update"])(
     expect(
       screen.queryByRole("region", { name: "Inbox detail" }),
     ).not.toBeInTheDocument();
-    expect(
-      screen.getByRole("combobox", { name: "Activity type" }),
-    ).toHaveFocus();
+    expect(screen.getByRole("button", { name: "Inbox filters" })).toHaveFocus();
     expect(h.journal()).toEqual(journal);
     act(() => h.archiveRoom(false, 101));
     await waitFor(() => expect(rows()).toHaveLength(2));
@@ -776,7 +795,7 @@ it.each([false, true])(
           screen.queryByRole("region", { name: "Inbox detail" }),
         ).not.toBeInTheDocument();
         expect(
-          screen.getByRole("combobox", { name: "Activity type" }),
+          screen.getByRole("button", { name: "Inbox filters" }),
         ).toHaveFocus();
         expect(h.journal()).toEqual(journal);
       }
@@ -859,6 +878,12 @@ it("filters real session evidence, opens an exact message and marks it read, and
     await screen.findByRole("region", { name: "Inbox detail" }),
   ).toBeInTheDocument();
   expect(h.open).not.toHaveBeenCalled();
+  expect(
+    within(screen.getByRole("heading", { name: "Design" })).getByRole(
+      "button",
+      { name: "Design" },
+    ),
+  ).toHaveAttribute("title", "Open in channel");
   fireEvent.click(screen.getByRole("button", { name: "Open in channel" }));
   await waitFor(() =>
     expect(h.open).toHaveBeenCalledWith({
@@ -890,7 +915,7 @@ it("filters real session evidence, opens an exact message and marks it read, and
   expect(
     screen.queryByText(/Marked unread on this device/),
   ).not.toBeInTheDocument();
-  fireEvent.click(screen.getByRole("checkbox", { name: "Unread only" }));
+  fireEvent.click(screen.getByRole("button", { name: "Unread only" }));
   expect(rows()).toHaveLength(1);
   await chooseFilter("Threads");
   expect(rows()).toHaveLength(1);
@@ -970,7 +995,7 @@ it("distinguishes same-sender thread choices by their visible safe preview", asy
   }
 });
 
-it("offers Show more only while matching unread conversations remain paginated", async () => {
+it("renders all loaded rows without pagination while preserving unread filtering", async () => {
   const h = fixture();
   const extra = Array.from({ length: 49 }, (_, index) =>
     message(h.alice, "room", `Additional mention ${index}`, 100 + index, [
@@ -986,8 +1011,6 @@ it("offers Show more only while matching unread conversations remain paginated",
       screen.queryByText("Checking recent activity…"),
     ).not.toBeInTheDocument(),
   );
-  expect(rows()).toHaveLength(50);
-  fireEvent.click(screen.getByRole("button", { name: "Show more" }));
   expect(rows()).toHaveLength(51);
   expect(
     screen.queryByRole("button", { name: "Show more" }),
@@ -995,14 +1018,14 @@ it("offers Show more only while matching unread conversations remain paginated",
   await act(async () => {
     await h.owner.session.unread.markChannelRead("room");
   });
-  fireEvent.click(screen.getByRole("checkbox", { name: "Unread only" }));
+  fireEvent.click(screen.getByRole("button", { name: "Unread only" }));
   expect(rows()).toHaveLength(0);
   expect(
     screen.queryByRole("button", { name: "Show more" }),
   ).not.toBeInTheDocument();
-  fireEvent.click(screen.getByRole("checkbox", { name: "Unread only" }));
-  expect(rows()).toHaveLength(50);
-  expect(screen.getByRole("button", { name: "Show more" })).toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: "Unread only" }));
+  expect(rows()).toHaveLength(51);
+  expect(screen.queryByRole("button", { name: "Show more" })).toBeNull();
 });
 
 it("intersects activity and representative sender evidence without inferring missing profiles", async () => {
@@ -1010,11 +1033,8 @@ it("intersects activity and representative sender evidence without inferring mis
   render(h.view);
   await screen.findByText("Agent direct reply");
   expect(
-    screen.getByRole("combobox", { name: "Activity type" }),
-  ).toHaveTextContent("All activity");
-  expect(screen.getByRole("combobox", { name: "Sender" })).toHaveTextContent(
-    "Everyone",
-  );
+    screen.getByRole("button", { name: "Inbox filters" }),
+  ).toHaveTextContent("All");
   await chooseFilter("DMs");
   await chooseFilter("Agents", "Sender");
   // Inbox's idle-only ensure reads the shared choices; no filter-owned inventory.
@@ -1090,7 +1110,7 @@ it("opens local unread actions with the ContextMenu key without changing selecti
       screen.queryByRole("img", { name: "Unread" }),
     ).not.toBeInTheDocument(),
   );
-  fireEvent.click(screen.getByRole("button", { name: "Close thread" }));
+  fireEvent.click(screen.getByRole("button", { name: "Close detail" }));
   const action = await openRowMenu("contextKey");
   expect(action).toHaveTextContent("Mark unread");
   expect(h.journal()?.state.frontiers[`msg:${h.mention.id}`]).toBe(21);
@@ -1245,7 +1265,7 @@ it.each([
       await user.click(within(row).getByRole("button"));
       await waitFor(() => expect(h.saveStarted()).toBe(true));
       expect(h.readSteps.map((step) => step.id)).toEqual([root.id]);
-      const close = screen.getByRole("button", { name: "Close thread" });
+      const close = screen.getByRole("button", { name: "Close detail" });
       if (action === "Close") await user.click(close);
       if (action === "Escape") {
         close.focus();
@@ -1321,7 +1341,7 @@ it.each(["retry", "other", "blur"] as const)(
     expect(h.journal()?.state.frontiers[`msg:${h.mention.id}`]).toBe(21);
     if (focusOwner === "retry") {
       expect(
-        within(detail).getByRole("button", { name: "Close thread" }),
+        within(detail).getByRole("button", { name: "Close detail" }),
       ).toHaveFocus();
       await user.keyboard("{Escape}");
       expect(detail).not.toBeInTheDocument();
@@ -1371,7 +1391,7 @@ it("a second rejected Retry retains its focused control until a successful recov
     expect(screen.queryByText("disk full")).not.toBeInTheDocument(),
   );
   expect(
-    within(detail).getByRole("button", { name: "Close thread" }),
+    within(detail).getByRole("button", { name: "Close detail" }),
   ).toHaveFocus();
 });
 
@@ -1393,7 +1413,7 @@ it.each([true, false])(
     h.failAux(false);
     const release = h.holdAux();
     const retry = screen.getByRole("button", { name: "Retry inbox" });
-    const other = screen.getByRole("combobox", { name: "Sender" });
+    const other = screen.getByRole("button", { name: "Unread only" });
     try {
       retry.focus();
       await user.keyboard("{Enter}");
@@ -1412,59 +1432,52 @@ it.each([true, false])(
       expect(screen.queryByRole("alert")).not.toBeInTheDocument(),
     );
     expect(
-      keepFocus
-        ? screen.getByRole("combobox", { name: "Activity type" })
-        : other,
+      keepFocus ? screen.getByRole("button", { name: "Inbox filters" }) : other,
     ).toHaveFocus();
   },
 );
 
-it("shows two accessible filters without removed options, bulk action or coverage boilerplate", async () => {
+it("combines the existing filter choices without placeholder actions", async () => {
   const h = fixture();
   render(h.view);
   await screen.findByText("Please review this");
-  expect(screen.getAllByRole("combobox")).toHaveLength(2);
-  expect(
-    screen.getByRole("combobox", { name: "Activity type" }),
-  ).toHaveTextContent("All activity");
-  expect(screen.getByRole("combobox", { name: "Sender" })).toHaveTextContent(
-    "Everyone",
-  );
-  expect(screen.getByText("Activity type")).toHaveClass("sr-only");
-  expect(screen.getByText("Sender", { selector: ".sr-only" })).toHaveClass(
-    "sr-only",
-  );
-  expect(screen.queryByRole("tab")).not.toBeInTheDocument();
+  const trigger = screen.getByRole("button", { name: "Inbox filters" });
+  expect(trigger).toHaveTextContent("All");
+  expect(screen.queryByRole("combobox")).toBeNull();
+  expect(screen.queryByRole("tab")).toBeNull();
   expect(
     screen.queryByRole("button", {
       name: /Mark shown as read|Mark as read|Mark unread/,
     }),
-  ).not.toBeInTheDocument();
+  ).toBeNull();
   expect(
     screen.queryByText(
       /Verified recent conversations|Results are bounded|Feed history reached its result limit|Read-state sync is unavailable on this host/,
     ),
-  ).not.toBeInTheDocument();
+  ).toBeNull();
+  expect(screen.queryByRole("button", { name: "Refresh" })).toBeNull();
+  expect(screen.getByRole("button", { name: "Unread only" })).toHaveAttribute(
+    "aria-pressed",
+    "false",
+  );
+  const user = userEvent.setup();
+  trigger.focus();
+  await user.keyboard("{Enter}");
+  const menu = await screen.findByRole("menu", { name: "Inbox filters" });
   expect(
-    screen.getByRole("checkbox", { name: "Unread only" }),
-  ).toBeInTheDocument();
+    within(menu).getByRole("menuitemcheckbox", { name: "People" }),
+  ).toBeChecked();
   expect(
-    screen.queryByRole("button", { name: "Refresh" }),
-  ).not.toBeInTheDocument();
-  fireEvent.click(screen.getByRole("combobox", { name: "Activity type" }));
-  for (const label of ["Projects", "Needs action"]) {
+    within(menu).getByRole("menuitemcheckbox", { name: "Agents" }),
+  ).toBeChecked();
+  for (const name of ["All", "Threads", "Mentions", "DMs", "Drafts"])
     expect(
-      screen.queryByRole("option", { name: label }),
-    ).not.toBeInTheDocument();
-  }
-  expect(screen.queryByText("Activity")).not.toBeInTheDocument();
-  expect(
-    screen.getByRole("option", { name: "All activity" }),
-  ).toBeInTheDocument();
-  expect(
-    screen.queryByRole("option", { name: "Drafts" }),
-  ).not.toBeInTheDocument();
-  expect(screen.getByRole("button", { name: "Drafts" })).toBeInTheDocument();
+      within(menu).getByRole("menuitemradio", { name }),
+    ).toBeInTheDocument();
+  for (const name of ["Projects", "Needs action", "Reactions"])
+    expect(within(menu).queryByRole("menuitemradio", { name })).toBeNull();
+  await user.keyboard("{Escape}");
+  expect(trigger).toHaveFocus();
 });
 
 it("waits for roster recovery before explicit evidence refresh", async () => {
@@ -1559,8 +1572,14 @@ it("does not accept a second row selection while its explicit read is pending", 
     ).toHaveAttribute("aria-busy", "true");
     fireEvent.click(button);
     expect(
-      screen.getByRole("heading", { name: "DM with Alice" }),
+      screen.getByRole("heading", { name: "Direct message" }),
     ).toBeInTheDocument();
+    expect(
+      within(screen.getByRole("heading", { name: "Direct message" })).getByRole(
+        "button",
+        { name: "Direct message" },
+      ),
+    ).toHaveAttribute("title", "Open conversation");
     expect(h.journal()?.state.frontiers[`msg:${h.mention.id}`]).toBeUndefined();
   } finally {
     await act(async () => release());
@@ -1609,7 +1628,7 @@ it("closing a pending failed action cancels its retry intent without cancelling 
       screen.getByRole("button", { name: "Open Alice in #Design" }),
     );
     await waitFor(() => expect(h.saveStarted()).toBe(true));
-    fireEvent.click(screen.getByRole("button", { name: "Close thread" }));
+    fireEvent.click(screen.getByRole("button", { name: "Close detail" }));
   } finally {
     await act(async () => release());
   }
@@ -2546,7 +2565,7 @@ it.each(["close", "delete", "delete-pending"])(
     render(h.view);
     await screen.findByText("Please review this");
     await chooseFilter("Mentions");
-    fireEvent.click(screen.getByRole("checkbox", { name: "Unread only" }));
+    fireEvent.click(screen.getByRole("button", { name: "Unread only" }));
     expect(rows()).toHaveLength(1);
     const release = action === "delete-pending" ? h.holdSave() : () => {};
     try {
@@ -2563,7 +2582,7 @@ it.each(["close", "delete", "delete-pending"])(
           ).not.toBeInTheDocument(),
         );
       if (action === "close")
-        fireEvent.click(screen.getByRole("button", { name: "Close thread" }));
+        fireEvent.click(screen.getByRole("button", { name: "Close detail" }));
       else
         act(() =>
           h.emit([
@@ -2589,7 +2608,7 @@ it.each(["close", "delete", "delete-pending"])(
     await waitFor(() => expect(rows()).toHaveLength(0));
     await waitFor(() =>
       expect(
-        screen.getByRole("combobox", { name: "Activity type" }),
+        screen.getByRole("button", { name: "Inbox filters" }),
       ).toHaveFocus(),
     );
   },

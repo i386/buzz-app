@@ -5,7 +5,7 @@ import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawnSync } from "node:child_process";
 
-test("generated author package in a path with spaces exposes agentControl, host, identity names, and page navigation metadata", async () => {
+test("generated author package in a path with spaces exposes host, identity names, and page navigation metadata", async () => {
   const root = fileURLToPath(new URL("../../", import.meta.url));
   const dir = await mkdtemp(join(tmpdir(), "buzz-author-consumer-"));
   const env = {
@@ -32,7 +32,7 @@ test("generated author package in a path with spaces exposes agentControl, host,
     await writeFile(
       join(dir, "consumer.ts"),
       `
-import type { Context, AgentControl, Host, PluginManifest, NamingPolicy } from "@buzz/author";
+import type { Context, Host, PluginManifest, NamingPolicy } from "@buzz/author";
 export const manifest: PluginManifest = {
   id: "example.plugin", name: "Example", apiVersion: 1,
   host: {
@@ -40,16 +40,13 @@ export const manifest: PluginManifest = {
     networkOrigins: ["https://api.example.com"],
   },
 };
-export const inject = ["agentControl", "host", "identityNames", "pages"];
+export const inject = ["host", "identityNames", "pages"];
 export function apply(ctx: Context) {
   const policy: NamingPolicy = {
     id: "alternative",
     resolve: (identities) => new Map(identities.map(({ pubkey, name }) => [pubkey, { name }])),
   };
   ctx.identityNames.register(policy);
-  const control: AgentControl = ctx.agentControl;
-  void control.refresh();
-  void control.action("sample", "stop");
   const host: Host = ctx.host;
   void host.runCommand("status").then((output: string | null) => void output);
   void host.request({
@@ -80,13 +77,11 @@ export function apply(ctx: Context) {
     // @ts-expect-error A placement must name a supported navigation location.
     placement: "floating",
   });
-  // @ts-expect-error Native process lifetime is not plugin-owned.
-  control.dispose();
   // @ts-expect-error Programs must be declared in the manifest, not supplied at runtime.
   host.runCommand("example-cli", ["status"]);
 }
 // @ts-expect-error Host construction is not exported to plugin authors.
-import type { provideAgentControl } from "@buzz/author";
+import type { createServices } from "@buzz/author";
 `,
     );
     await writeFile(

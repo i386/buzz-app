@@ -1,5 +1,5 @@
 import { test, expect } from "./fixture.mjs";
-import { openPage, selectSettingsSection } from "./navigation.mjs";
+import { openPage } from "./navigation.mjs";
 import { openChannelDetails } from "./channel-details.mjs";
 
 const channelId = "11111111-1111-4111-8111-111111111111";
@@ -25,13 +25,6 @@ test("header actions use the full-size menu and retain pane/dialog focus owners"
     localStorage.setItem("buzz-appearance.v1", "dark"),
   );
   await page.goto(app.origin);
-  await openPage(page, "Settings");
-  await selectSettingsSection(page, "Plugins");
-  const templatesEnabled = page.getByRole("switch", {
-    name: "Enable Templates & teams",
-    exact: true,
-  });
-  await templatesEnabled.check();
   await openPage(page, "Messages");
   await page
     .locator('button[data-channel-id="11111111-1111-4111-8111-111111111111"]')
@@ -82,7 +75,6 @@ test("header actions use the full-size menu and retain pane/dialog focus owners"
   for (const label of [
     "View channel details",
     "View canvas",
-    "Save as template…",
 
     "Archive channel",
     "Delete channel",
@@ -364,19 +356,6 @@ test("header actions use the full-size menu and retain pane/dialog focus owners"
   await expect(menu).toHaveCount(0);
   await page.keyboard.press("Escape");
   await expect(canvas).toHaveCount(0);
-  await expect(trigger).toBeFocused();
-  await trigger.click();
-  await menu
-    .getByRole("menuitem", { name: "Save as template…", exact: true })
-    .click();
-  const template = page.getByRole("dialog", {
-    name: "New template",
-    exact: true,
-  });
-  await expect(template).toBeVisible();
-  await expect(menu).toHaveCount(0);
-  await page.keyboard.press("Escape");
-  await expect(template).toHaveCount(0);
   await expect(trigger).toBeFocused();
   for (const label of ["Archive channel", "Delete channel"]) {
     await trigger.click();

@@ -6,17 +6,13 @@
   min-height: 0;
 }
 
+/* Status fills only the unused toolbar space, never wrapping controls or rows. */
 .headerTitle {
   display: flex;
   flex: 1;
   width: 0;
   min-width: 0;
   align-items: center;
-  gap: var(--space-2);
-}
-
-.headerTitle > :first-child {
-  flex-shrink: 0;
 }
 
 .refreshStatus {
@@ -28,7 +24,12 @@
 
 .workspace {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(0, 1.5fr);
+  /* Match usePanelSplit's 320px list reserve and 316px detail minimum. */
+  grid-template-rows: auto minmax(0, 1fr);
+  grid-template-columns: minmax(320px, 1fr) minmax(
+      316px,
+      var(--secondary-panel-width, 2fr)
+    );
   flex: 1;
   min-height: 0;
 }
@@ -37,7 +38,10 @@
   grid-template-columns: minmax(0, 1fr);
 }
 
-.listPane {
+.listPane,
+.detail,
+.detailBody,
+.draftEditor {
   display: flex;
   flex-direction: column;
   min-width: 0;
@@ -45,57 +49,46 @@
 }
 
 .detail {
-  display: flex;
-  flex-direction: column;
+  position: relative;
+  border-inline-start: 1px solid var(--border-standard);
+}
+
+.detailBody,
+.draftEditor {
+  flex: 1;
+}
+
+.detailHeadingTitle {
   min-width: 0;
-  min-height: 0;
-  padding: 0 var(--space-panel-inset) var(--space-panel-inset);
-  border-inline-start: 1px solid var(--border-subtle);
 }
 
-.detailHeading {
-  display: flex;
-  flex: 0 0 3rem;
-  min-width: 0;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: var(--space-3);
-  padding-block-start: var(--space-2);
-}
-
-.detailHeading h2 {
-  min-height: var(--size-control-sm);
-  display: flex;
-  align-items: center;
-}
-
-.detailHeading h2 {
+.detailHeadingLink {
+  display: block;
+  max-width: 100%;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  cursor: pointer;
+  text-align: start;
 }
 
-.detailActions {
-  display: flex;
-  align-items: center;
+.detailHeadingLink:hover {
+  text-decoration: underline;
 }
 
-.detailBody {
-  display: flex;
-  flex-direction: column;
-  min-width: 0;
-  min-height: 0;
+html[data-keyboard-navigation] .detailHeadingLink:focus-visible {
+  outline: 2px solid var(--border-focus);
+  outline-offset: -2px;
 }
 
-.detailBody > :last-child {
-  flex: 1;
-  min-height: 0;
-}
-
-/* Both panes share the naturally sized controls/header row, even when the
-   unread toggle wraps beneath the paired selects. */
-.workspace[data-selected] {
-  grid-template-rows: auto minmax(0, 1fr);
+/* Share the header row even when larger text makes its controls wrap. */
+.workspace[data-selected] > .detail {
+  grid-column: 2;
 }
 
 .workspace[data-selected] > .listPane,
@@ -105,21 +98,13 @@
   grid-template-rows: subgrid;
 }
 
-.workspace[data-selected] > .detail > .detailBody {
-  grid-row: 2;
-  min-height: 0;
-}
-
 .previewFrame {
   display: flex;
+  flex: 1;
   flex-direction: column;
   min-width: 0;
   min-height: 0;
   overflow: hidden;
-  border: 1px solid var(--border-standard);
-  border-radius: var(--radius-panel);
-  background: var(--surface-panel);
-  box-shadow: var(--shadow-xs);
 }
 
 .previewHistory {
@@ -130,138 +115,51 @@
   overflow: hidden;
 }
 
+.toolbar {
+  display: flex;
+  flex: 0 0 auto;
+  min-height: var(--size-panel-header);
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-1);
+  padding-inline: var(--space-1);
+  border-bottom: 1px solid var(--border-standard);
+}
+
+.scroll,
+.draftList {
+  flex: 1;
+  min-height: 0;
+  min-width: 0;
+  overflow: auto;
+}
+
+/* Drafts places its toolbar/list directly in the same grid, without a wrapper. */
+.workspace > .toolbar,
+.workspace > .draftList {
+  grid-column: 1;
+}
+
+.workspace:not([data-selected]) > .listPane {
+  grid-row: 1 / span 2;
+}
+
 @container (max-width: 700px) {
   .workspace[data-selected] {
     grid-template-columns: minmax(0, 1fr);
   }
-  .workspace[data-selected] > .listPane {
+  .workspace[data-selected] > .listPane,
+  .workspace[data-selected] > .toolbar,
+  .workspace[data-selected] > .draftList {
     display: none;
   }
-  .detail {
-    border-inline-start: 0;
+  .detail > [data-panel-resize] {
+    display: none;
   }
   .workspace[data-selected] > .detail {
     grid-column: 1;
-  }
-}
-
-.toolbar {
-  display: flex;
-  flex: 0 0 auto;
-  min-height: 3rem;
-  flex-wrap: wrap;
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--space-2);
-  padding-inline: var(--space-panel-inset);
-}
-
-.filterPair {
-  display: flex;
-  flex-wrap: nowrap;
-  align-items: center;
-  gap: var(--space-2);
-}
-
-.toolbar > :last-child {
-  margin-inline-start: auto;
-}
-
-.scroll {
-  flex: 1;
-  min-height: 0;
-  overflow: auto;
-}
-
-.draftWorkspace {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(0, 1.5fr);
-  min-height: 0;
-  flex: 1;
-}
-
-.draftWorkspace:not([data-selected]) {
-  grid-template-columns: minmax(0, 1fr);
-}
-
-.draftList {
-  min-width: 0;
-  min-height: 0;
-  overflow: auto;
-}
-
-.draftDetail {
-  display: flex;
-  flex-direction: column;
-  min-width: 0;
-  min-height: 0;
-  border-inline-start: 1px solid var(--border-subtle);
-  padding: 0 var(--space-panel-inset) var(--space-panel-inset);
-}
-
-.draftHeading {
-  display: flex;
-  flex: 0 0 3rem;
-  min-width: 0;
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--space-2);
-}
-
-.draftHeading h3 {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.draftEditor {
-  display: flex;
-  flex: 1;
-  flex-direction: column;
-  min-width: 0;
-  min-height: 0;
-}
-
-.draftEditor > :first-child {
-  flex: 1;
-  min-height: 0;
-}
-
-/* Draft and conversation previews share the same framed treatment; the
-   shared ThreadPanel remains unframed for its canonical owner. */
-.draftEditor > :first-child[aria-label="Thread"],
-.detailBody > :last-child[aria-label="Thread"] {
-  border: 1px solid var(--border-standard);
-  border-radius: var(--radius-panel);
-  background: var(--surface-panel);
-  box-shadow: var(--shadow-xs);
-}
-
-.draftActions {
-  padding-top: var(--space-2);
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: var(--space-2);
-}
-
-@container (max-width: 650px) {
-  .draftWorkspace {
-    display: flex;
-    flex-direction: column;
-    overflow: auto;
-  }
-  .draftList {
-    flex: 0 0 auto;
-    overflow: visible;
-  }
-  .draftDetail {
-    flex: 0 0 auto;
-    height: max(28rem, 70vh);
-    padding-inline: var(--space-2);
     border-inline-start: 0;
-    border-top: 1px solid var(--border-subtle);
   }
 }
 
@@ -293,13 +191,9 @@
   min-width: 0;
 }
 
-.draftList .list {
-  padding-top: var(--space-2);
-}
-
 .rowSurface {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-columns: minmax(0, 1fr);
   align-items: center;
   gap: var(--space-row-gap);
   min-width: 0;
@@ -308,14 +202,14 @@
 .unreadSlot {
   display: grid;
   place-items: center;
-  width: 12px;
-  height: 12px;
+  width: var(--space-2);
+  height: var(--space-2);
 }
 
 .unreadDot {
-  width: 12px;
-  height: 12px;
-  border-radius: 50%;
+  width: var(--space-2);
+  height: var(--space-2);
+  border-radius: var(--radius-pill);
   background: var(--text-navigation-unread);
 }
 

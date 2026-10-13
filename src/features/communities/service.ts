@@ -1,5 +1,6 @@
+import type { LocalAgentSource } from "../agents/local-activity";
 // FOUNDATION: Client identity and membership selection outlive community query sessions.
-import type { AgentControl } from "../agents/control";
+import type { LocalAgents } from "../agents/local";
 import type { IdentityNames } from "../identity-names/service";
 import { createPresenceActivity } from "../presence/activity";
 import { Context } from "@deepseek-ai/cordis";
@@ -43,9 +44,10 @@ export function createCommunities(
   live: boolean,
   identityNames?: IdentityNames,
   openRelay = "",
-  agentChoices?: Pick<AgentControl, "snapshot" | "subscribe" | "refresh">,
+  agentChoices?: LocalAgents,
   identityReady?: Promise<string>,
   nativeConnect?: (id: string, signal: AbortSignal) => Promise<ReadTransport>,
+  localAgents?: LocalAgentSource,
 ) {
   const connect = live
     ? (id: string, signal: AbortSignal) =>
@@ -134,6 +136,7 @@ export function createCommunities(
         identityNames,
         agentChoices,
         viewer ? { viewer, scope: communityDestination(id).url } : undefined,
+        localAgents,
       );
       sessions.set(id, session);
       sessionScopes.set(id, scope);
@@ -290,6 +293,14 @@ export function createCommunities(
         throw new Error("Join this community first");
       if (id) acquire(id);
       update({ selected: id });
+    },
+    /** A joined community's session, connected without selecting it, for
+     * background work such as agents; it lives until the community is left. */
+    open(id: string): RelayData | undefined {
+      id = communityDestination(id).id;
+      return state.memberships.some((m) => m.id === id)
+        ? acquire(id)
+        : undefined;
     },
     saveProfile(profile: PersonalProfile) {
       update({ profile });

@@ -967,9 +967,11 @@ it("retains roster and displays rejection with explicit refresh recovery", async
       "Permission changed",
     ),
   ).not.toBeInTheDocument();
-  expect(
-    screen.getByRole("button", { name: /Open profile for Morgan/ }),
-  ).toBeVisible();
+  await vi.waitFor(() =>
+    expect(
+      screen.getByRole("button", { name: /Open profile for Morgan/ }),
+    ).toBeVisible(),
+  );
   await t.user.click(
     screen.getByRole("button", { name: "Refresh member data" }),
   );

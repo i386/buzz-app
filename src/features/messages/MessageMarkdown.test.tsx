@@ -171,7 +171,41 @@ second
     expect(html).not.toContain("<script");
     expect(html).not.toContain("<b>");
     expect(html).not.toContain("<img");
+    expect(html).toContain("&lt;script&gt;alert(&quot;x&quot;)&lt;/script&gt;");
+    expect(html).toContain("before &lt;b&gt;raw&lt;/b&gt;");
     expect(html).toContain("remote alt");
+  });
+
+  it("shows angle-bracket prose as the exact typed text", () => {
+    expect(render("<harness stuff goes here>")).toContain(
+      "<p>&lt;harness stuff goes here&gt;</p>",
+    );
+    expect(render("run the <harness> now")).toContain(
+      "<p>run the &lt;harness&gt; now</p>",
+    );
+    expect(render("**<harness>** and _<b>x</b>_")).toContain(
+      "<strong>&lt;harness&gt;</strong> and <em>&lt;b&gt;x&lt;/b&gt;</em>",
+    );
+    const block = render(
+      '<div onclick="x()">\n**not bold** :party:\n</div>\n\n<!-- note -->',
+    );
+    expect(block).toContain(
+      "<p>&lt;div onclick=&quot;x()&quot;&gt;<br/>\n**not bold** :party:<br/>\n&lt;/div&gt;</p>",
+    );
+    expect(block).not.toContain("note");
+    expect(block).not.toContain("<div onclick");
+    expect(block).not.toContain("<strong>");
+  });
+
+  it("hides complete HTML comments, such as Buzz Desktop's wave marker", () => {
+    const wave = render("<!-- buzz:wave:v1 -->\nLogan waved at you.");
+    expect(wave).toContain("<p>Logan waved at you.</p>");
+    expect(wave).not.toContain("buzz:wave");
+    expect(render("a <!-- hidden --> b")).toContain("<p>a  b</p>");
+    expect(render("<!-- x --> <harness>")).toContain("<p> &lt;harness&gt;</p>");
+    expect(render("an <!-- unclosed comment")).toContain(
+      "<p>an &lt;!-- unclosed comment</p>",
+    );
   });
 
   it("allows credential-free HTTP(S) links and makes other destinations non-clickable", () => {
@@ -955,6 +989,26 @@ describe("text spoilers", () => {
     expect(view.container.querySelector("[inert]")).toHaveTextContent(
       "changed",
     );
+  });
+
+  it("keeps angle-bracket text inline inside a spoiler through reveal and hide", () => {
+    expect(render("Before ||<harness>|| after").match(/<p[\s>]/g)).toHaveLength(
+      1,
+    );
+    const view = renderDom(
+      <MessageMarkdown {...props("Before ||<harness>|| after")} />,
+    );
+    const paragraph = () => view.container.querySelectorAll("p");
+    expect(paragraph()).toHaveLength(1);
+    expect(paragraph()[0]).toHaveTextContent("Before <harness> after");
+    expect(view.container.querySelector("[inert]")).toHaveTextContent(
+      "<harness>",
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Reveal spoiler" }));
+    expect(paragraph()).toHaveLength(1);
+    expect(paragraph()[0]).toHaveTextContent("Before <harness> after");
+    fireEvent.click(screen.getByRole("button", { name: "Hide spoiler" }));
+    expect(paragraph()).toHaveLength(1);
   });
 
   it.each([

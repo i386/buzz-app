@@ -2,7 +2,6 @@ import { useEffect, useState, useSyncExternalStore } from "react";
 import { useRelayConnection } from "../../features/relay/react";
 import type { RelayData } from "../../features/relay/service";
 import type { RelaySession } from "../../features/relay/session";
-import type { TemplateProviders } from "../../features/channel-templates/provider";
 import { personalGroups } from "../../features/channel-templates/setup";
 import { EmptyState } from "../../shared/design-system/ui/EmptyState";
 import { FolderSimpleIcon } from "../../shared/design-system/icons";
@@ -13,11 +12,9 @@ import { useSidebarPreferences } from "./useSidebarPreferences";
 
 export function ChannelSetupSettings({
   relay,
-  providers,
   active,
 }: {
   relay: RelayData;
-  providers: TemplateProviders;
   active(): boolean;
 }) {
   const connection = useRelayConnection(relay);
@@ -28,7 +25,6 @@ export function ChannelSetupSettings({
         <GroupSettings
           key={`${connection.scope}:${connection.generation}`}
           session={connection.session}
-          providers={providers}
           active={active}
         />
       ) : (
@@ -41,11 +37,9 @@ export function ChannelSetupSettings({
 }
 function GroupSettings({
   session,
-  providers,
   active,
 }: {
   session: RelaySession;
-  providers: TemplateProviders;
   active(): boolean;
 }) {
   const kit = useSyncExternalStore(
@@ -96,7 +90,6 @@ function GroupSettings({
           onOpenChange={setOpen}
           kit={session.channelKit}
           legacy={preferences.data}
-          providers={providers}
           active={active}
         />
       )}

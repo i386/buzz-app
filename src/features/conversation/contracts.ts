@@ -101,12 +101,21 @@ export type ComposerAccessoryProps = Readonly<{
   scope: string;
   channelId: string;
   threadRootId?: string | undefined;
+  /** Present only for message-placed accessories; the exact triggering row. */
+  message?: ChannelMessage;
+  /** Host-owned thread navigation from a timeline message, even before replies.
+   * Absent inside the thread. False after this contribution or message retires. */
+  openThread?: (() => boolean) | undefined;
+  /** Return keyboard focus to a stable host control when a focused accessory retires. */
+  onFocusedRemoval?: (() => void) | undefined;
   /** Presentation only; the host re-resolves targets. No editor or access grant. */
   canOpen(target: string): boolean;
   /** False after contribution removal or the originating composer retires. */
   open(target: string): boolean;
 }>;
 export type ComposerAccessory = Readonly<{
+  /** Defaults to the composer. Message accessories render beside reactions. */
+  placement?: "composer" | "message";
   id: string;
   title: string;
   order?: number;

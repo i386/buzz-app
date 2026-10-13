@@ -2,6 +2,7 @@ import { npubEncode } from "nostr-tools/nip19";
 import {
   parseTeamManifest,
   parseTeamPayload,
+  parseTextManifest,
   payloadCoordinate,
   TEAM_PAYLOAD_TAG,
   type TeamPayload,
@@ -45,6 +46,21 @@ export type PayloadRecord = {
   deleted: false;
   value: TeamPayload & { type: "team-payload"; id: string };
 };
+/** A team's shared instructions, kept apart from its v1/v2 team record so
+ * older builds that only read team records never see it. */
+export const TEAM_TEXT_TAG = "buzz-team-text-v1";
+export type TextRecord = {
+  version: 1;
+  community: string;
+  deleted: boolean;
+  value: {
+    type: "team-text";
+    id: string;
+    owner: string;
+    manifest: TeamManifest | null;
+  };
+};
+export type PrivateRecord = KitRecord | PayloadRecord | TextRecord;
 export type KitRecord = {
   version: 1 | 2;
   community: string;
@@ -271,21 +287,73 @@ export function parsePayloadRecord(
     value: { ...payload, type: "team-payload", id: value.id as string },
   };
 }
+export function parseTextRecord(raw: unknown, community: string): TextRecord {
+  const r = object(raw),
+    value = object(r.value);
+  if (
+    Object.keys(r).some(
+      (key) => !["version", "community", "deleted", "value"].includes(key),
+    ) ||
+    Object.keys(value).some(
+      (key) => !["type", "id", "owner", "manifest"].includes(key),
+    ) ||
+    r.version !== 1 ||
+    r.community !== community ||
+    typeof r.deleted !== "boolean" ||
+    value.type !== "team-text" ||
+    typeof value.owner !== "string" ||
+    !keyPattern.test(value.owner)
+  )
+    throw new Error("Invalid team instructions record");
+  const manifest = r.deleted ? null : parseTextManifest(value.manifest);
+  if (r.deleted ? value.manifest !== null : manifest?.owner !== value.owner)
+    throw new Error("Invalid team instructions record");
+  const result: TextRecord = {
+    version: 1,
+    community,
+    deleted: r.deleted,
+    value: {
+      type: "team-text",
+      id: id(value.id),
+      owner: value.owner,
+      manifest,
+    },
+  };
+  if (
+    new TextEncoder().encode(JSON.stringify(result)).length > KIT_RECORD_BYTES
+  )
+    throw new Error("Invalid team instructions record");
+  return result;
+}
+export function textCoordinate(
+  community: string,
+  owner: string,
+  teamId: string,
+) {
+  return `${TEAM_TEXT_TAG}:${encodeURIComponent(community)}:${owner}:${teamId}`;
+}
 export function parsePrivateRecord(
   raw: unknown,
   community: string,
-): KitRecord | PayloadRecord {
-  return object(object(raw).value).type === "team-payload"
+): PrivateRecord {
+  const type = object(object(raw).value).type;
+  return type === "team-payload"
     ? parsePayloadRecord(raw, community)
-    : parseKitRecord(raw, community);
+    : type === "team-text"
+      ? parseTextRecord(raw, community)
+      : parseKitRecord(raw, community);
 }
-export function privateCoordinate(record: KitRecord | PayloadRecord) {
+export function privateCoordinate(record: PrivateRecord) {
   return record.value.type === "team-payload"
     ? payloadCoordinate(record.value)
-    : coordinate(record as KitRecord);
+    : record.value.type === "team-text"
+      ? textCoordinate(record.community, record.value.owner, record.value.id)
+      : coordinate(record as KitRecord);
 }
-export function privateTag(record: KitRecord | PayloadRecord) {
+export function privateTag(record: PrivateRecord) {
   return record.value.type === "team-payload"
     ? TEAM_PAYLOAD_TAG
-    : kitTag(record as KitRecord);
+    : record.value.type === "team-text"
+      ? TEAM_TEXT_TAG
+      : kitTag(record as KitRecord);
 }

@@ -16,7 +16,7 @@ import {
   type KeyboardEvent,
 } from "react";
 import { Virtualizer, type VirtualizerHandle } from "virtua";
-import { MessageRow } from "./MessageRow";
+import { MessageRow, type MessageLinkOrigin } from "./MessageRow";
 import { continuesMessageGroup } from "./message-grouping";
 import type { Attachment, ChannelWindow } from "../relay/contracts";
 import { useRowProfiles } from "../relay/react";
@@ -127,7 +127,7 @@ export type ChannelTimelineProps = {
   launchPending?: boolean | undefined;
   /** Sessions page history on scroll; retain an explicit button for errors. */
   historyControl?: "button" | "scroll";
-  onOpenLink(url: string): boolean;
+  onOpenLink(url: string, origin?: MessageLinkOrigin): boolean;
   canOpenLink?: ((target: string) => boolean) | undefined;
   revealMessageId?: string | undefined;
   /** One inline exact visit: focus the verified mounted row, without a page navigation. */
@@ -411,6 +411,15 @@ function Timeline({
         next.edgeHeight === measuredSize.edgeHeight
       )
         return;
+      // A growing composer shrinks the viewport. Pin a reader who was at the
+      // bottom before paint so history rises with it; the restore lands later.
+      if (
+        follow.current &&
+        settled.current &&
+        next.height < measuredSize.height &&
+        element.scrollHeight - measuredSize.height - element.scrollTop < 2
+      )
+        element.scrollTop = element.scrollHeight;
       measuredSize = next;
       settled.current = false;
       setSize(next);
@@ -769,7 +778,9 @@ function Timeline({
         <Virtualizer
           ref={handle}
           scrollRef={scroller}
-          shift={prepend}
+          // Before Virtua measures its viewport there is no reading position
+          // to preserve; shifting then can freeze its initial empty range.
+          shift={prepend && !!handle.current?.viewportSize}
           bufferSize={1600}
           // Reflow must not evict the focused control or a row's open report.
           keepMounted={keptIndices}

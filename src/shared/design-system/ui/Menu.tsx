@@ -116,7 +116,7 @@ export function MenuSubmenuTrigger({
   ...props
 }: SubmenuTriggerProps) {
   return (
-    <BaseMenu.SubmenuTrigger {...props} className="buzz-menu-item">
+    <BaseMenu.SubmenuTrigger delay={0} {...props} className="buzz-menu-item">
       {children}
       <CaretRightIcon
         className="buzz-menu-submenu-arrow"
@@ -149,25 +149,44 @@ export function MenuCheckboxItem({ children, ...props }: CheckboxItemProps) {
 type RadioItemProps = Omit<
   ComponentProps<typeof BaseMenu.RadioItem>,
   "className"
->;
+> & { selection?: "check" | "highlight" };
 
-export function MenuRadioItem({ children, ...props }: RadioItemProps) {
+export function MenuRadioItem({
+  children,
+  selection = "check",
+  ...props
+}: RadioItemProps) {
   return (
-    <BaseMenu.RadioItem {...props} className="buzz-menu-item">
+    <BaseMenu.RadioItem
+      {...props}
+      className="buzz-menu-item"
+      data-selection={selection}
+    >
       <span className="buzz-menu-choice-label">{children}</span>
-      <BaseMenu.RadioItemIndicator
-        className="buzz-menu-item-indicator"
-        keepMounted
-      >
-        <CheckIcon size={16} aria-hidden="true" />
-      </BaseMenu.RadioItemIndicator>
+      {selection === "check" && (
+        <BaseMenu.RadioItemIndicator
+          className="buzz-menu-item-indicator"
+          keepMounted
+        >
+          <CheckIcon size={16} aria-hidden="true" />
+        </BaseMenu.RadioItemIndicator>
+      )}
     </BaseMenu.RadioItem>
   );
 }
 
-export function MenuGroupLabel({ children }: { children: ReactNode }) {
+export function MenuGroupLabel({
+  children,
+  emphasis = "default",
+}: {
+  children: ReactNode;
+  emphasis?: "default" | "quiet";
+}) {
   return (
-    <BaseMenu.GroupLabel className="buzz-menu-group-label">
+    <BaseMenu.GroupLabel
+      className="buzz-menu-group-label"
+      data-emphasis={emphasis}
+    >
       {children}
     </BaseMenu.GroupLabel>
   );

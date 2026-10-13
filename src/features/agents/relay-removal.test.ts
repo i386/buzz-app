@@ -1,11 +1,15 @@
 import { createHash } from "node:crypto";
 import { schnorr } from "@noble/curves/secp256k1.js";
 import { bytesToHex } from "nostr-tools/utils";
-import { afterEach, expect, it } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import { PublishRejected } from "../relay/outbox";
 import { createRelaySession } from "../relay/session";
 import { archiveRelay, keypair, signed, type Key } from "../relay/testing";
-import { removeRelayAgent } from "./relay-removal";
+import {
+  publishAgentRecord,
+  removeAgentFromChannels,
+  removeRelayAgent,
+} from "./relay-removal";
 
 const viewer = keypair(),
   relay = keypair(),
@@ -140,6 +144,37 @@ it("a refused channel removal does not fail Remove or leave outbox work", async 
   expect(fixture.archived.has(agent.pubkey)).toBe(true);
   expect(fixture.deleted).toEqual(new Set([coordinate()]));
   expect(Object.values(fixture.channels).flat()).toContain(agent.pubkey);
+  expect(instance.session.outbox?.snapshot()).toEqual([]);
+});
+
+it("signs a new channel removal instead of resending one the relay would refuse as stale", async () => {
+  const { fixture, instance } = setup();
+  const removeFromChannels = () =>
+    removeAgentFromChannels(
+      instance.session,
+      agent.pubkey,
+      new AbortController().signal,
+    );
+  fixture.removal.fail = new Error("restricted: not authorized");
+  fixture.removal.failKind = 9001;
+  await expect(removeFromChannels()).rejects.toThrow();
+  const [stale] = instance.session.outbox?.snapshot() ?? [];
+  expect(stale?.event.kind).toBe(9001);
+  delete fixture.removal.fail;
+  // Past the relay's 15-minute timestamp bound, resending `stale` can never land.
+  vi.useFakeTimers({ toFake: ["Date"], now: Date.now() + 20 * 60_000 });
+  try {
+    await removeFromChannels();
+  } finally {
+    vi.useRealTimers();
+  }
+  const [sent] = fixture.published;
+  expect(fixture.published).toHaveLength(1);
+  expect(sent?.id).not.toBe(stale?.event.id);
+  expect(sent?.created_at).toBeGreaterThan(
+    (stale?.event.created_at ?? 0) + 15 * 60,
+  );
+  expect(Object.values(fixture.channels).flat()).not.toContain(agent.pubkey);
   expect(instance.session.outbox?.snapshot()).toEqual([]);
 });
 
@@ -319,4 +354,82 @@ it("a cancelled removal signs and publishes nothing", async () => {
   await expect(remove(controller.signal)).rejects.toBeDefined();
   expect(fixture.published).toEqual([]);
   expect(fixture.signedBy).toEqual([]);
+});
+
+it("publishes the owner's record of an agent with its runtime", async () => {
+  const { fixture, instance } = setup();
+  await publishAgentRecord(
+    instance.session,
+    {
+      pubkey: agent.pubkey,
+      name: "Agent",
+      picture: "https://example.test/a.png",
+      runtime: "example/echo",
+    },
+    new AbortController().signal,
+  );
+  const [listed] = fixture.published;
+  expect(listed).toMatchObject({ kind: 30177, pubkey: viewer.pubkey });
+  expect(JSON.parse(listed?.content ?? "")).toEqual({
+    name: "Agent",
+    picture: "https://example.test/a.png",
+    parallelism: 1,
+    respond_to: "owner-only",
+  });
+  expect(listed?.tags).toEqual([
+    ["d", agent.pubkey],
+    ["runtime", "example/echo"],
+    ["client-id", expect.any(String)],
+  ]);
+  expect(instance.session.outbox?.snapshot()).toEqual([]);
+});
+
+it("keeps the settings and tags of the record it replaces", async () => {
+  const { fixture, instance } = setup();
+  const written = await publishAgentRecord(
+    instance.session,
+    {
+      pubkey: agent.pubkey,
+      name: "Renamed",
+      runtime: "example/echo",
+      prior: {
+        content: {
+          name: "Agent",
+          picture: "https://example.test/old.png",
+          parallelism: 3,
+          respond_to: "anyone",
+          persona_id: "p1",
+        },
+        tags: [
+          ["d", agent.pubkey],
+          ["runtime", "example/old"],
+          ["a", "30175:owner:p1"],
+          ["client-id", "old"],
+        ],
+      },
+    },
+    new AbortController().signal,
+  );
+  const [listed] = fixture.published;
+  const content = {
+    name: "Renamed",
+    parallelism: 3,
+    respond_to: "anyone",
+    persona_id: "p1",
+  };
+  expect(JSON.parse(listed?.content ?? "")).toEqual(content);
+  expect(listed?.tags).toEqual([
+    ["d", agent.pubkey],
+    ["runtime", "example/echo"],
+    ["a", "30175:owner:p1"],
+    ["client-id", expect.any(String)],
+  ]);
+  expect(written).toEqual({
+    content,
+    tags: [
+      ["d", agent.pubkey],
+      ["runtime", "example/echo"],
+      ["a", "30175:owner:p1"],
+    ],
+  });
 });

@@ -142,7 +142,9 @@ for (const destination of ["reply", "off-window root"]) {
       await popup.getByRole("button", { name: /Open thread for/ }).click();
       await expect(panel).toBeVisible();
       await expect(
-        page.getByRole("tab", { name: "Thread", exact: true }),
+        page.locator(
+          '[role="tab"][data-tab-value^="thread:"][aria-selected="true"]',
+        ),
       ).toHaveAttribute("aria-selected", "true");
       await expect(
         page.getByRole("tab", { name: "Channel settings", exact: true }),
@@ -154,10 +156,9 @@ for (const destination of ["reply", "off-window root"]) {
     await expect(
       page.getByRole("tab", { name: "Channel settings", exact: true }),
     ).toHaveCount(0);
-    const close = page.getByRole("button", {
-      name: "Close Thread tab",
-      exact: true,
-    });
+    const close = page.locator(
+      '.buzz-tabs-item:has([data-tab-value^="thread:"][aria-selected="true"]) > button:not([role="tab"])',
+    );
     await close.focus();
     await close.press(destination === "reply" ? "Escape" : "Enter");
     await expect(panel).toHaveCount(0);

@@ -14,8 +14,6 @@ use browser::{
     browser_action, browser_attach, browser_detach, browser_navigate, browser_set_bounds,
     browser_status,
 };
-mod agent_models;
-mod agents;
 mod app_agents;
 mod deep_links;
 mod dock;
@@ -46,7 +44,7 @@ use identity::{
     identity_restore, identity_sign_builderlab_binding, IdentityHost,
 };
 use relay::{
-    media_copy_image, media_download, media_snapshot_read, media_stream_base, relay_agent_library,
+    media_copy_image, media_download, media_stream_base, relay_agent_library,
     relay_agent_log_proof, relay_agent_memories_read, relay_agent_observer, relay_agent_resolve,
     relay_channel_publish, relay_channel_sign, relay_decode_read_state, relay_decode_reminders,
     relay_decode_sidebar, relay_direct_message, relay_git_authorization, relay_http,
@@ -58,23 +56,6 @@ use relay::{
 mod terminal;
 #[cfg(test)]
 mod test_executable;
-use agent_models::{agent_models_begin, agent_models_cancel, agent_models_run, ModelHost};
-mod goose_models;
-mod harness_setup;
-#[cfg(any(target_os = "macos", target_os = "linux"))]
-mod managed_npm;
-mod pi_models;
-use agents::claude_auth_status;
-use agents::{
-    agent_control_action, agent_control_attach_mention, agent_control_clone_settings,
-    agent_control_create_authorize, agent_control_create_commit, agent_control_create_prepare,
-    agent_control_creation_profile, agent_control_delete, agent_control_import_commit,
-    agent_control_import_preview, agent_control_local_clone_settings, agent_control_log_challenge,
-    agent_control_read_log, agent_control_save, agent_control_save_defaults,
-    agent_control_snapshot, agent_control_snapshot_memory_write, agent_control_start_on_app_launch,
-    agent_control_team_capture, agent_control_team_export, agent_control_team_instructions,
-    agent_control_team_preview, agent_control_use_here, AgentHost,
-};
 use buzzodz_plugins::{
     imports::{prepare_folder, prepare_git, PreparedImport, Preview},
     Catalog, InstallationResult, Manager,
@@ -82,7 +63,6 @@ use buzzodz_plugins::{
 use deep_links::{deep_link_take, deep_link_watch, DeepLinks};
 use dock::{dock_permission, unread_indicator_set};
 use enterprise_login_gate::enterprise_login_gate;
-use harness_setup::{claude_install, pi_install, HarnessSetup};
 use host_command::plugin_host_run_command;
 use host_process::{
     plugin_host_process_kill, plugin_host_process_spawn, plugin_host_process_write, HostProcesses,
@@ -417,20 +397,8 @@ async fn plugin_recover(
 ) -> Result<InstallationResult, String> {
     with_manager(manager, |m| m.recover().map(|catalog| ready(&m, catalog))).await
 }
-/// Tauri's restart ignores `prevent_exit`, so confirm the same agent teardown
-/// that gates Quit before requesting it; a failure keeps the app running.
 #[tauri::command]
 async fn update_restart<R: tauri::Runtime>(app: tauri::AppHandle<R>) -> Result<(), String> {
-    let handle = app.clone();
-    tauri::async_runtime::spawn_blocking(move || {
-        handle.state::<ModelHost>().shutdown();
-        handle.state::<AgentHost>().shutdown()
-    })
-    .await
-    .map_err(|_| "Agent shutdown could not be confirmed".to_owned())?
-    .map_err(|error| {
-        format!("Agent shutdown incomplete; restart Buzz to finish the update: {error}")
-    })?;
     app.request_restart();
     Ok(())
 }
@@ -485,7 +453,6 @@ fn commands<R: tauri::Runtime>() -> impl Fn(tauri::ipc::Invoke<R>) -> bool + Sen
         media_download,
         media_copy_image,
         media_stream_base,
-        media_snapshot_read,
         get_os_idle_seconds,
         workspace_pick_folder,
         plugin_import_folder,
@@ -505,46 +472,22 @@ fn commands<R: tauri::Runtime>() -> impl Fn(tauri::ipc::Invoke<R>) -> bool + Sen
         oauth_callback_begin,
         oauth_callback_wait,
         oauth_callback_cancel,
-        agent_control_create_prepare,
         app_agents::app_agent_list,
         app_agents::app_agent_create,
+        app_agents::app_agent_portable,
+        app_agents::app_agent_port,
         app_agents::app_agent_rename,
+        app_agents::app_agent_set_picture,
         app_agents::app_agent_delete,
         app_agents::app_agent_forget,
         app_agents::app_agent_publish,
         app_agents::app_agent_publish_profile,
         app_agents::app_agent_query,
         app_agents::app_agent_upload,
+        app_agents::app_agent_media,
         app_agents::app_agent_remember,
-        agent_control_create_authorize,
-        agent_control_create_commit,
-        agent_control_creation_profile,
-        agent_control_snapshot_memory_write,
-        agent_control_team_preview,
-        agent_control_team_instructions,
-        agent_control_team_capture,
-        agent_control_team_export,
-        agent_control_snapshot,
-        agent_control_log_challenge,
-        agent_control_read_log,
-        pi_install,
-        claude_install,
-        claude_auth_status,
-        agent_control_use_here,
-        agent_control_local_clone_settings,
-        agents::agent_security,
-        agent_control_save,
-        agent_control_save_defaults,
-        agent_control_delete,
-        agent_control_action,
-        agent_control_attach_mention,
-        agent_control_start_on_app_launch,
-        agent_control_clone_settings,
-        agent_control_import_preview,
-        agent_control_import_commit,
-        agent_models_begin,
-        agent_models_cancel,
-        agent_models_run,
+        app_agents::app_agent_claim,
+        app_agents::app_agent_release,
         title_bar_double_click,
         notification_show,
         #[cfg(target_os = "macos")]
@@ -575,18 +518,29 @@ pub fn run() {
     let instance = sign_out::Paths::resolve(&context.config().identifier).map(|paths| {
         sign_out::boot(
             &paths,
-            |registry| {
-                buzz_agent_controller::delete_local_agent_keys(
-                    registry.to_path_buf(),
-                    &buzz_agent_controller::PlatformCredentials::default(),
-                )
+            |app_data| {
+                let credentials = buzz_agent_controller::PlatformCredentials::default();
+                let old = app_data.join(sign_out::OLD_AGENTS);
+                if old
+                    .try_exists()
+                    .map_err(|error| format!("check agent registry: {error}"))?
+                {
+                    buzz_agent_controller::delete_local_agent_keys(old, &credentials)?;
+                }
+                // The pending erase runs before the temporary startup migration.
+                for folder in [sign_out::AGENTS, sign_out::migrate_agents::LEGACY] {
+                    buzz_agent_controller::AppAgents::open(
+                        app_data.join(folder).join("identities.json"),
+                    )
+                    .delete_keys(&credentials)?;
+                }
+                Ok(())
             },
             identity::remove_saved_key,
         )
         .unwrap_or_else(|message| sign_out::exit_with(&message))
     });
     let identity = IdentityHost::default();
-    let agent_identity = identity.clone();
     let builder = tauri::Builder::default();
     let builder = if !tauri::is_dev() {
         // Single instance comes first, as its documentation requires. Its deep-link
@@ -651,37 +605,26 @@ pub fn run() {
                     .path()
                     .data_dir()
                     .map_err(|_| "Could not resolve legacy library directory")?;
-                let workspace = app
-                    .path()
-                    .home_dir()
-                    .map_err(|_| "Could not resolve agent workspace")?
-                    .join(".buzz");
-                Ok((root, legacy, workspace))
+                Ok((root, legacy))
             })();
-            app.manage(ModelHost::new(
-                paths
-                    .as_ref()
-                    .map(|(root, _, _)| root.clone())
-                    .map_err(Clone::clone),
-            ));
-            let resources = app
-                .path()
-                .resource_dir()
-                .map(|root| root.join("agent-runtime"))
-                .map_err(|_| "Could not resolve app runtime resources".to_owned());
             app.manage(app_agents::AppAgentHost::new(
                 paths
                     .as_ref()
-                    .map(|(root, _, _)| root.with_file_name("agents2").join("identities.json"))
+                    .map(|(root, _)| {
+                        root.with_file_name(sign_out::AGENTS)
+                            .join("identities.json")
+                    })
                     .map_err(Clone::clone),
+                paths
+                    .as_ref()
+                    .map(|(root, legacy)| buzz_agent_controller::OldStores {
+                        harness: root.join("agents.json"),
+                        data_dir: legacy.clone(),
+                    })
+                    .map_err(Clone::clone),
+                // `just desktop` builds step aside for a packaged app.
+                !tauri::is_dev(),
             ));
-            let agent_owner = agents::owner::Owner::select(
-                agent_identity,
-                tauri::is_dev(),
-                std::env::var("BUZZ_DEV_VIEWER").ok().as_deref(),
-                app.config().build.dev_url.as_ref(),
-            );
-            app.manage(AgentHost::initialize(paths, resources, agent_owner));
             Ok(())
         });
     #[cfg(target_os = "macos")]
@@ -708,7 +651,6 @@ pub fn run() {
         .manage(relay::Uploads::default())
         .register_asynchronous_uri_scheme_protocol("buzz-media", relay::media_protocol)
         .manage(Imports::default())
-        .manage(HarnessSetup::default())
         .manage(Terminals::default())
         .manage(HostProcesses::default())
         .manage(OAuthCallbackHost::default())
@@ -772,13 +714,6 @@ pub fn run() {
             if matches!(event, tauri::RunEvent::Reopen { .. }) {
                 deep_links::focus_main(app);
             }
-            if let tauri::RunEvent::ExitRequested { api, .. } = &event {
-                app.state::<ModelHost>().shutdown();
-                if app.state::<AgentHost>().shutdown().is_err() {
-                    api.prevent_exit();
-                    eprintln!("Agent shutdown incomplete; app exit was refused");
-                }
-            }
             if matches!(event, tauri::RunEvent::Exit) {
                 shut_down(app);
             }
@@ -790,15 +725,10 @@ pub(crate) fn shut_down<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
     app.state::<relay::Spools>()
         .cancel_all(&app.state::<relay::Uploads>());
     app.state::<image_clipboard::ImageClipboard>().release();
-    app.state::<HarnessSetup>().shutdown();
     app.state::<HostProcesses>().shutdown();
     browser::shutdown();
     if let Err(error) = app.state::<Terminals>().shutdown() {
         eprintln!("Terminal shutdown failed: {error}");
-    }
-    app.state::<ModelHost>().shutdown();
-    if app.state::<AgentHost>().shutdown().is_err() {
-        eprintln!("Native agent shutdown could not be confirmed");
     }
 }
 

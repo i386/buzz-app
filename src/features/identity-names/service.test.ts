@@ -5,7 +5,11 @@ import { Context } from "@deepseek-ai/cordis";
 import { PluginRuntime } from "../../plugins/runtime";
 import { createRelaySession } from "../relay/session";
 import { createAgentLibrary } from "../agents/library";
-import { agentDirectory, defaultNamingPolicy } from "./testing";
+import {
+  agentDirectory,
+  createAgentDirectory,
+  defaultNamingPolicy,
+} from "./testing";
 import { IdentityNamesService, bindNames, type NameSource } from "./service";
 
 const key = "ab".repeat(32);
@@ -69,6 +73,53 @@ it("reads the existing local inventory without changing public profile evidence"
   expect(view.snapshot()).toBe(revision);
   expect(view.resolve(key, "retired")).toBe("retired");
   f.library.dispose();
+});
+
+it("reuses one scope per candidate array and keeps distinct candidates distinct", () => {
+  const a = "a".repeat(64),
+    b = "b".repeat(64);
+  const suffixed = (key: string) => `Alex · ${npubEncode(key).slice(-4)}`;
+  const source: NameSource = {
+    profiles: {
+      snapshot: () =>
+        new Map([
+          [a, { name: "Alex" }],
+          [b, { name: "Alex" }],
+        ]),
+      subscribe: () => () => {},
+      ensure: async () => {},
+    },
+    agentLibrary: {
+      snapshot: () => ({ status: "ready", definitions: [], identities: [] }),
+      subscribe: () => () => {},
+      refresh: async () => {},
+      retain: () => () => {},
+    },
+  };
+  const provider = createAgentDirectory();
+  const scope = vi.spyOn(provider, "scope");
+  const view = bindNames(source, {
+    snapshot: () => [provider],
+    subscribe: () => () => {},
+  });
+  const candidates = [a, b];
+  const pair = view.scope(candidates);
+  expect(view.scope(candidates)).toBe(pair);
+  expect(pair(a)?.name).toBe(suffixed(a));
+  expect(pair(b)?.name).toBe(suffixed(b));
+  expect(view.resolve(a, undefined, candidates)).toBe(suffixed(a));
+  expect(view.lookup(b, candidates)).toEqual(pair(b));
+  expect(scope).toHaveBeenCalledTimes(1);
+  // Different candidates normalize their own scope and label differently.
+  const solo = view.scope([a]);
+  expect(solo).not.toBe(pair);
+  expect(solo(a)?.name).toBe("Alex");
+  expect(scope).toHaveBeenCalledTimes(2);
+  // Equal content in a distinct array is a new scope with identical labels.
+  expect(view.scope([a, b])(b)?.name).toBe(suffixed(b));
+  expect(scope).toHaveBeenCalledTimes(3);
+  view.dispose();
+  expect(pair(a)).toBeUndefined();
 });
 
 it("rebinds a live name view on plugin replacement and disable", async () => {

@@ -35,7 +35,7 @@ import type { ConversationExtensions } from "../conversation/contracts";
 import { InlineText } from "../conversation/InlineText";
 import type { ChannelMessage, Profile } from "../relay/contracts";
 import { emojiMatches, linkPart, messageParts } from "../relay/emoji";
-import { safeLinkUrl } from "../relay/message-content";
+import { safeLinkUrl, visibleHtmlSource } from "../relay/message-content";
 import styles from "./Messages.module.css";
 import { profileMentionParts } from "./profile-mentions";
 import {
@@ -233,6 +233,54 @@ function inlineProtectionKey(
     agentNames,
     emoji,
   ]);
+}
+
+/** Containers whose children are blocks. Raw HTML anywhere else is inline,
+ * including plugin nodes such as `spoiler`, so it stays inline as text. */
+const flowParents = new Set([
+  "root",
+  "blockquote",
+  "listItem",
+  "footnoteDefinition",
+]);
+
+/** Chat never renders raw HTML, but `<harness>` is still something the author
+ * typed. Show the exact source as text, with chat line breaks, instead of
+ * dropping it. Complete HTML comments stay hidden (`visibleHtmlSource`).
+ * Run last: the source is literal, so no mention, emoji or autolink
+ * processing applies. */
+function remarkLiteralHtml() {
+  const literal = (value: string): MarkdownNode[] =>
+    value
+      .split(/\r?\n|\r/)
+      .flatMap((line, index) => [
+        ...(index ? [{ type: "break" }] : []),
+        ...(line ? [{ type: "text", value: line }] : []),
+      ]);
+  return (tree: MarkdownNode) => {
+    const visit = (parent: MarkdownNode) => {
+      if (!parent.children) return;
+      parent.children = parent.children.flatMap((child) => {
+        if (child.type !== "html") {
+          visit(child);
+          return [child];
+        }
+        const source = visibleHtmlSource(child.value ?? "");
+        if (!source.trim()) return [];
+        const text = literal(source);
+        return !flowParents.has(parent.type)
+          ? text
+          : [
+              {
+                type: "paragraph",
+                children: text,
+                ...(child.position ? { position: child.position } : {}),
+              },
+            ];
+      });
+    };
+    visit(tree);
+  };
 }
 
 /** Offer only Markdown prose to profile controls and inline plugins. */
@@ -621,6 +669,7 @@ const MarkdownBody = memo(function MarkdownBody({
         remarkBreaks,
         [remarkSpoilers, `<${protectedContent.prefix}spoiler\uE002>`],
         [remarkInlineContent, protectedContent],
+        remarkLiteralHtml,
       ]}
       components={markdownComponents}
       skipHtml

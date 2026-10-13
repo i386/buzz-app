@@ -13,10 +13,17 @@ export type OpenResult = Readonly<
   | { status: "cancelled" | "superseded" }
   | { status: "failed"; reason: OpenFailure }
 >;
+/** Focus is per opening, never part of a saved address or history entry. */
+export type NavigationFocus = "content" | "preserve";
+export type NavigationOpenOptions = {
+  replace?: boolean;
+  focus?: NavigationFocus;
+};
 export type OpenAttempt = Readonly<{
   id: string;
   entry: NavigationEntry;
   signal: AbortSignal;
+  focus?: NavigationFocus;
 }>;
 export type NavigationSnapshot = Readonly<{
   entry: NavigationEntry;
@@ -34,7 +41,7 @@ export type Navigation = Readonly<{
   subscribe(listener: () => void): () => void;
   open(
     target: OpenTarget,
-    options?: { replace?: boolean },
+    options?: NavigationOpenOptions,
   ): Promise<OpenResult>;
   back(): void;
   forward(): void;
@@ -111,7 +118,7 @@ export function createNavigationController(
       effects.push(() => operation.controller.abort());
     emit();
   }
-  function start(): Promise<OpenResult> {
+  function start(focus: NavigationFocus = "content"): Promise<OpenResult> {
     if (disposed) return Promise.resolve({ status: "cancelled" });
     ingressRetry = undefined;
     const old = active;
@@ -125,6 +132,7 @@ export function createNavigationController(
       id: crypto.randomUUID(),
       entry: state.current,
       signal: controller.signal,
+      focus,
     });
     let resolve: (result: OpenResult) => void = () => {};
     const promise = new Promise<OpenResult>((settle) => {
@@ -160,6 +168,8 @@ export function createNavigationController(
     return promise;
   }
   let resolving: Operation | undefined;
+  // Both host drivers publish pushes synchronously; consume this opening only.
+  let openingFocus: NavigationFocus | undefined;
   const unsubscribe = history.attach(() => {
     transaction(() => {
       if (resolving && active === resolving) {
@@ -178,7 +188,11 @@ export function createNavigationController(
           canGoForward: state.canGoForward,
         });
         emit();
-      } else start();
+      } else {
+        const focus = openingFocus;
+        openingFocus = undefined;
+        start(focus);
+      }
     });
   });
   transaction(start);
@@ -191,7 +205,7 @@ export function createNavigationController(
         listeners.delete(listener);
       };
     },
-    open(input: OpenTarget, options?: { replace?: boolean }) {
+    open(input: OpenTarget, options?: NavigationOpenOptions) {
       return transaction(() => {
         if (disposed)
           return Promise.resolve<OpenResult>({ status: "cancelled" });
@@ -209,7 +223,8 @@ export function createNavigationController(
             !history.snapshot().invalidAddress &&
             targetKey(target) === targetKey(history.snapshot().current.target)
           )
-            return start();
+            return start(options?.focus);
+          openingFocus = options?.focus;
           if (options?.replace) history.replace(target);
           else history.push(target);
           return active.promise;
@@ -219,6 +234,8 @@ export function createNavigationController(
             status: "failed",
             reason: "host-error",
           });
+        } finally {
+          openingFocus = undefined;
         }
       });
     },
@@ -243,7 +260,7 @@ export function createNavigationController(
           })
         );
       }
-      return transaction(start);
+      return transaction(() => start(snapshot.attempt.focus));
     },
   });
   return {

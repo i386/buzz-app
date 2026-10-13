@@ -1,26 +1,39 @@
-//! Native custody for agents the app runs through a plugin (Agents2). The key
+//! Native custody for agents the app runs through a plugin (Agents). The key
 //! and owner attestation never enter the WebView; it asks for one bounded
 //! event, read, upload or memory write at a time, and native signs and sends it
 //! to the agent's community.
-use crate::agents::profile_http::authorization;
 use buzz_agent_controller::{
-    AppAgent, AppAgents, Credentials, PlatformCredentials, Published, Secret, CREDENTIALS_BUSY,
+    AppAgent, AppAgents, Carry, Credentials, OldStores, PlatformCredentials, PortSource, Portables,
+    Published, Secret, CREDENTIALS_BUSY,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::fs::{File, OpenOptions, TryLockError};
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
+
+/// A NIP-98 `Authorization` header for one signed HTTP auth event.
+fn authorization(event: Value) -> Result<String, String> {
+    use base64::Engine;
+    Ok(format!(
+        "Nostr {}",
+        base64::engine::general_purpose::STANDARD
+            .encode(serde_json::to_vec(&event).map_err(|_| "Could not authorize profile request")?)
+    ))
+}
 
 const BUSY_WAITS: u32 = 50;
 const BUSY_WAIT: std::time::Duration = std::time::Duration::from_millis(100);
 
 /// The identity file (which locks its own writes across app instances) and its
-/// own credential handle, so Agents2 never waits on, or fails with, the harness
+/// own credential handle, so Agents never waits on, or fails with, the harness
 /// agent controller (whose storage lock another app may hold).
 #[derive(Clone)]
 pub(crate) struct AppAgentHost {
     agents: Result<AppAgents, String>,
+    /// Earlier agent systems' identities on this machine, which it can take over.
+    old: Result<OldStores, String>,
     credentials: Arc<dyn Credentials>,
     /// Each key after its first read, so only create and first use reach the
     /// credential store, whose lock refuses rather than waits. Waiting on this
@@ -29,14 +42,30 @@ pub(crate) struct AppAgentHost {
     /// One profile publication per agent at a time, so each is newer than the
     /// last; Delete takes it too, so no publication outlives the key.
     profiles: Arc<Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>>,
+    hosting: Arc<Hosting>,
 }
 impl AppAgentHost {
-    pub(crate) fn new(path: Result<PathBuf, String>) -> Self {
+    /// `packaged` is false for a dev build, which steps aside for a packaged app.
+    pub(crate) fn new(
+        path: Result<PathBuf, String>,
+        old: Result<OldStores, String>,
+        packaged: bool,
+    ) -> Self {
+        let hosts = path
+            .as_ref()
+            .map_err(Clone::clone)
+            .and_then(|path| Ok(path.parent().ok_or("Invalid agent storage")?.join("hosts")));
         Self {
             agents: path.map(AppAgents::open),
+            old,
             credentials: Arc::new(PlatformCredentials::default()),
             keys: Arc::default(),
             profiles: Arc::default(),
+            hosting: Arc::new(Hosting {
+                dir: hosts,
+                packaged,
+                held: Mutex::default(),
+            }),
         }
     }
     fn keys(&self) -> std::sync::MutexGuard<'_, HashMap<String, Arc<Secret>>> {
@@ -92,6 +121,7 @@ impl AppAgentHost {
             // Held across the deletion, so no publication re-reads the key meanwhile.
             let mut keys = host.keys();
             keys.remove(&pubkey);
+            host.hosting.held().remove(&pubkey);
             host.agents
                 .clone()?
                 .remove(&pubkey, host.credentials.as_ref())
@@ -112,6 +142,83 @@ impl AppAgentHost {
     }
 }
 
+/// Which running copy of the app runs each agent. Every copy on this machine
+/// (the packaged app and any dev builds) shares the agent list and hears the
+/// same events. The packaged app always runs what it can and holds
+/// `<pubkey>.packaged` while it does; there is only ever one, since release
+/// builds are single-instance. Dev builds step aside while that is held, and
+/// otherwise run each agent from whichever holds `<pubkey>.lock`. The OS lets go
+/// of both when a copy exits, however it exits.
+struct Hosting {
+    dir: Result<PathBuf, String>,
+    packaged: bool,
+    /// The lock file this copy holds per agent: `.packaged` or `.lock`.
+    held: Mutex<HashMap<String, File>>,
+}
+impl Hosting {
+    fn held(&self) -> std::sync::MutexGuard<'_, HashMap<String, File>> {
+        self.held
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+    /// Whether this copy runs the agent. The packaged app always does, so a
+    /// stuck dev build can never silence it. A dev build takes the agent if no
+    /// other copy runs it, and lets go while the packaged app does.
+    #[allow(clippy::incompatible_msrv)] // `File` locking; see `sign_out::Instance`.
+    fn claim(&self, pubkey: &str) -> Result<bool, String> {
+        if pubkey.len() != 64
+            || !pubkey
+                .bytes()
+                .all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))
+        {
+            return Err("Invalid agent".into());
+        }
+        let dir = self.dir.as_ref().map_err(Clone::clone)?;
+        std::fs::create_dir_all(dir).map_err(|_| "Could not open agent hosting")?;
+        let packaged = dir.join(format!("{pubkey}.packaged"));
+        let mut held = self.held();
+        if self.packaged {
+            if !held.contains_key(pubkey) {
+                let file = open_lock(&packaged)?;
+                // A dev build checking for it holds it briefly; this tries again next time.
+                if lock(file.try_lock())? {
+                    held.insert(pubkey.into(), file);
+                }
+            }
+            return Ok(true);
+        }
+        if !lock(open_lock(&packaged)?.try_lock_shared())? {
+            held.remove(pubkey);
+            return Ok(false);
+        }
+        if !held.contains_key(pubkey) {
+            let file = open_lock(&dir.join(format!("{pubkey}.lock")))?;
+            if lock(file.try_lock())? {
+                held.insert(pubkey.into(), file);
+            }
+        }
+        Ok(held.contains_key(pubkey))
+    }
+}
+/// Whether a try at a lock took it; closing the file lets go.
+#[allow(clippy::incompatible_msrv)]
+fn lock(attempt: Result<(), TryLockError>) -> Result<bool, String> {
+    match attempt {
+        Ok(()) => Ok(true),
+        Err(TryLockError::WouldBlock) => Ok(false),
+        Err(TryLockError::Error(_)) => Err("Could not read agent hosting".into()),
+    }
+}
+fn open_lock(path: &Path) -> Result<File, String> {
+    OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(path)
+        .map_err(|_| "Could not open agent hosting lock".to_owned())
+}
+
 /// Runs blocking file and credential work off the async runtime.
 async fn blocking<T: Send + 'static>(
     work: impl FnOnce() -> Result<T, String> + Send + 'static,
@@ -130,6 +237,8 @@ pub(crate) struct AppAgentSummary {
     #[serde(rename = "type")]
     agent_type: String,
     name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    picture: Option<String>,
     deleted: bool,
 }
 impl From<AppAgent> for AppAgentSummary {
@@ -140,9 +249,17 @@ impl From<AppAgent> for AppAgentSummary {
             owner: agent.owner,
             agent_type: agent.agent_type,
             name: agent.name,
+            picture: agent.picture,
             deleted: agent.deleted,
         }
     }
+}
+
+/// A taken-over identity and the settings its old store kept for its new type.
+#[derive(Serialize)]
+pub(crate) struct Ported {
+    agent: AppAgentSummary,
+    carry: Carry,
 }
 
 #[tauri::command]
@@ -182,6 +299,72 @@ pub(crate) async fn app_agent_create(
     .await
 }
 
+/// Identities earlier agent systems saved on this machine, as Agents could take
+/// them over; the caller leaves out its own.
+#[tauri::command]
+pub(crate) async fn app_agent_portable(
+    state: tauri::State<'_, AppAgentHost>,
+) -> Result<Portables, String> {
+    let old = state.old.clone()?;
+    blocking(move || Ok(old.list())).await
+}
+
+/// Takes over an earlier identity with its key, name, picture and description,
+/// as `app_agent_create` does for a new one, and reports its carried settings.
+/// Its old store keeps it.
+#[tauri::command]
+pub(crate) async fn app_agent_port(
+    state: tauri::State<'_, AppAgentHost>,
+    identity: tauri::State<'_, crate::identity::IdentityHost>,
+    source: PortSource,
+    pubkey: String,
+    destination: String,
+    owner: String,
+    agent_type: String,
+) -> Result<Ported, String> {
+    let agents = state.agents.clone()?;
+    let old = state.old.clone()?;
+    let credentials = state.credentials.clone();
+    let (found, key) = blocking(move || {
+        credentials.retry();
+        let mut waits = 0;
+        loop {
+            match old.take(source, &pubkey, credentials.as_ref()) {
+                Err(error) if error == CREDENTIALS_BUSY && waits < BUSY_WAITS => {
+                    waits += 1;
+                    std::thread::sleep(BUSY_WAIT);
+                }
+                taken => return taken,
+            }
+        }
+    })
+    .await?;
+    let prepared = AppAgents::adopt(
+        &destination,
+        &owner,
+        &agent_type,
+        key,
+        &found.name,
+        found.picture,
+        found.about,
+    )?;
+    let auth = identity
+        .inner()
+        .authorize_agent(owner, prepared.pubkey().to_owned())
+        .await?;
+    let host = state.inner().clone();
+    blocking(move || {
+        let mut keys = host.keys();
+        let (agent, key) = agents.commit(prepared, &auth, host.credentials.as_ref())?;
+        keys.insert(agent.pubkey.clone(), Arc::new(key));
+        Ok(Ported {
+            agent: agent.into(),
+            carry: found.carry,
+        })
+    })
+    .await
+}
+
 #[tauri::command]
 pub(crate) async fn app_agent_rename(
     state: tauri::State<'_, AppAgentHost>,
@@ -190,6 +373,16 @@ pub(crate) async fn app_agent_rename(
 ) -> Result<(), String> {
     let agents = state.agents.clone()?;
     blocking(move || agents.rename(&pubkey, &name)).await
+}
+
+#[tauri::command]
+pub(crate) async fn app_agent_set_picture(
+    state: tauri::State<'_, AppAgentHost>,
+    pubkey: String,
+    picture: Option<String>,
+) -> Result<(), String> {
+    let agents = state.agents.clone()?;
+    blocking(move || agents.set_picture(&pubkey, picture)).await
 }
 
 #[tauri::command]
@@ -207,6 +400,22 @@ pub(crate) async fn app_agent_forget(
 ) -> Result<(), String> {
     let agents = state.agents.clone()?;
     blocking(move || agents.forget(&pubkey)).await
+}
+
+/// Whether this copy of the app runs the agent; see `Hosting`.
+#[tauri::command]
+pub(crate) async fn app_agent_claim(
+    state: tauri::State<'_, AppAgentHost>,
+    pubkey: String,
+) -> Result<bool, String> {
+    let hosting = state.hosting.clone();
+    blocking(move || hosting.claim(&pubkey)).await
+}
+
+/// Lets another copy of the app run the agent, as when this one cannot.
+#[tauri::command]
+pub(crate) fn app_agent_release(state: tauri::State<'_, AppAgentHost>, pubkey: String) {
+    state.hosting.held().remove(&pubkey);
 }
 
 #[derive(Deserialize)]
@@ -230,8 +439,8 @@ pub(crate) async fn app_agent_publish(
     post(&agent, &key, signed).await
 }
 
-/// Publishes the agent's profile if its name differs from the last one its
-/// community accepted. Safe to call any time; one runs per agent at a time.
+/// Publishes changed public metadata. Safe to call any time; one publication
+/// runs per agent at a time and records only what its community accepted.
 #[tauri::command]
 pub(crate) async fn app_agent_publish_profile(
     state: tauri::State<'_, AppAgentHost>,
@@ -240,7 +449,7 @@ pub(crate) async fn app_agent_publish_profile(
     let turn = state.profile_turn(&pubkey);
     let _turn = turn.lock().await;
     let agent = state.agent(pubkey).await?;
-    if agent.profile.as_ref().map(|last| &last.name) == Some(&agent.name) {
+    if agent.profile_is_current() {
         return Ok(());
     }
     let (agent, key) = state.key(agent).await?;
@@ -255,6 +464,8 @@ pub(crate) async fn app_agent_publish_profile(
             &agent.pubkey,
             Published {
                 name: agent.name,
+                picture: agent.picture,
+                about: agent.about,
                 created_at,
             },
         )
@@ -274,13 +485,17 @@ pub(crate) async fn app_agent_query(
         return Err("Agents read with one to eight filters".into());
     }
     let (agent, key) = state.key(state.agent(pubkey).await?).await?;
-    let bytes = serde_json::to_vec(&filters).map_err(|_| "Could not encode agent read")?;
+    read(&agent, &key, &filters).await
+}
+
+async fn read(agent: &AppAgent, key: &Secret, filters: &[Value]) -> Result<Value, String> {
+    let bytes = serde_json::to_vec(filters).map_err(|_| "Could not encode agent read")?;
     let response = client(20)?
         .post(agent.query_url())
         .header("Content-Type", "application/json")
         .header(
             "Authorization",
-            authorization(agent.http_auth(&key, &agent.query_url(), &bytes)?)?,
+            authorization(agent.http_auth(key, &agent.query_url(), &bytes)?)?,
         )
         .header("x-auth-tag", &agent.auth)
         .body(bytes)
@@ -354,6 +569,48 @@ pub(crate) async fn app_agent_upload(
         ));
     }
     serde_json::from_slice(&body).map_err(|_| "Invalid upload receipt".into())
+}
+
+/// The largest image an agent is shown. Claude takes 5 MiB of base64 on its
+/// strictest hosts, and base64 is 4 characters per 3 bytes.
+const MEDIA_LIMIT: usize = 5 * 1024 * 1024 / 4 * 3;
+
+/// Downloads one of its community's media blobs (its URL or `sha256[.ext]`)
+/// as the agent, base64.
+#[tauri::command]
+pub(crate) async fn app_agent_media(
+    state: tauri::State<'_, AppAgentHost>,
+    pubkey: String,
+    url: String,
+) -> Result<String, String> {
+    use base64::Engine;
+    let (agent, key) = state.key(state.agent(pubkey).await?).await?;
+    let url = agent.media_url(&url)?;
+    let auth =
+        serde_json::to_vec(&agent.media_auth(&key)?).map_err(|_| "Could not authorize media")?;
+    let response = client(120)?
+        .get(&url)
+        .header(
+            "Authorization",
+            format!(
+                "Nostr {}",
+                base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(auth)
+            ),
+        )
+        .header("x-auth-tag", &agent.auth)
+        .send()
+        .await
+        .map_err(|_| "Agent media request failed")?;
+    let status = response.status();
+    let body = bounded(response, MEDIA_LIMIT).await?;
+    if !status.is_success() {
+        return Err(format!(
+            "The community refused the media: {}",
+            reason(status, &body)
+        ));
+    }
+    agent.verify_media_hash(&url, &body)?;
+    Ok(base64::engine::general_purpose::STANDARD.encode(body))
 }
 
 /// Writes one memory entry, encrypted to the agent's owner. `after` is the
@@ -472,9 +729,11 @@ mod tests {
         let key = Secret::generate().unwrap();
         let host = AppAgentHost {
             agents: Err("unused".into()),
+            old: Err("unused".into()),
             credentials: Arc::new(Busy(key.hex().to_string(), AtomicU32::new(3))),
             keys: Arc::default(),
             profiles: Arc::default(),
+            hosting: Arc::new(hosting(Err("unused".into()), true)),
         };
         let agent = AppAgent {
             pubkey: key.pubkey().into(),
@@ -483,7 +742,9 @@ mod tests {
             auth: "[]".into(),
             agent_type: "p/t".into(),
             name: "Ada".into(),
+            picture: None,
             profile: None,
+            about: None,
             deleted: false,
         };
         let (_, read) = host.key(agent).await.unwrap();
@@ -493,7 +754,11 @@ mod tests {
     #[tokio::test]
     async fn delete_waits_for_a_profile_publication_in_flight() {
         let dir = tempfile::tempdir().unwrap();
-        let host = AppAgentHost::new(Ok(dir.path().join("identities.json")));
+        let host = AppAgentHost::new(
+            Ok(dir.path().join("identities.json")),
+            Err("unused".into()),
+            true,
+        );
         let pubkey = "c".repeat(64);
         let turn = host.profile_turn(&pubkey);
         let publishing = turn.lock().await;
@@ -507,5 +772,53 @@ mod tests {
         assert!(tokio::time::timeout(waited, &mut deleting).await.is_err());
         drop(publishing);
         deleting.await.unwrap().unwrap();
+    }
+
+    fn hosting(dir: Result<PathBuf, String>, packaged: bool) -> Hosting {
+        Hosting {
+            dir,
+            packaged,
+            held: Mutex::default(),
+        }
+    }
+
+    #[test]
+    fn one_copy_runs_each_agent_until_it_lets_go() {
+        let dir = tempfile::tempdir().unwrap();
+        let (first, second) = ("a".repeat(64), "b".repeat(64));
+        let one = hosting(Ok(dir.path().join("hosts")), false);
+        let other = hosting(Ok(dir.path().join("hosts")), false);
+        assert!(one.claim(&first).unwrap());
+        assert!(one.claim(&first).unwrap());
+        assert!(!other.claim(&first).unwrap());
+        assert!(other.claim(&second).unwrap());
+        // As when that copy quits.
+        drop(one);
+        assert!(other.claim(&first).unwrap());
+        assert!(other.claim("../x").is_err());
+    }
+
+    #[test]
+    fn a_packaged_app_runs_what_it_can_and_dev_builds_let_go() {
+        let dir = tempfile::tempdir().unwrap();
+        let (agent, other) = ("a".repeat(64), "b".repeat(64));
+        let dev = hosting(Ok(dir.path().join("hosts")), false);
+        let packaged = hosting(Ok(dir.path().join("hosts")), true);
+        assert!(dev.claim(&agent).unwrap());
+        assert!(dev.claim(&other).unwrap());
+        // The packaged app runs it at once, though the dev build had it first,
+        assert!(packaged.claim(&agent).unwrap());
+        // and the dev build lets go at its next claim.
+        assert!(!dev.claim(&agent).unwrap());
+        assert!(packaged.claim(&agent).unwrap());
+        // A second dev build cannot take it either.
+        let another = hosting(Ok(dir.path().join("hosts")), false);
+        assert!(!another.claim(&agent).unwrap());
+        // One the packaged app does not ask for stays with the dev build.
+        assert!(dev.claim(&other).unwrap());
+        // As when it can no longer run it.
+        packaged.held().remove(&agent);
+        assert!(dev.claim(&agent).unwrap());
+        assert!(!another.claim(&agent).unwrap());
     }
 }

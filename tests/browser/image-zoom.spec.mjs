@@ -87,7 +87,7 @@ test("clicking a gallery image zooms in and out without closing or navigating", 
         picture("panorama.png", 6000, 600),
         picture("portrait.png", 240, 900),
       ]);
-    await expect(form.getByText(/Queued$/)).toHaveCount(2);
+    await expect(form.getByText(/Ready$/)).toHaveCount(2);
     await form
       .getByRole("button", { name: "Send message", exact: true })
       .click();

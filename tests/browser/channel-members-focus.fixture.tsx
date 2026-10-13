@@ -1,9 +1,5 @@
-import { useState } from "react";
 import { schnorr } from "@noble/curves/secp256k1.js";
 import { bytesToHex } from "nostr-tools/utils";
-import { AgentSelection } from "../../src/bundled/channel-templates/TemplateFields";
-import { Dialog } from "../../src/shared/design-system/ui/Dialog";
-import { Button } from "../../src/shared/design-system/ui/Button";
 import { ToastProvider } from "../../src/shared/design-system/ui/Toast";
 import { createRoot } from "react-dom/client";
 import { ChannelMembersButton } from "../../src/bundled/channels/ChannelMembersDialog";
@@ -45,13 +41,6 @@ const namesReady = new Promise<void>((resolve) => {
   releaseNames = resolve;
 });
 let namesRequested = false;
-// A team long enough to scroll inside its dialog.
-const team = new URLSearchParams(location.search).has("team")
-  ? Array.from({ length: 12 }, (_, index) => ({
-      pubkey: keypair().pubkey,
-      name: `Agent ${index + 1}`,
-    }))
-  : [{ pubkey: person.pubkey, name: "Morgan" }];
 const additions: string[] = [];
 const channelId = "11111111-1111-4111-8111-111111111111";
 // Only the scroll-dismissal journey needs an overflowing roster.
@@ -256,8 +245,6 @@ session.channels.ensureList();
 const root = document.getElementById("root");
 if (!root) throw new Error("Missing fixture root");
 function Fixture() {
-  const [open, setOpen] = useState(false);
-  const [selected, setSelected] = useState<string[]>([]);
   return (
     <ToastProvider>
       <ChannelMembersButton
@@ -266,15 +253,6 @@ function Fixture() {
         canOpenLink={() => true}
         onOpenLink={() => true}
       />
-      <Button onClick={() => setOpen(true)}>Edit team</Button>
-      <Dialog open={open} onOpenChange={setOpen} title="Team">
-        <AgentSelection
-          session={session}
-          selected={selected}
-          onChange={setSelected}
-          agents={team}
-        />
-      </Dialog>
     </ToastProvider>
   );
 }

@@ -1,3 +1,4 @@
+import { migrateAgentFlag } from "./migrate-agent-flag";
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import type {
   Catalog,
@@ -29,7 +30,7 @@ export function createPluginStorage(bundledCatalog: () => Catalog["plugins"]) {
         ) {
           // This retired format controlled only the removed Welcome demo.
         } else if (
-          value.version === 2 &&
+          (value.version === 2 || value.version === 3) &&
           "enabled" in value &&
           value.enabled &&
           typeof value.enabled === "object" &&
@@ -39,6 +40,13 @@ export function createPluginStorage(bundledCatalog: () => Catalog["plugins"]) {
           )
         ) {
           const flags = value.enabled as Record<string, boolean>;
+          if (value.version === 2) {
+            migrateAgentFlag(flags);
+            localStorage.setItem(
+              storageKey,
+              JSON.stringify({ version: 3, enabled: flags }),
+            );
+          }
           for (const plugin of catalog.plugins)
             plugin.enabled = flags[plugin.manifest.id] ?? plugin.enabled;
         } else throw new Error("Invalid browser plugin settings");
@@ -73,7 +81,7 @@ export function createPluginStorage(bundledCatalog: () => Catalog["plugins"]) {
     localStorage.setItem(
       storageKey,
       JSON.stringify({
-        version: 2,
+        version: 3,
         enabled: Object.fromEntries(
           catalog.plugins.map((plugin) => [
             plugin.manifest.id,

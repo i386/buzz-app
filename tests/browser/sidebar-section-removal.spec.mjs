@@ -36,7 +36,7 @@ for (const personal of [false, true]) {
         .click();
       const dialog = page.getByRole("dialog", { name: `Remove ${title}?` });
       await expect(dialog).toHaveAccessibleDescription(
-        "1 channel will move back to Channels. This does not delete any channels or saved templates.",
+        "1 channel will move back to Channels. This does not delete any channels.",
       );
       await expect(
         dialog.getByRole("button", { name: "Cancel" }),

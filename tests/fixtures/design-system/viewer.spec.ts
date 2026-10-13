@@ -1200,9 +1200,23 @@ test("buttons and icon buttons share size geometry and preserve loading and disa
     });
     await expect(samples).toBeVisible();
     await page.evaluate(() => document.fonts.ready);
+    const defaultControl = page
+      .getByRole("button", {
+        name: kind === "button" ? "Continue" : "Add item",
+        exact: true,
+      })
+      .first();
     for (const mode of ["light", "dark"]) {
       const toggle = page.getByRole("button", { name: `Use ${mode} mode` });
       if (await toggle.count()) await toggle.click();
+      await expect(defaultControl).toHaveCSS(
+        "height",
+        kind === "button" ? "40px" : "32px",
+      );
+      if (kind === "icon-button") {
+        await expect(defaultControl).toHaveCSS("width", "32px");
+        await expect(defaultControl.locator("svg")).toHaveCSS("width", "16px");
+      }
       for (const [size, height, artwork] of [
         ["sm", 32, 16],
         ["md", 40, 24],
@@ -1764,136 +1778,6 @@ test("built Messages gallery renders isolated product states and follows viewer 
   await expect(gallery.locator(".message-gallery-example")).toHaveCount(33);
   expect([...pageErrors.unexplained(), ...failures]).toEqual([]);
   expect(sockets).toEqual([]);
-});
-
-// Real layout/focus coverage: a DOM emulator cannot prove portal stacking or scroll reachability.
-test("toast recovery stays reachable across themes, sizes, keyboard scrolling and modals", async ({
-  page,
-}, testInfo) => {
-  await page.goto(`${viewer}#/design/components/toast`);
-  const region = page.getByRole("region", { name: "App notifications" });
-  const recovery = page.getByRole("dialog", {
-    name: "Changes weren’t saved",
-    exact: true,
-  });
-  for (const mode of ["light", "dark"]) {
-    const theme = page.getByRole("button", { name: `Use ${mode} mode` });
-    if (await theme.count()) await theme.click();
-    for (const width of [390, 800, 1280]) {
-      await page.setViewportSize({ width, height: 844 });
-      await page
-        .getByRole("button", { name: "Show recovery", exact: true })
-        .focus();
-      await page.keyboard.press("Enter");
-      await expect(recovery).toBeInViewport();
-      await expect(
-        page.getByRole("button", { name: "Show recovery", exact: true }),
-      ).toBeFocused();
-      const box = await region.boundingBox();
-      if (!box) throw new Error("Toast viewport has no geometry");
-      expect(box.x).toBeGreaterThanOrEqual(0);
-      expect(box.x + box.width).toBeLessThanOrEqual(width);
-      expect(box.y + box.height).toBeLessThan(844 - 160);
-      await page.keyboard.press("F6");
-      await expect(region).toBeFocused();
-      await page.keyboard.press("Tab");
-      await expect(recovery).toBeFocused();
-      await page.keyboard.press("Escape");
-      await expect(recovery).toBeVisible();
-      await page.keyboard.press("Tab");
-      await expect(
-        page.getByRole("button", { name: "Retry saving", exact: true }),
-      ).toBeFocused();
-      await page.screenshot({
-        path: testInfo.outputPath(`toast-${mode}-${width}.png`),
-      });
-      await page.keyboard.press("Enter");
-      await expect(recovery).toHaveCount(0);
-    }
-  }
-
-  await page.setViewportSize({ width: 480, height: 400 });
-  await page.evaluate(() =>
-    document.documentElement.style.setProperty("--type-scale", "1.2"),
-  );
-  await page
-    .getByRole("button", { name: "Show recovery", exact: true })
-    .click();
-  await page.keyboard.press("F6");
-  await page.keyboard.press("Tab");
-  await page.keyboard.press("Tab");
-  const shortRetry = page.getByRole("button", {
-    name: "Retry saving",
-    exact: true,
-  });
-  await expect(shortRetry).toBeFocused();
-  await shortRetry.click();
-  await expect(recovery).toHaveCount(0);
-  await page.evaluate(() =>
-    document.documentElement.style.removeProperty("--type-scale"),
-  );
-  await page.setViewportSize({ width: 1280, height: 844 });
-  await page.emulateMedia({ reducedMotion: "reduce" });
-  await page.getByRole("button", { name: "Show recovery stack" }).click();
-  await expect(region.getByRole("dialog")).toHaveCount(6);
-  await expect(region.getByRole("dialog").first()).toHaveCSS(
-    "transition-duration",
-    "0s",
-  );
-  await page.keyboard.press("F6");
-  // Newest first, with no inert overflow entries: reach the oldest through real Tab scrolling.
-  for (let id = 6; id >= 1; id--) {
-    await page.keyboard.press("Tab");
-    await expect(
-      page.getByRole("dialog", { name: `Recovery ${id}`, exact: true }),
-    ).toBeFocused();
-    await page.keyboard.press("Tab");
-    const resolve = page.getByRole("button", {
-      name: `Resolve ${id}`,
-      exact: true,
-    });
-    await expect(resolve).toBeFocused();
-    const actionBox = await resolve.boundingBox();
-    const viewportBox = await region.boundingBox();
-    if (!actionBox || !viewportBox)
-      throw new Error("Recovery action has no geometry");
-    expect(actionBox.y).toBeGreaterThanOrEqual(viewportBox.y);
-    expect(actionBox.y + actionBox.height).toBeLessThanOrEqual(
-      viewportBox.y + viewportBox.height,
-    );
-  }
-  expect(await region.evaluate((element) => element.scrollTop)).toBeGreaterThan(
-    0,
-  );
-  await page.keyboard.press("Enter");
-  await expect(
-    page.getByRole("dialog", { name: "Recovery 1", exact: true }),
-  ).toHaveCount(0);
-
-  await page.getByRole("button", { name: "Open example dialog" }).click();
-  const modal = page.getByRole("dialog", {
-    name: "Example dialog",
-    exact: true,
-  });
-  await expect(modal).toBeVisible();
-  await expect(region).toHaveCount(1); // Base UI keeps live regions announced during modals.
-  await expect(
-    modal.getByRole("button", { name: "Close", exact: true }),
-  ).toBeFocused();
-  await page.keyboard.press("F6");
-  await expect
-    .poll(() =>
-      modal.evaluate((element) => element.contains(document.activeElement)),
-    )
-    .toBe(true);
-  await page.keyboard.press("Escape");
-  await expect(modal).toHaveCount(0);
-  await expect(region.getByRole("dialog")).toHaveCount(5);
-  await page
-    .getByRole("navigation", { name: "Design system" })
-    .getByRole("link", { name: "Button", exact: true })
-    .click();
-  await expect(region).toHaveCount(0); // Leaving the owner clears the stack.
 });
 
 // Cross-document fullscreen placement and native focus restoration require a browser.

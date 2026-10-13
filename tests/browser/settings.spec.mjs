@@ -350,6 +350,10 @@ confirmedPresence(
       name: "Personal groups",
       exact: true,
     });
+    const channelTemplates = sections.getByRole("button", {
+      name: "Channel templates",
+      exact: true,
+    });
     const customEmoji = sections.getByRole("button", {
       name: "Custom emoji",
       exact: true,
@@ -411,7 +415,13 @@ confirmedPresence(
       await expect(settingsSidebar).toBeVisible();
       await profile.focus();
       await tab();
+      await expect(
+        sections.getByRole("button", { name: "Messages", exact: true }),
+      ).toBeFocused();
+      await tab();
       await expect(personalGroups).toBeFocused();
+      await tab();
+      await expect(channelTemplates).toBeFocused();
       await tab();
       await expect(customEmoji).toBeFocused();
       await tab();
@@ -485,7 +495,13 @@ confirmedPresence(
         await profile.focus();
       }
       await tab();
+      await expect(
+        sections.getByRole("button", { name: "Messages", exact: true }),
+      ).toBeFocused();
+      await tab();
       await expect(personalGroups).toBeFocused();
+      await tab();
+      await expect(channelTemplates).toBeFocused();
       await tab();
       await expect(customEmoji).toBeFocused();
       await tab();

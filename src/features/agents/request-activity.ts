@@ -1,0 +1,137 @@
+import type { ActivityTurn } from "./activity";
+import { activityRecords, type ActivityRecord } from "./activity-records";
+
+/** Live request association from explicit captured trigger IDs only. No time/name
+ * inference, backfill, or broader channel fallback when the start is missing. */
+export function requestActivity(
+  records: readonly Omit<ActivityRecord, "envelopeId">[],
+  agent: string,
+  channelId: string,
+  requestId: string | readonly string[],
+) {
+  const parsed = activityRecords(records, agent, channelId).flatMap(
+    (record) => {
+      try {
+        const value = JSON.parse(record.plaintext);
+        if (
+          !value ||
+          typeof value !== "object" ||
+          Array.isArray(value) ||
+          typeof value.turnId !== "string" ||
+          !value.turnId ||
+          value.turnId.length > 256
+        )
+          return [];
+        return [
+          {
+            record,
+            value: value as {
+              kind: string;
+              turnId: string;
+              seq: number;
+              timestamp?: unknown;
+              payload?: { triggeringEventIds?: unknown };
+            },
+          },
+        ];
+      } catch {
+        return [];
+      }
+    },
+  );
+  const turnIds = new Set<string>();
+  const selected: ActivityRecord[] = [];
+  const terminal = new Map<string, "ended" | "error">();
+  let uncertain = false;
+  const result = () => ({ records: selected, turnIds, terminal, uncertain });
+  const triggersWanted = new Set(
+    (typeof requestId === "string" ? [requestId] : requestId).filter((id) =>
+      /^[0-9a-f]{64}$/.test(id),
+    ),
+  );
+  if (!triggersWanted.size) return result();
+  for (const start of parsed.filter(
+    ({ value }) => value.kind === "turn_started",
+  )) {
+    const triggers = start.value.payload?.triggeringEventIds;
+    if (
+      !Array.isArray(triggers) ||
+      !triggers.some((id) => triggersWanted.has(id))
+    )
+      continue;
+    const turn = parsed.filter(
+      ({ value }) => value.turnId === start.value.turnId,
+    );
+    // Duplicate starts/sequence resets leave identity ambiguous. Do not mix runs.
+    if (
+      turn.filter(({ value }) => value.kind === "turn_started").length !== 1 ||
+      turn.some(
+        ({ value }) => !Number.isSafeInteger(value.seq) || value.seq < 0,
+      )
+    ) {
+      uncertain = true;
+      continue;
+    }
+    const after = turn
+      .filter(({ value }) => value.seq >= start.value.seq)
+      .sort((a, b) => a.value.seq - b.value.seq);
+    if (new Set(after.map(({ value }) => value.seq)).size !== after.length) {
+      uncertain = true;
+      continue;
+    }
+    turnIds.add(start.value.turnId);
+    selected.push(...after.map(({ record }) => record));
+    // Match the lifecycle owner's timestamp admission. Raw future/malformed
+    // terminal-looking records remain inspectable but cannot classify outcome.
+    const admitted = ({ value, record }: (typeof parsed)[number]) =>
+      typeof value.timestamp === "string" &&
+      Number.isFinite(Date.parse(value.timestamp)) &&
+      Date.parse(value.timestamp) <= record.receivedAt + 5000;
+    if (!admitted(start)) {
+      uncertain = true;
+      continue;
+    }
+    // The lifecycle owner latches the first admitted terminal frame in receipt
+    // order, not the largest seq. A later error must not rewrite an earlier end.
+    const end = turn.find(
+      (item) =>
+        ["turn_completed", "turn_error", "agent_panic"].includes(
+          item.value.kind,
+        ) && admitted(item),
+    );
+    if (end && end.value.seq >= start.value.seq)
+      terminal.set(
+        start.value.turnId,
+        end.value.kind === "turn_completed" ? "ended" : "error",
+      );
+  }
+  return result();
+}
+
+/** Already scoped lifecycle evidence, never a claim that a reply was delivered.
+ * Working dominates; all linked turns must agree before an aggregate end label.
+ * Any feed trimming can have erased another linked start; do not claim completeness. */
+export function requestActivityState(
+  selected: ReturnType<typeof requestActivity>,
+  turns: readonly ActivityTurn[],
+  trimmed = 0,
+): "waiting" | "working" | "unknown" | "ended" | "error" {
+  const linked = [...selected.turnIds].map((id) =>
+    turns.find((turn) => turn.turnId === id),
+  );
+  if (linked.some((turn) => turn?.state === "working")) return "working";
+  if (
+    trimmed > 0 ||
+    selected.uncertain ||
+    linked.some((turn) => !turn || turn.state === "unknown")
+  )
+    return "unknown";
+  if (!linked.length) return "waiting";
+  if (
+    linked.some(
+      (turn) => turn?.state !== "ended" || !selected.terminal.has(turn.turnId),
+    )
+  )
+    return "unknown";
+  return [...selected.terminal.values()].includes("error") ? "error" : "ended";
+}

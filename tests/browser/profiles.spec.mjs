@@ -36,7 +36,6 @@ test("profile plumbing: exact avatar/mention targets, thread enrichment, lifecyc
   );
   await expect(viewerTab.locator("img")).toHaveCount(1);
 
-  await expect(panel.getByRole("tab", { name: "Memories" })).toHaveCount(0);
   const portrait = panel.getByRole("img", { name: "Viewer avatar" });
   await expect(portrait).toBeVisible();
   const name = panel.getByRole("heading", { name: "Viewer", exact: true });
@@ -99,21 +98,18 @@ test("profile plumbing: exact avatar/mention targets, thread enrichment, lifecyc
     "data-avatar-shape",
     "circle",
   );
-  await page.getByRole("button", { name: /^Close (?!Thread).* tab$/ }).click();
+  await page
+    .locator(
+      '.buzz-tabs-item:not(:has([data-tab-value^="thread:"])) > button:not([role="tab"])',
+    )
+    .click();
   await expect(mention).toBeFocused();
   await mention.press("Space");
   await expect(key).toHaveText(npubs.mic);
-  await expect(panel.getByRole("tab", { name: "Memories" })).toHaveCount(0);
-  expect(
-    await page.evaluate(() => window.profilesFixture.report.memoryReads),
-  ).toEqual([]);
   await page.evaluate(() =>
     window.profilesFixture.change("disable", "buzz.profiles"),
   );
   await expect(panel).toHaveCount(0);
-  const retiredMemoryReads = await page.evaluate(
-    () => window.profilesFixture.report.memoryReads,
-  );
   await expect(mention).toHaveCount(0);
   await expect(
     page
@@ -143,14 +139,23 @@ test("profile plumbing: exact avatar/mention targets, thread enrichment, lifecyc
     panel.getByRole("img", { name: "Pinky avatar" }),
   ).toHaveAttribute("data-size", "fill");
   await expect(panel.getByText("Agent profile", { exact: true })).toBeVisible();
+  const identity = panel.getByRole("region", { name: "Agent identity" });
+  await expect(identity).toContainText("Managed by");
+  await expect(
+    identity.getByRole("button", { name: "Open owner profile: Viewer (you)" }),
+  ).toBeVisible();
   // Existing navigation journey also proves row hover/focus affordances and host toast wiring.
-  await expect(panel.getByRole("tab", { name: "Memories" })).toBeVisible();
-  const agentType = panel.getByRole("button", { name: /^Copy Agent type:/ });
-  await expect(agentType).toContainText("Codex");
+  await expect(panel.getByRole("tab", { name: "Memories" })).toHaveCount(0);
+  await expect(panel.getByRole("tab", { name: "Runtime" })).toHaveCount(0);
+  await expect(
+    panel.getByRole("button", { name: /^Copy Agent type:/ }),
+  ).toHaveCount(0);
   const nip05 = panel.getByRole("button", { name: /^Copy NIP-05:/ });
   await expect(nip05).toHaveText("NIP-05pinky@example.test");
-  await agentType.focus();
+  // Keyboard modality, so :focus-visible reveals the copy affordance.
+  await nip05.focus();
   await page.keyboard.press("Shift+Tab");
+  await page.keyboard.press("Tab");
   await expect(nip05).toBeFocused();
   await expect(nip05.locator("[data-copied]")).toHaveCSS("opacity", "1");
   await page.evaluate(() => {
@@ -163,57 +168,28 @@ test("profile plumbing: exact avatar/mention targets, thread enrichment, lifecyc
     "data-copied",
     "true",
   );
-  await agentType.click();
-  await panel.getByRole("button", { name: /^Copy Capabilities:/ }).click();
-  expect(await page.evaluate(() => window.profileCopies.slice(-3))).toEqual([
+  expect(await page.evaluate(() => window.profileCopies.slice(-1))).toEqual([
     "pinky@example.test",
-    "codex-acp",
-    "code, review",
   ]);
 
-  await expect(panel.getByRole("tab", { name: "Memories" })).toBeVisible();
   await panel.getByRole("tab", { name: "Channels" }).click();
   await expect(panel.getByRole("region", { name: "Channels" })).toContainText(
     "One",
   );
-  expect(
-    await page.evaluate(() => window.profilesFixture.report.memoryReads),
-  ).toEqual(retiredMemoryReads);
-  await panel.getByRole("tab", { name: "Memories" }).click();
-  const memories = panel.getByRole("region", { name: "Agent memories" });
-  await expect(
-    memories.getByText("Core memory", { exact: true }),
-  ).toBeVisible();
-  await memories.getByText("Core memory", { exact: true }).focus();
-  await page.keyboard.press("Enter");
-  await expect(memories.locator("pre")).toBeVisible();
-  await expect(memories.locator("pre")).toContainText(
-    "<script>not executable</script>",
-  );
-  await expect(memories.locator("script")).toHaveCount(0);
-  const priorViewport = page.viewportSize();
-  await page.setViewportSize({ width: 390, height: 800 });
-  await expect
-    .poll(() =>
-      memories.evaluate(
-        (element) => element.scrollWidth <= element.clientWidth,
-      ),
+  await page
+    .locator(
+      '.buzz-tabs-item:not(:has([data-tab-value^="thread:"])) > button:not([role="tab"])',
     )
-    .toBe(true);
-  await page.screenshot({
-    path: test.info().outputPath("memories-narrow.png"),
-  });
-  await page.setViewportSize(priorViewport);
-  await panel.getByRole("tab", { name: "Info" }).click();
-  await expect(memories).toHaveCount(0);
-
-  await expect(panel.getByRole("region", { name: "Instances" })).toHaveCount(0);
-  await page.getByRole("button", { name: /^Close (?!Thread).* tab$/ }).click();
+    .click();
   await expect(
-    page.getByRole("tab", { name: "Thread", exact: true }),
+    page.locator(
+      '[role="tab"][data-tab-value^="thread:"][aria-selected="true"]',
+    ),
   ).toBeFocused();
   await page
-    .getByRole("button", { name: "Close Thread tab", exact: true })
+    .locator(
+      '.buzz-tabs-item:has([data-tab-value^="thread:"][aria-selected="true"]) > button:not([role="tab"])',
+    )
     .click();
   const missingKey = await page.evaluate(
     () => window.profilesFixture.keys.missing,
@@ -236,9 +212,6 @@ test("profile plumbing: exact avatar/mention targets, thread enrichment, lifecyc
       .getByRole("img", { name: "Unknown agent avatar" })
       .locator("[data-avatar-shape]"),
   ).toHaveAttribute("data-avatar-shape", "squircle");
-  // This browser fixture has no native host; the empty loaded inventory case is
-  // covered by ProfilePanel.fallback.test.tsx, not an unavailable host.
-  await expect(panel.getByRole("region", { name: "Instances" })).toHaveCount(0);
   await expect(panel.getByRole("tab", { name: "Runtime" })).toHaveCount(0);
   await expect(panel.getByRole("tab", { name: "Memories" })).toHaveCount(0);
   await expect(
@@ -278,10 +251,8 @@ test("profile plumbing: exact avatar/mention targets, thread enrichment, lifecyc
       });
     }
   }
-  await expect(panel.getByRole("tab", { name: "Memories" })).toHaveCount(0);
   await page.evaluate(() => window.profilesFixture.replace());
   await expect(panel).toHaveCount(0);
-  await expect(page.getByText("Core memory", { exact: true })).toHaveCount(0);
   const reads = await page.evaluate(() => ({
     reads: window.profilesFixture.report.profileReads,
     key: window.profilesFixture.keys.pinky,
@@ -320,7 +291,11 @@ test("contextual panel callbacks retire with opening, channel, contribution and 
   expect(await invoke()).toBe(true);
   // A second synchronous use of the old opening must not replace its successor.
   expect(await invoke()).toBe(false);
-  await page.getByRole("button", { name: /^Close (?!Thread).* tab$/ }).click();
+  await page
+    .locator(
+      '.buzz-tabs-item:not(:has([data-tab-value^="thread:"])) > button:not([role="tab"])',
+    )
+    .click();
   await capture();
   await page.locator('[data-channel-id="two"]').click();
   await expect(panel).toHaveCount(0);
@@ -347,180 +322,54 @@ test("contextual panel callbacks retire with opening, channel, contribution and 
   await expect(panel).toHaveCount(0);
 });
 
-// Native button disabling/removal can move focus differently from jsdom. Exercise
-// actual keyboard focus in both engines with a gated synthetic host, not real agents.
-test("local agent actions retain keyboard focus through pending and success without stealing focus", async ({
-  page,
-}) => {
-  await page.goto("/tests/fixtures/profiles.html?agent-actions");
-  await page
-    .getByRole("button", { name: "View Mic profile", exact: true })
-    .click();
-  const panel = page.getByRole("region", { name: "Local agent actions" });
-  const start = panel.getByRole("button", { name: "Start", exact: true });
-  const stop = panel.getByRole("button", { name: "Stop", exact: true });
-  await start.focus();
-  await start.press("Enter");
-  try {
-    await page.waitForFunction(() => window.profilesFixture.launchPending());
-    await expect(start).toBeDisabled();
-    await expect(start).toBeFocused();
-  } finally {
-    await page.evaluate(() => window.profilesFixture.finishLaunch());
-  }
-  await expect(start).toHaveCount(0);
-  await expect(stop).toBeFocused();
-  await stop.press("Enter");
-  await expect(start).toBeEnabled();
-  await expect(stop).toBeDisabled();
-  await expect(stop).toBeFocused();
-  await stop.press("Enter");
-  await start.focus();
-  await start.press("Enter");
-  const copy = page.getByRole("button", { name: "Copy npub" });
-  try {
-    await page.waitForFunction(() => window.profilesFixture.launchPending());
-    await copy.focus();
-  } finally {
-    await page.evaluate(() => window.profilesFixture.finishLaunch());
-  }
-  await expect(start).toHaveCount(0);
-  await expect(copy).toBeFocused();
-  const restart = panel.getByRole("button", { name: "Restart", exact: true });
-  await restart.focus();
-  await restart.press("Enter");
-  try {
-    await page.waitForFunction(() => window.profilesFixture.launchPending());
-    await expect(restart).toBeDisabled();
-    await expect(restart).toBeFocused();
-    await restart.press("Enter");
-  } finally {
-    await page.evaluate(() => window.profilesFixture.finishLaunch());
-  }
-  await expect(restart).toBeEnabled();
-  await expect(restart).toBeFocused();
-  expect(await page.evaluate(() => window.profilesFixture.commands())).toEqual([
-    "start",
-    "stop",
-    "start",
-    "restart",
-  ]);
-});
-
-// Switching profile tabs must release the actions view, not its app-owned command.
-test("local agent command survives Info tab unmount without stealing tab focus", async ({
-  page,
-}) => {
-  await page.goto("/tests/fixtures/profiles.html?agent-actions");
-  await page
-    .getByRole("button", { name: "View Mic profile", exact: true })
-    .click();
-  const actions = page.getByRole("region", { name: "Local agent actions" });
-  await actions
-    .getByRole("button", { name: "Start", exact: true })
-    .press("Enter");
-  const channels = page.getByRole("tab", { name: "Channels", exact: true });
-  const info = page.getByRole("tab", { name: "Info", exact: true });
-  try {
-    await page.waitForFunction(() => window.profilesFixture.launchPending());
-    await channels.click();
-    await expect(actions).toHaveCount(0);
-  } finally {
-    await page.evaluate(() => window.profilesFixture.finishLaunch());
-  }
-  await expect(channels).toBeFocused();
-  await info.click();
-  await expect(
-    actions.getByRole("button", { name: "Start", exact: true }),
-  ).toHaveCount(0);
-  await expect(
-    actions.getByRole("button", { name: "Stop", exact: true }),
-  ).toBeEnabled();
-  await expect(info).toBeFocused();
-  expect(await page.evaluate(() => window.profilesFixture.commands())).toEqual([
-    "start",
-  ]);
-});
-
-// Real renderer and profile plugin wiring; the fixture substitutes native custody
-// and broker signing. Security of those boundaries is covered by IPC/HTTP tests.
-// Real browser focus removal and PanelCard Escape bubbling are not modeled by jsdom.
-test("keyboard harness log tabs retain profile state and restore focus on close", async ({
-  page,
-}) => {
-  await page.goto("/tests/fixtures/profiles.html?harness-log");
-  const opener = page.getByRole("button", {
-    name: "View Mic profile",
-    exact: true,
+// Messaging an agent needs this machine's own agent for this community, taken
+// from the LocalAgents snapshot; a profile's agent hint alone never grants it.
+for (const local of [false, true]) {
+  test(`profile Message for humans and agents ${local ? "kept" : "not kept"} on this machine`, async ({
+    page,
+  }) => {
+    const errors = watchPageErrors(page);
+    await page.goto(
+      `/tests/fixtures/profiles.html?member-message${local ? "&local-agent" : ""}`,
+    );
+    const panel = page.getByRole("complementary", {
+      name: "Profile",
+      exact: true,
+    });
+    const message = panel.getByRole("button", { name: "Message", exact: true });
+    await page
+      .getByRole("button", { name: "View Mic profile", exact: true })
+      .click();
+    await expect(message).toBeVisible();
+    await page
+      .getByRole("button", { name: /^Close (?!Thread).* tab$/ })
+      .click();
+    await page
+      .getByRole("button", { name: "View thread: 1 reply", exact: true })
+      .click();
+    await page
+      .getByRole("button", { name: "View Pinky profile", exact: true })
+      .click();
+    await expect(
+      panel.getByText("Agent profile", { exact: true }),
+    ).toBeVisible();
+    if (!local) {
+      await expect(message).toHaveCount(0);
+      expect(await page.evaluate(() => window.profilesFixture.dmOpens)).toEqual(
+        [],
+      );
+    } else {
+      await message.click();
+      await expect
+        .poll(() => page.evaluate(() => window.profilesFixture.dmOpens))
+        .toEqual([
+          [await page.evaluate(() => window.profilesFixture.keys.pinky)],
+        ]);
+    }
+    expect(errors.unexplained()).toEqual([]);
   });
-  await opener.press("Enter");
-  const profile = page.getByRole("complementary", {
-    name: "Profile",
-    exact: true,
-  });
-  await profile.getByRole("tab", { name: "Runtime" }).click();
-  const entry = profile.getByRole("button", { name: "Harness log" });
-  await entry.press("Enter");
-  const tablist = page.getByRole("tablist", { name: "Panel tabs" });
-  const logTab = tablist.getByRole("tab", { name: "Harness log", exact: true });
-  const profileTab = tablist.getByRole("tab", { name: "Mic", exact: true });
-  const log = page.getByRole("region", { name: "Harness log", exact: true });
-  await expect(logTab).toBeFocused();
-  await expect(log.getByTestId("managed-agent-log-content")).toHaveText(
-    "fixture harness output",
-  );
-  const output = await log
-    .getByTestId("managed-agent-log-content")
-    .elementHandle();
-  await profileTab.click();
-  await expect(profile.getByRole("tab", { name: "Runtime" })).toBeVisible();
-  await entry.press("Enter");
-  await expect(logTab).toBeFocused();
-  expect(await output.evaluate((el) => el.isConnected)).toBe(true);
-  await logTab.press("Escape");
-  await expect(log).toHaveCount(0);
-  await expect(profileTab).toBeFocused();
-  await entry.press("Enter");
-  await expect(logTab).toBeFocused();
-  await page
-    .getByRole("button", { name: "Close Mic tab", exact: true })
-    .click();
-  await expect(log).toHaveCount(0);
-  await expect(profile).toHaveCount(0);
-  await expect(opener).toBeFocused();
-});
+}
 
-test("focused harness log renders exact local output and exits on disconnect", async ({
-  page,
-}) => {
-  await page.goto("/tests/fixtures/profiles.html?harness-log");
-  await page
-    .getByRole("button", { name: "View Mic profile", exact: true })
-    .click();
-  const profile = page.getByRole("complementary", {
-    name: "Profile",
-    exact: true,
-  });
-  await profile.getByRole("tab", { name: "Runtime" }).click();
-  await profile.getByRole("button", { name: "Harness log" }).click();
-  const log = page.getByRole("region", { name: "Harness log", exact: true });
-  await expect(profile.getByRole("tab", { name: "Runtime" })).toHaveCount(0);
-  await expect(log.getByTestId("managed-agent-log-content")).toHaveText(
-    "fixture harness output",
-  );
-  await page
-    .getByRole("button", { name: "Close Harness log tab", exact: true })
-    .click();
-  await expect(profile.getByRole("tab", { name: "Runtime" })).toBeVisible();
-  await expect(
-    profile.getByRole("button", { name: "Harness log" }),
-  ).toBeVisible();
-  await page.evaluate(() => window.profilesFixture.disconnect());
-  await expect(profile).toHaveCount(0);
-});
-
-// Browser-only contract: modal-to-panel focus handoff and hover layout cannot
-// be established by the component dispatcher tests.
 test("member rows hand off to Profiles without trapping or losing keyboard focus", async ({
   page,
 }) => {

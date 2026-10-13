@@ -97,30 +97,13 @@ const query = (f) => {
   }
   return result;
 };
-const control = () => ({
-  runtimeAvailable: false,
-  importAvailable: false,
-  runtimeMessage:
-    "Isolated demo: native host data modeled; execution disabled.",
-  agents: ["mine", "mine2", "theirs", "theirs2", "tail1", "tail2"].map((id) => {
-    const i = identities[id];
-    return {
-      id,
-      pubkey: i.pubkey,
-      name: i.name,
-      relayUrl: "https://names.demo.invalid",
-      systemPrompt: "Synthetic naming demo. No execution.",
-      workspace: "/demo/no-execution",
-      harness: { command: "demo-disabled", args: [], environmentKeys: [] },
-      revision: 1,
-      runningRevision: null,
-      enabled: false,
-      status: "stopped",
-      error: null,
-      diagnostics: [],
-    };
-  }),
-});
+const agents = () =>
+  ["mine", "mine2", "theirs", "theirs2", "tail1", "tail2"].map((id) => ({
+    pubkey: identities[id].pubkey,
+    name: identities[id].name,
+    relayUrl: "https://names.demo.invalid",
+    owner: viewer,
+  }));
 const server = await createServer({
   root,
   configFile: false,
@@ -132,8 +115,8 @@ const server = await createServer({
     {
       name: "isolated-naming-demo",
       transform(code, id) {
-        if (id === `${root}src/features/agents/control-native.ts`)
-          return `export { createNativeAgentControl } from ${JSON.stringify(`${root}tests/demos/identity-names/native-host.ts`)};`;
+        if (id === `${root}src/features/agents/local.ts`)
+          return `export { createLocalAgents } from ${JSON.stringify(`${root}tests/demos/identity-names/native-host.ts`)};`;
         if (id === `${root}src/main.tsx`)
           return code.replace(
             "const services = createServices();",
@@ -159,7 +142,7 @@ const server = await createServer({
             const body = raw ? JSON.parse(raw) : {};
             const route = req.url.split("?")[0].split("/").at(-1);
             if (req.url === "/demo/data") return send(res, publicData());
-            if (req.url === "/demo/control") return send(res, control());
+            if (req.url === "/demo/agents") return send(res, agents());
             if (req.url === "/demo/typing") {
               const e = sign(
                 20002,

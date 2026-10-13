@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Agent session</title>
+  <link rel="stylesheet" href="session-debug.css">
+</head>
+<body>
+  <div class="workspace">
+    <aside aria-label="Wall time and token usage">
+      <div class="rail-head">
+        <div class="rail-title"><strong>Agent session</strong><span id="status" role="status">Connecting…</span></div>
+        <div id="summary"></div>
+      </div>
+      <!-- biome-ignore lint/a11y/noNoninteractiveTabindex: Allow keyboard scrolling of the independent chart region. -->
+      <section class="timeline-scroll" tabindex="0" aria-label="Wall-time chart; hover or focus for details, click to jump to that record"><div id="timeline"></div></section>
+      <div id="tip" role="tooltip" hidden></div>
+    </aside>
+    <main>
+      <div class="toolbar"><select id="session" aria-label="Agent session" hidden></select><p id="scope"></p><input id="search" type="search" aria-label="Search" placeholder="Search…"><button id="prompt-toggle" type="button" aria-expanded="false" aria-controls="prompt" hidden>Prompt</button><button id="theme" type="button" aria-label="Toggle theme" title="Toggle theme">◐</button></div>
+      <section id="content" aria-label="Session content"></section>
+    </main>
+    <section id="prompt" aria-label="Prompt setup" hidden>
+      <div class="prompt-head">
+        <div class="tabs" role="tablist" aria-label="Prompt setup">
+          <button id="tab-instructions" type="button" role="tab" aria-selected="true" aria-controls="prompt-instructions">Instructions</button>
+          <button id="tab-tools" type="button" role="tab" aria-selected="false" aria-controls="prompt-tools">Tools</button>
+        </div>
+        <button id="prompt-close" type="button" aria-label="Close prompt setup" title="Close (Esc)">×</button>
+      </div>
+      <section id="prompt-instructions" role="tabpanel" aria-labelledby="tab-instructions"></section>
+      <section id="prompt-tools" role="tabpanel" aria-labelledby="tab-tools" hidden></section>
+    </section>
+  </div>
+  <script type="module" src="session-debug-client.js"></script>
+</body>
+</html>

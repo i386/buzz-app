@@ -284,8 +284,8 @@ export function EmojiPicker({
       shape={reaction ? "round" : "control"}
       ref={trigger}
       type="button"
-      aria-label={reaction ? "Add reaction" : "Insert emoji"}
-      title={reaction ? "Add reaction" : "Insert emoji"}
+      aria-label={reaction ? "Add reaction" : "Emoji and GIFS"}
+      title={reaction ? "Add reaction" : "Emoji and GIFS"}
       aria-busy={(gifDiscoveryRequested && gifs === undefined) || undefined}
       disabled={disabled}
       onPointerEnter={() => setGifDiscoveryRequested(true)}

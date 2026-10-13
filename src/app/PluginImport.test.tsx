@@ -104,7 +104,7 @@ it("shows exact declared access and changes before an enabled update", async () 
   expect(manager.installImport).not.toHaveBeenCalled();
 });
 
-it.each([
+const outputLimitUpdates = [
   { previous: undefined, next: 65536, changed: true },
   { previous: 4096, next: 1048576, changed: true },
   { previous: 65536, next: 4096, changed: true },
@@ -112,9 +112,30 @@ it.each([
   { previous: undefined, next: 4096, changed: false },
   { previous: 4096, next: undefined, changed: false },
   { previous: 65536, next: 65536, changed: false },
+];
+const inputLimitUpdates = [
+  { previous: undefined, next: 1, changed: true },
+  { previous: 1, next: 65536, changed: true },
+  { previous: 65536, next: 1, changed: true },
+  { previous: 65536, next: undefined, changed: true },
+  { previous: undefined, next: undefined, changed: false },
+  { previous: 65536, next: 65536, changed: false },
+];
+
+it.each([
+  ...outputLimitUpdates.map((update) => ({
+    ...update,
+    kind: "output" as const,
+  })),
+  ...inputLimitUpdates.map((update) => ({ ...update, kind: "input" as const })),
 ])(
-  "reviews output-limit-only updates from $previous to $next",
-  async ({ previous, next, changed }) => {
+  "reviews $kind-limit-only updates from $previous to $next",
+  async ({ previous, next, changed, kind }) => {
+    const limit = kind === "input" ? "maxInputBytes" : "maxOutputBytes";
+    const allowance = (value: number | undefined) =>
+      kind === "input" && value === undefined
+        ? "input: none"
+        : `${kind}: up to ${value ?? 4096} bytes`;
     const command = {
       id: "tools",
       program: "agent-tools",
@@ -140,7 +161,7 @@ it.each([
               commands: [
                 {
                   ...command,
-                  ...(next === undefined ? {} : { maxOutputBytes: next }),
+                  ...(next === undefined ? {} : { [limit]: next }),
                 },
               ],
             },
@@ -159,9 +180,7 @@ it.each([
               commands: [
                 {
                   ...command,
-                  ...(previous === undefined
-                    ? {}
-                    : { maxOutputBytes: previous }),
+                  ...(previous === undefined ? {} : { [limit]: previous }),
                 },
               ],
             },
@@ -188,11 +207,11 @@ it.each([
       await screen.findByRole("region", { name: "Declared host access" }),
     );
     const grant = access.getByRole("listitem");
-    expect(grant).toHaveTextContent(`output: up to ${next ?? 4096} bytes`);
+    expect(grant).toHaveTextContent(allowance(next));
     if (changed) {
       expect(grant).toHaveTextContent("(new or changed)");
       expect(access.getByText(/^Removed:/)).toHaveTextContent(
-        `output: up to ${previous ?? 4096} bytes`,
+        allowance(previous),
       );
     } else {
       expect(grant).not.toHaveTextContent("(new or changed)");

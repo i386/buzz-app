@@ -43,7 +43,7 @@ test("community picker uses keyboard, proxy thumbnails, event-local history and 
     const draft = () =>
       page.getByRole("textbox", { name: /Message #general|Reply to thread/ });
     const picker = page.getByRole("button", {
-      name: "Insert emoji",
+      name: "Emoji and GIFS",
       exact: true,
     });
     await expect(
@@ -247,6 +247,15 @@ test("community picker uses keyboard, proxy thumbnails, event-local history and 
     // Independently prove this browser's real clipboard transport with the exact
     // handler payload; the editable source path intentionally uses native copy.
     await draft().fill(":party:");
+    // A lone custom emoji is enlarged without enlarging the editor's separator.
+    await expect(draft().locator('img[alt=":party:"]')).toHaveCSS(
+      "width",
+      "42px",
+    );
+    await expect(draft().locator("img.ProseMirror-separator")).toHaveCSS(
+      "width",
+      "0px",
+    );
     await draft().press("ControlOrMeta+a");
     await page.keyboard.press("ControlOrMeta+c");
     await draft().fill("");

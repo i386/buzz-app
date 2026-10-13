@@ -14,7 +14,6 @@ import path from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 import { portForPath } from "../../scripts/worktree-port.mjs";
-import { runtimeFixture } from "./agent-runtime-fixture.mjs";
 
 // Real Git worktrees and subprocesses; only Swift rendering and pnpm are stubs.
 // The macOS-only launcher wiring also runs on a Mac, without opening an app.
@@ -76,7 +75,7 @@ function fixture(t) {
   );
   env.PATH = `${tools}${path.delimiter}${env.PATH}`;
   for (const cwd of [main, linked]) {
-    runtimeFixture(cwd);
+    mkdirSync(path.join(cwd, "scripts"), { recursive: true });
     const vite = path.join(cwd, "node_modules/vite");
     mkdirSync(vite, { recursive: true });
     writeFileSync(

@@ -15,24 +15,6 @@ pub(crate) fn bounded_content(content: Map<String, Value>) -> Result<String> {
     Ok(serialized)
 }
 
-pub(crate) fn initial_content(
-    name: &str,
-    about: Option<&str>,
-    picture: Option<&str>,
-) -> Result<String> {
-    let mut content = Map::new();
-    content.insert("name".into(), json!(name));
-    content.insert("display_name".into(), json!(name));
-    content.insert("bot".into(), json!(true));
-    if let Some(about) = about {
-        content.insert("about".into(), json!(about));
-    }
-    if let Some(picture) = picture {
-        content.insert("picture".into(), json!(picture));
-    }
-    bounded_content(content)
-}
-
 #[derive(Deserialize)]
 struct Profile {
     id: String,

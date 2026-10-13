@@ -21,3 +21,35 @@ it("recognizes typed GitHub references while refusing lookalike hosts and invali
   ])
     expect(parseGitHubReference(url)).toBeUndefined();
 });
+
+it("claims only PR and issue links whose target the pane can show", () => {
+  const pull = "https://github.com/block/buzz-app/pull/838";
+  for (const fragment of ["", "#issuecomment-123", "#pullrequestreview-456"])
+    expect(parseGitHubReference(`${pull}${fragment}`)?.url).toBe(
+      `${pull}${fragment}`,
+    );
+  expect(
+    parseGitHubReference("https://github.com/block/buzz-app/issues/12")?.url,
+  ).toBe("https://github.com/block/buzz-app/issues/12");
+  for (const url of [
+    `${pull}#discussion_r4240253516`,
+    `${pull}#event-987`,
+    `${pull}#partial-timeline`,
+    `${pull}#issuecomment-`,
+    `${pull}#pullrequestreview-abc`,
+    `${pull}/files`,
+    `${pull}/files#diff-0123abcd`,
+    `${pull}/files#r4240253516`,
+    `${pull}/files/abcdef1..0123456`,
+    `${pull}/commits`,
+    `${pull}/commits/abcdef1`,
+    `${pull}/commits/abcdef1#r4240253516`,
+    `${pull}/checks`,
+    `${pull}/checks?check_run_id=1`,
+    `${pull}/conflicts`,
+    `${pull}/changes`,
+    `${pull}/activity`,
+    "https://github.com/block/buzz-app/issues/12#issuecomment-123",
+  ])
+    expect(parseGitHubReference(url), url).toBeUndefined();
+});

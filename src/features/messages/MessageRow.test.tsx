@@ -14,7 +14,8 @@ import {
   within,
 } from "@testing-library/react";
 import { messageCopyText } from "./message-copy";
-import { profileTarget } from "../profiles/target";
+import { profileTarget, profileActivityViewTarget } from "../profiles/target";
+import { activityTarget } from "../agents/activity-target";
 import { renderToStaticMarkup } from "react-dom/server";
 import { foldMessages } from "../relay/fold";
 import { keypair, message, signed, summary } from "../relay/testing";
@@ -27,12 +28,6 @@ import type { UnreadCapability, UnreadSnapshot } from "../relay/unread";
 import type { RelaySession } from "../relay/session";
 import type { TypingEntry } from "../relay/typing";
 import { LinkLabel } from "../../bundled/links/InlineLink";
-
-vi.mock("../../shared/design-system/ui/agent-thinking/ThinkingBadge", () => ({
-  ThinkingBadge: ({ children }: { children: React.ReactNode }) => (
-    <span className="badge-pill-root">{children}</span>
-  ),
-}));
 
 const row: ChannelMessage = {
   id: "root",
@@ -75,6 +70,7 @@ it.each([false, true])(
       );
       expect(open).toHaveBeenCalledWith(
         profileTarget(authorId, { agent: agentEnvelope }),
+        { rootId: "root" },
       );
     } finally {
       cleanup();
@@ -82,7 +78,41 @@ it.each([false, true])(
   },
 );
 
-it("keeps agent badges but omits human presence and status symbols from messages", () => {
+it("tells link handlers the thread a reply was opened from", () => {
+  const open = vi.fn(() => true);
+  const authorId = "ab".repeat(32);
+  try {
+    renderDom(
+      <MessageRow
+        row={{
+          ...row,
+          authorId,
+          id: "reply",
+          threadRootId: "thread",
+          replyCount: 0,
+        }}
+        profile={undefined}
+        media={() => undefined}
+        onOpenLink={open}
+        canOpenLink={() => true}
+        day={false}
+        retry={undefined}
+      />,
+    );
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: `View ${authorId.slice(0, 10)} profile`,
+      }),
+    );
+    expect(open).toHaveBeenCalledWith(profileTarget(authorId), {
+      rootId: "thread",
+    });
+  } finally {
+    cleanup();
+  }
+});
+
+it("keeps plain agent presence without avatar activity, and omits human presence from messages", () => {
   const agentRow = { ...row, authorId: "a".repeat(64) };
   const subscribe = vi.fn(() => () => {});
   const status = vi.fn<() => "online" | "unknown">(() => "online");
@@ -131,8 +161,10 @@ it("keeps agent badges but omits human presence and status symbols from messages
       />,
     );
   const agent = show(true);
-  expect(agent).toContain('class="badge-pill-root"');
-  expect(agent).toContain('aria-label="Agent, available"');
+  expect(agent).not.toContain("agent-motion-avatar");
+  expect(agent).toContain('data-status="online"');
+  expect(agent).toContain('data-avatar-shape="squircle"');
+  expect(agent).toContain('aria-label="Agent, online"');
   const human = show(false);
   expect(human).not.toContain('data-status="online"');
   expect(human).not.toContain("data-compact");
@@ -170,11 +202,10 @@ it("keeps agent badges but omits human presence and status symbols from messages
   });
   expect(
     screen.getByRole("button", { name: "View aaaaaaaaaa profile" }),
-  ).toHaveAccessibleDescription("Presence: online Agent is thinking");
-  expect(document.querySelector(".agent-motion-avatar")).toHaveAttribute(
-    "aria-hidden",
-    "true",
-  );
+  ).toHaveAccessibleDescription("Presence: online");
+  expect(document.querySelector(".agent-motion-avatar")).toBeNull();
+  expect(document.querySelector('[data-status="online"]')).toBeInTheDocument();
+  expect(activityListeners.size).toBe(0);
   act(() => {
     working = false;
     for (const listener of activityListeners) listener();
@@ -952,7 +983,7 @@ it.each([9, 40002])(
     if (!resent) throw new Error("missing resent message");
     expect(resent.mentions).toEqual([]);
     expect(messageCopyText(resent, profiles, [])).toBe(content);
-    const open = vi.fn((_target: string) => true);
+    const open = vi.fn((_target: string, _origin?: unknown) => true);
     try {
       renderDom(
         <MessageRow
@@ -975,7 +1006,10 @@ it.each([9, 40002])(
         expect(document.activeElement).toBe(reference);
       });
       expect(open.mock.calls).toEqual(
-        people.map(({ pubkey }) => [profileTarget(pubkey)]),
+        people.map(({ pubkey }) => [
+          profileTarget(pubkey),
+          { rootId: resent.id },
+        ]),
       );
       expect(resent.mentions).toEqual([]);
     } finally {
@@ -1154,6 +1188,7 @@ it.each(["peer", "own"] as const)(
       outbox: {
         supports: () => true,
         subscribe: () => () => {},
+        observeSend: () => () => {},
         snapshot: () => operations,
       },
       unread: {
@@ -1337,7 +1372,7 @@ it.each([undefined, "canonical-root"])(
   },
 );
 
-it("shows working dots only while a known agent types in this thread", () => {
+it("shows unbadged working-agent avatars and shared dots only while a known agent types in this thread", () => {
   // The viewer's own agents come from the library; no loaded row names them.
   // Another person's agent only declares itself in its profile.
   const agent = "a".repeat(64);
@@ -1346,7 +1381,7 @@ it("shows working dots only while a known agent types in this thread", () => {
   const cached = new Map([[foreign, { name: "Stranger", isAgent: true }]]);
   const library = {
     identities: [
-      { pubkey: agent, name: "Brain" },
+      { pubkey: agent, name: "Brain", avatar: "https://safe/brain" },
       { pubkey: other, name: "Pinky" },
     ],
   };
@@ -1374,10 +1409,42 @@ it("shows working dots only while a known agent types in this thread", () => {
       },
     },
   } as unknown as RelaySession;
-  let view = renderMessage({ session, onOpenThread: () => {} });
+  const media = vi.fn(() => "https://proxy/brain");
+  let view = renderMessage({ session, media, onOpenThread: () => {} });
   try {
     const working = screen.getByRole("button", {
       name: "View thread: 23 replies. Brain working",
+    });
+    const indicator = working.querySelector("[data-thread-working]");
+    expect(indicator).not.toBeNull();
+    expect(
+      indicator?.querySelectorAll('[data-avatar-shape="squircle"]'),
+    ).toHaveLength(1);
+    expect(indicator?.querySelector("img")).toHaveAttribute(
+      "src",
+      "https://proxy/brain",
+    );
+    expect(media).toHaveBeenCalledWith("https://safe/brain", "small");
+    expect(indicator?.querySelector(".buzz-avatar-status-dot")).toBeNull();
+    expect(indicator?.querySelector("i")).toBeNull();
+    act(() => {
+      entries = [
+        { channelId: row.channelId, threadRootId: row.id, pubkey: agent },
+        { channelId: row.channelId, threadRootId: row.id, pubkey: other },
+      ];
+      for (const listener of listeners) listener();
+    });
+    expect(
+      indicator?.querySelectorAll('[data-avatar-shape="squircle"]'),
+    ).toHaveLength(2);
+    expect(working).toHaveAccessibleName(
+      "View thread: 23 replies. Brain, Pinky working",
+    );
+    act(() => {
+      entries = [
+        { channelId: row.channelId, threadRootId: row.id, pubkey: agent },
+      ];
+      for (const listener of listeners) listener();
     });
     expect(working.querySelector("[data-thread-working]")).not.toBeNull();
     expect(working).not.toHaveTextContent(/is working|agents are working/);
@@ -1659,6 +1726,7 @@ it("opens the exact source thread from a shared message", () => {
     fireEvent.click(screen.getByRole("link", { name: "Thread" }));
     expect(open).toHaveBeenCalledWith(
       `buzz://message?channel=channel&id=${rootId}&thread=${rootId}`,
+      { rootId: "root" },
     );
   } finally {
     cleanup();
@@ -1764,7 +1832,12 @@ it("dismisses an unsubmitted report when its retained row is suspended", async (
     fireEvent.click(
       screen.getByRole("button", { name: "More message actions" }),
     );
-    fireEvent.click(await screen.findByRole("menuitem", { name: "Report" }));
+    const reportItem = await screen.findByRole("menuitem", { name: "Report" });
+    expect(reportItem.previousElementSibling).toHaveAttribute(
+      "role",
+      "separator",
+    );
+    fireEvent.click(reportItem);
     expect(
       await screen.findByRole("dialog", { name: "Report message" }),
     ).toBeInTheDocument();
@@ -1802,7 +1875,9 @@ it("presents automation, links the owner and discloses the separate relay signer
     fireEvent.click(
       screen.getByRole("button", { name: "View workflow owner Wes profile" }),
     );
-    expect(open).toHaveBeenCalledWith(profileTarget(ownerId));
+    expect(open).toHaveBeenCalledWith(profileTarget(ownerId), {
+      rootId: "root",
+    });
     fireEvent.click(
       screen.getByRole("button", { name: "Workflow message details" }),
     );
@@ -2053,6 +2128,178 @@ it("keeps a plugin action dialog closed when its plugin is reinstalled with the 
     expect(screen.queryByText("action dialog")).toBeNull();
     swap([entry()]);
     expect(screen.queryByText("action dialog")).toBeNull();
+  } finally {
+    cleanup();
+  }
+});
+
+it("shows a message for agents as one line from its author to whom it addresses", () => {
+  const agent = keypair();
+  const rivet = "b".repeat(64);
+  const tagged = (audience: string, content: string) =>
+    foldMessages("channel", keypair().pubkey, [
+      signed(agent, {
+        kind: 9,
+        content,
+        created_at: 5,
+        tags: [
+          ["h", "channel"],
+          ["p", rivet],
+          ["audience", audience],
+        ],
+      }),
+    ])[0] as ChannelMessage;
+  expect(tagged("everyone", "hi").audience).toBeUndefined();
+  expect(tagged("unknown", "hi").audience).toBeUndefined();
+  const quiet = tagged(
+    "agents",
+    "@Rivet, **run** the suite\n\nThen report back to @Rivet.",
+  );
+  expect(quiet.audience).toBe("agents");
+  try {
+    renderDom(
+      <MessageRow
+        row={quiet}
+        profile={{ name: "Morgarita" }}
+        participantProfiles={new Map([[rivet, { name: "Rivet" }]])}
+        media={() => undefined}
+        onOpenLink={() => false}
+        day={false}
+        retry={undefined}
+      />,
+    );
+    const line = screen.getByRole("button", {
+      name: "Morgarita to Rivet: **run** the suite…",
+    });
+    expect(line).toHaveAttribute("aria-expanded", "false");
+    // Reveal focuses the scroll anchor with tabIndex -1; on the button, that
+    // would take the only toggle out of the Tab order.
+    expect(line).not.toHaveAttribute("data-message-id");
+    expect(line.parentElement).toHaveAttribute("data-message-id");
+    expect(screen.queryByText(/Then report back/)).toBeNull();
+    fireEvent.click(line);
+    expect(line).toHaveAttribute("aria-expanded", "true");
+    // The body keeps later mentions but drops the one the line shows.
+    expect(screen.getByText(/Then report back/)).toBeInTheDocument();
+    expect(screen.queryByText("@Rivet,")).toBeNull();
+    expect(screen.getByText("run").tagName).toBe("STRONG");
+    // Anywhere in the open box folds it back.
+    fireEvent.click(screen.getByText(/Then report back/));
+    expect(line).toHaveAttribute("aria-expanded", "false");
+  } finally {
+    cleanup();
+  }
+});
+
+it("keeps an agents message that opens with prose, or is only a mention, as written", () => {
+  const rivet = "b".repeat(64);
+  const line = (content: string) => {
+    try {
+      renderDom(
+        <MessageRow
+          row={{ ...row, content, mentions: [rivet], audience: "agents" }}
+          profile={{ name: "Morgarita" }}
+          participantProfiles={new Map([[rivet, { name: "Rivet" }]])}
+          media={() => undefined}
+          onOpenLink={() => false}
+          day={false}
+          retry={undefined}
+        />,
+      );
+      return screen.getByRole("button").getAttribute("aria-label");
+    } finally {
+      cleanup();
+    }
+  };
+  expect(line("thanks @Rivet")).toBe("Morgarita: thanks @Rivet");
+  expect(line("@Rivet")).toBe("Morgarita: @Rivet");
+});
+
+it.each([
+  "available",
+  "human",
+  "activity disabled",
+  "profiles disabled",
+  "retired",
+])(
+  "message activity action respects exact agent and active destinations: %s",
+  async (mode) => {
+    const author = "ab".repeat(32);
+    let retired = false;
+    const target = profileActivityViewTarget(author);
+    const raw = activityTarget(author, row.channelId);
+    const open = vi.fn();
+    const canOpen = (value: string) =>
+      !retired &&
+      !(mode === "activity disabled" && value === raw) &&
+      !(mode === "profiles disabled" && value === target);
+    try {
+      renderDom(
+        <MessageRow
+          row={{
+            ...row,
+            authorId: author,
+            ...(mode !== "human" ? { agentEnvelope: true as const } : {}),
+          }}
+          profile={undefined}
+          media={() => undefined}
+          onOpenLink={open}
+          canOpenLink={canOpen}
+          day={false}
+          retry={undefined}
+        />,
+      );
+      fireEvent.click(
+        screen.getByRole("button", { name: "More message actions" }),
+      );
+      await screen.findByRole("menu");
+      if (mode === "available" || mode === "retired") {
+        const item = screen.getByRole("menuitem", { name: "View activity" });
+        expect(item.querySelector(".buzz-menu-icon svg")).toBeInTheDocument();
+        expect(screen.queryByRole("separator")).not.toBeInTheDocument();
+        retired = mode === "retired";
+        fireEvent.click(item);
+        if (retired) expect(open).not.toHaveBeenCalled();
+        else expect(open).toHaveBeenCalledWith(target);
+      } else
+        expect(
+          screen.queryByRole("menuitem", { name: "View activity" }),
+        ).not.toBeInTheDocument();
+    } finally {
+      cleanup();
+    }
+  },
+);
+
+it("keeps agent and human emoji reactions ordinary, without treating them as activity", () => {
+  const agent = { id: "agent-reaction", authorId: "agent" };
+  const human = { id: "human-reaction", authorId: "human" };
+  const reactions = [
+    { content: "👀", events: [agent, human] },
+    { content: "💬", events: [agent] },
+    { content: "✅", events: [agent] },
+  ];
+  try {
+    const view = renderDom(
+      <MessageRow
+        row={{ ...row, reactions }}
+        profile={undefined}
+        media={() => undefined}
+        onOpenLink={() => false}
+        day={false}
+        retry={undefined}
+        agentPubkeys={new Set(["agent"])}
+        participantProfiles={
+          new Map([["agent", { name: "Other agent", isAgent: true }]])
+        }
+      />,
+    );
+    expect(view.container.textContent).toContain("👀 2");
+    expect(view.container.textContent).toContain("💬 1");
+    expect(view.container.textContent).toContain("✅ 1");
+    expect(
+      screen.queryByRole("img", { name: "Other agent working" }),
+    ).toBeNull();
   } finally {
     cleanup();
   }

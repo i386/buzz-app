@@ -277,23 +277,6 @@ it("restores a signed community profile and preserves extra fields when publishi
   ).rejects.toThrow("not confirmed");
 });
 
-it("authorizes a new agent only through the native pending-create command", async () => {
-  const auth = ["auth", key.pubkey, "", "ab".repeat(64)];
-  vi.mocked(invoke).mockResolvedValueOnce(auth);
-  const request = { pubkey: "ba".repeat(32), owner: key.pubkey };
-  await expect(
-    communityRequest(community, "authorize-agent", request),
-  ).resolves.toEqual({ auth });
-  expect(invoke).toHaveBeenCalledExactlyOnceWith(
-    "agent_control_create_authorize",
-    { destination: community, ...request },
-  );
-  await expect(
-    communityRequest(community, "authorize-agent", { owner: key.pubkey }),
-  ).rejects.toThrow("Invalid agent owner authorization");
-  expect(invoke).toHaveBeenCalledOnce();
-});
-
 it("signs the NIP-43 leave request for the community and classifies the relay's answer", async () => {
   respond = (path, body) =>
     path === "/events"

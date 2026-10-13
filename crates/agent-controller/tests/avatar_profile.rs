@@ -13,6 +13,7 @@ fn profile(picture: Option<&str>) -> CreationProfile {
         auth: json!(["auth", "owner", "", "signature"]).to_string(),
         name: "New name".into(),
         picture: picture.map(str::to_owned),
+        name_pending: false,
         about: None,
         revision: 2,
     }
@@ -63,18 +64,21 @@ fn now() -> u64 {
 fn replacement_preserves_unowned_metadata_and_omitted_picture_but_can_clear() {
     let key = Secret::parse(KEY, PUB).unwrap();
     let old = signed(&json!({"name":"Old", "display_name":"External display", "bot":false, "picture":"https://images.example/old.png", "about":"Keep me", "nip05":"alice@example.com", "extension":{"nested":[1,2]}}).to_string(), now(), 0);
-    for picture in [None, Some("https://images.example/new.png"), Some("")] {
-        let event = profile(picture)
-            .event(&key, std::slice::from_ref(&old))
-            .unwrap();
+    for (picture, name_pending) in [
+        (None, false),
+        (Some("https://images.example/new.png"), false),
+        (Some(""), false),
+        (None, true),
+    ] {
+        let mut publication = profile(picture);
+        publication.name_pending = name_pending;
+        publication.name = "Luna".into();
+        let event = publication.event(&key, std::slice::from_ref(&old)).unwrap();
         verify(&event);
         assert_eq!(
             event["tags"],
             json!([["custom", "keep"], ["auth", "owner", "", "signature"]])
         );
-        profile(picture)
-            .confirm(std::slice::from_ref(&event), event["id"].as_str().unwrap())
-            .unwrap();
         let content: Value = serde_json::from_str(event["content"].as_str().unwrap()).unwrap();
         if picture == Some("") {
             assert!(content.get("picture").is_none());
@@ -87,10 +91,18 @@ fn replacement_preserves_unowned_metadata_and_omitted_picture_but_can_clear() {
         assert_eq!(content["about"], "Keep me");
         assert_eq!(content["nip05"], "alice@example.com");
         assert_eq!(content["extension"], json!({"nested":[1,2]}));
-        assert_eq!(content["name"], "Old");
-        assert_eq!(content["display_name"], "External display");
+        if name_pending {
+            assert_eq!(content["name"], "Luna");
+            assert_eq!(content["display_name"], "Luna");
+        } else {
+            assert_eq!(content["name"], "Old");
+            assert_eq!(content["display_name"], "External display");
+        }
         assert_eq!(content["bot"], false);
         assert!(event["created_at"].as_u64().unwrap() > old["created_at"].as_u64().unwrap());
+        publication
+            .confirm(std::slice::from_ref(&event), event["id"].as_str().unwrap())
+            .unwrap();
     }
     let initial = profile(None).event(&key, &[]).unwrap();
     verify(&initial);

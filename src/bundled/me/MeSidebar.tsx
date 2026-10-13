@@ -1,3 +1,9 @@
+import { useSyncExternalStore, type ComponentProps } from "react";
+import { useChannelNavigation } from "../../features/channel-navigation/ChannelNavigationState";
+import { ChannelActivityPopover } from "../channels/ChannelActivityPopover";
+import { useWorkingAgents } from "../channels/useWorkingAgents";
+import { WorkingAgentsBadge } from "../channels/WorkingAgentsBadge";
+import channelStyles from "../channels/Channels.module.css";
 import { sessionLinkTarget } from "../sessions/SessionsPage";
 import { SidebarFrame } from "../../features/channel-navigation/SidebarFrame";
 import { useChannelList, useRelayConnection } from "../../features/relay/react";
@@ -52,6 +58,39 @@ function PersonalHistory({
   const list = useChannelList(session.channels);
   const placement = useMePlacement(session);
   const selected = meSelection(target);
+  const handoff = useChannelNavigation();
+  const workingIds = useSyncExternalStore(
+    session.agentActivity.subscribeWorking,
+    session.agentActivity.workingSnapshot,
+    session.agentActivity.workingSnapshot,
+  );
+  const workingChannels = new Set<string>(JSON.parse(workingIds));
+  const openMessage = (channelId: string, messageId?: string) => {
+    if (handoff && handoff.session !== session) return;
+    const destination = sessionLinkTarget(
+      messageId
+        ? `buzz://message?channel=${channelId}&id=${messageId}`
+        : `buzz://channel/${channelId}`,
+      scope,
+      session.viewer,
+    );
+    if (destination) void navigator.open(destination);
+  };
+  const openAgentActivity = (channelId: string, agent: string) => {
+    if (!handoff || handoff.session !== session) return;
+    const intent = {
+      channelId,
+      agent,
+      trigger: document.querySelector<HTMLElement>(
+        `[data-me-channel-id="${CSS.escape(channelId)}"]`,
+      ),
+    };
+    handoff.activityAgent.current = intent;
+    void navigator.open(meTarget(scope, channelId)).then(() => {
+      if (handoff.activityAgent.current === intent)
+        handoff.activityAgent.current = undefined;
+    });
+  };
   const conversations = list.channels
     .filter((item) => !item.archived && placement.ids.includes(item.id))
     .sort(
@@ -85,21 +124,22 @@ function PersonalHistory({
           void navigator.open(meTarget(scope, "new", sectionId))
         }
         renderSession={(item) => (
-          <NavigationItem
+          <MeConversationRow
             key={item.id}
-            type="button"
+            session={session}
+            id={item.id}
+            title={item.title}
             selected={selected === item.id}
-            aria-current={selected === item.id ? "page" : undefined}
-            onClick={() => void navigator.open(meTarget(scope, item.id))}
-            label={
-              <span className={styles.sessionRow}>
-                <UnreadBadge
-                  session={session}
-                  channelId={item.id}
-                  label={item.title}
-                />
-              </span>
+            working={workingChannels.has(item.id)}
+            onSelect={() => void navigator.open(meTarget(scope, item.id))}
+            onOpenThread={(thread) =>
+              openMessage(thread.channelId, thread.rootId)
             }
+            onOpenWorkingAgent={(id, _agent, messageId) => {
+              if (messageId) openMessage(id, messageId);
+              else void navigator.open(meTarget(scope, id));
+            }}
+            onOpenAgentActivity={openAgentActivity}
           />
         )}
       />
@@ -132,5 +172,72 @@ function PersonalHistory({
           </p>
         )}
     </nav>
+  );
+}
+
+function MeConversationRow({
+  session,
+  id,
+  title,
+  selected,
+  working,
+  onSelect,
+  onOpenThread,
+  onOpenWorkingAgent,
+  onOpenAgentActivity,
+}: {
+  session: RelaySession;
+  id: string;
+  title: string;
+  selected: boolean;
+  working: boolean;
+  onSelect: () => void;
+} & Pick<
+  ComponentProps<typeof ChannelActivityPopover>,
+  "onOpenThread" | "onOpenWorkingAgent" | "onOpenAgentActivity"
+>) {
+  const { agents, agentProfiles, waiting } = useWorkingAgents(
+    session,
+    id,
+    working,
+  );
+  return (
+    <ChannelActivityPopover
+      session={session}
+      channelId={id}
+      channelName={title}
+      agents={agents}
+      agentProfiles={agentProfiles}
+      onOpenThread={onOpenThread}
+      {...(onOpenWorkingAgent ? { onOpenWorkingAgent } : {})}
+      {...(onOpenAgentActivity ? { onOpenAgentActivity } : {})}
+      trigger={
+        <NavigationItem
+          type="button"
+          selected={selected}
+          data-me-channel-id={id}
+          aria-current={selected ? "page" : undefined}
+          onClick={onSelect}
+          label={
+            <span className={styles.sessionRow}>
+              <UnreadBadge session={session} channelId={id} label={title} />
+            </span>
+          }
+          trailing={
+            <span
+              className={channelStyles.indicatorStack}
+              data-me-working-indicator=""
+            >
+              <WorkingAgentsBadge
+                agents={agents}
+                profiles={agentProfiles}
+                channelName={title}
+                waiting={waiting}
+              />
+            </span>
+          }
+        />
+      }
+    />
   );
 }

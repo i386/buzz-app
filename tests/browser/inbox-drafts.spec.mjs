@@ -8,15 +8,18 @@ test.use({
   threadUnread: true,
   threadUnreadMentions: true,
   inboxDm: true,
+  inboxExplicitMentions: true,
   historyCounts: { alpha: 2, beta: 1 },
 });
 
-// Browser-only: real shared frames, native rich editing, visible history,
+// Browser-only: real adjacent preview panels, native rich editing, visible history,
 // scroll ownership and responsive geometry; lifecycle matrices stay in RTL.
-test("Draft and conversation previews share their frame and show real selected context", async ({
+test("Draft and conversation previews share their plain layout and show real selected context", async ({
   page,
   app,
 }, testInfo) => {
+  // Compare retained splits at the same available width.
+  await page.setViewportSize({ width: 1280, height: 900 });
   // A bounded, scrollable DM tail exercises bottom positioning. These rows are
   // signed upstream fixture data, not a client cache or live-account mutation.
   for (let index = 0; index < 16; index++)
@@ -50,8 +53,10 @@ test("Draft and conversation previews share their frame and show real selected c
   const inbox = page.getByRole("region", { name: "Inbox", exact: true });
   await expect(inbox.getByText("Checking recent activity…")).toHaveCount(0);
   const chooseActivity = async (label) => {
-    await inbox.getByRole("combobox", { name: "Activity type" }).click();
-    await page.getByRole("option", { name: label, exact: true }).click();
+    await inbox
+      .getByRole("button", { name: "Inbox filters", exact: true })
+      .click();
+    await page.getByRole("menuitemradio", { name: label, exact: true }).click();
   };
   await chooseActivity("Mentions");
   await inbox
@@ -62,13 +67,18 @@ test("Draft and conversation previews share their frame and show real selected c
     .click();
   const styleOf = (frame) =>
     frame.evaluate((element) => {
-      const style = getComputedStyle(element),
-        header = element.querySelector("header");
+      const style = getComputedStyle(element);
+      const detail = element.closest(
+        '[aria-label="Inbox detail"], [aria-label="Draft detail"]',
+      );
+      const header = detail.querySelector("header");
       return {
-        border: style.borderTopWidth,
-        color: style.borderTopColor,
-        radius: style.borderTopLeftRadius,
+        border: style.borderWidth,
+        radius: style.borderRadius,
+        shadow: style.boxShadow,
         fill: style.backgroundColor,
+        headers: detail.querySelectorAll("header").length,
+        embeddedHeaders: element.querySelectorAll("header").length,
         headerMinHeight: getComputedStyle(header).minHeight,
       };
     });
@@ -80,9 +90,23 @@ test("Draft and conversation previews share their frame and show real selected c
   await page.evaluate((mode) => {
     document.documentElement.dataset.colorMode = mode;
   }, mode);
+  const inboxDetail = inbox.getByRole("region", { name: "Inbox detail" });
+  // Full splitter input/bounds are covered by Inbox; here prove shared preference.
+  await inboxDetail.getByRole("separator").press("Home");
+  const resizedWidth = (await inboxDetail.boundingBox()).width;
   const expectedStyle = await styleOf(reference);
-  await reference.getByRole("button", { name: "Close thread" }).click();
-  await inbox.getByRole("button", { name: "Drafts", exact: true }).click();
+  expect(expectedStyle).toMatchObject({
+    border: "0px",
+    radius: "0px",
+    shadow: "none",
+    headers: 1,
+    embeddedHeaders: 0,
+  });
+  await inbox
+    .getByRole("region", { name: "Inbox detail" })
+    .getByRole("button", { name: "Close detail" })
+    .click();
+  await chooseActivity("Drafts");
   const draftList = inbox.getByRole("list", { name: "Drafts" });
   await expect(draftList.getByRole("listitem")).toHaveCount(3);
   await expect(inbox.getByRole("button", { name: "Refresh" })).toHaveCount(0);
@@ -98,6 +122,32 @@ test("Draft and conversation previews share their frame and show real selected c
         ),
       { scope, key },
     );
+  const selectDraft = async (label) => {
+    // The outer Inbox surface includes its own border; collapse uses the
+    // workspace's available content width, not that border or the viewport.
+    const available = await inbox.locator('[class*="workspace"]').boundingBox();
+    const collapsed = available.width <= 700;
+    if (collapsed && (await detail.count())) {
+      await expect(draftList).not.toBeVisible();
+      await detail
+        .getByRole("button", { name: "Close detail", exact: true })
+        .click();
+      await expect(detail).toHaveCount(0);
+    }
+    await expect(draftList).toBeVisible();
+    await draftList
+      .getByRole("button", { name: `Open draft for ${label}`, exact: true })
+      .click();
+    await expect(detail).toBeVisible();
+    if (collapsed) {
+      await expect(draftList).not.toBeVisible();
+      const box = await detail.boundingBox();
+      expect(box.x).toBe(available.x);
+      expect(box.width).toBe(available.width);
+    } else {
+      await expect(draftList).toBeVisible();
+    }
+  };
   const geometry = async (frame, history) => {
     await expect(frame.getByRole("form")).toHaveCount(1);
     await expect(frame.getByRole("textbox")).toBeVisible();
@@ -113,18 +163,39 @@ test("Draft and conversation previews share their frame and show real selected c
   };
   for (const width of [1280, 760, 390]) {
     await page.setViewportSize({ width, height: 900 });
-    await draftList
-      .getByRole("button", {
-        name: "Open draft for Alice Fixture",
-        exact: true,
-      })
-      .click();
+    await selectDraft("Alice Fixture");
+    const handle = detail.getByRole("separator", {
+      name: "Resize main and secondary panels",
+    });
+    if (width === 1280) {
+      await expect
+        .poll(async () => (await detail.boundingBox()).width)
+        .toBeCloseTo(resizedWidth, 0);
+      await handle.press("ArrowLeft");
+      await expect
+        .poll(async () => (await detail.boundingBox()).width)
+        .toBeCloseTo(resizedWidth + 16, 0);
+      await handle.press("Home");
+      const halfWidth = await detail.evaluate(
+        (element) => element.parentElement.clientWidth / 2,
+      );
+      await expect
+        .poll(async () => (await detail.boundingBox()).width)
+        .toBeCloseTo(halfWidth, 0);
+      // Drafts now places its toolbar directly in the grid, unlike Inbox.
+      const toolbar = inbox.locator('[class*="toolbar"]');
+      const headerBox = await detail.locator("header").boundingBox();
+      const toolbarBox = await toolbar.boundingBox();
+      expect(headerBox.y + headerBox.height).toBeCloseTo(
+        toolbarBox.y + toolbarBox.height,
+        0,
+      );
+    } else {
+      await expect(handle).not.toBeVisible();
+    }
     const dm = detail.getByRole("region", { name: "Conversation preview" });
     const history = dm.getByRole("region", { name: "Channel message history" });
     await detail.scrollIntoViewIfNeeded();
-    await expect(
-      detail.getByRole("heading", { name: "Draft · DM to Alice Fixture" }),
-    ).toBeVisible();
     await expect(
       history.getByText("Context line 15", { exact: true }),
     ).toBeInViewport();
@@ -153,9 +224,7 @@ test("Draft and conversation previews share their frame and show real selected c
     await page.screenshot({
       path: testInfo.outputPath(`dm-draft-${width}.png`),
     });
-    await draftList
-      .getByRole("button", { name: "Open draft for #Beta", exact: true })
-      .click();
+    await selectDraft("#Beta");
     const channel = detail.getByRole("region", {
       name: "Conversation preview",
     });
@@ -171,9 +240,7 @@ test("Draft and conversation previews share their frame and show real selected c
     await expect(
       channel.getByRole("textbox", { name: "Message #Beta" }),
     ).toContainText("Channel notes");
-    await draftList
-      .getByRole("button", { name: "Open draft for #Alpha", exact: true })
-      .click();
+    await selectDraft("#Alpha");
     const thread = detail.getByRole("complementary", { name: "Thread" });
     const replies = thread.getByRole("region", { name: "Thread messages" });
     await detail.scrollIntoViewIfNeeded();
@@ -200,7 +267,7 @@ test("Draft and conversation previews share their frame and show real selected c
     await geometry(thread, replies);
     expect(await styleOf(thread)).toEqual(expectedStyle);
     await expect(
-      detail.getByRole("button", { name: "Delete draft…" }),
+      detail.locator("header").getByRole("button", { name: "Delete draft…" }),
     ).toHaveAttribute("data-size", "sm");
     await page.screenshot({
       path: testInfo.outputPath(`thread-draft-${width}.png`),
@@ -253,7 +320,12 @@ test.describe("saved strict-window draft", () => {
     await openPage(page, "Inbox");
     const inbox = page.getByRole("region", { name: "Inbox", exact: true });
     await expect(inbox.getByText("Checking recent activity…")).toHaveCount(0);
-    await inbox.getByRole("button", { name: "Drafts", exact: true }).click();
+    await inbox
+      .getByRole("button", { name: "Inbox filters", exact: true })
+      .click();
+    await page
+      .getByRole("menuitemradio", { name: "Drafts", exact: true })
+      .click();
     await inbox
       .getByRole("list", { name: "Drafts" })
       .getByRole("button", { name: "Open draft for #Window room" })
@@ -266,10 +338,16 @@ test.describe("saved strict-window draft", () => {
       draft.getByText(newest.content, { exact: true }),
     ).toBeInViewport();
     await expect(draft.getByRole("form")).toHaveCount(1);
-    await draft.getByRole("button", { name: "Close thread" }).click();
-    await inbox.getByRole("button", { name: "Back to Inbox" }).click();
+    await draft.getByRole("button", { name: "Close detail" }).click();
+    await inbox
+      .getByRole("button", { name: "Inbox filters", exact: true })
+      .click();
+    await page.getByRole("menuitemradio", { name: "All", exact: true }).click();
     await expect(
-      inbox.getByRole("combobox", { name: "Activity type" }),
+      inbox.getByRole("list", { name: "Inbox conversations" }),
+    ).toBeVisible();
+    await expect(
+      inbox.getByRole("button", { name: "Inbox filters", exact: true }),
     ).toBeVisible();
   });
 });
@@ -292,7 +370,12 @@ test("two pages coordinate a selected draft through actual storage events", asyn
     await openPage(target, "Inbox");
     const inbox = target.getByRole("region", { name: "Inbox", exact: true });
     await expect(inbox.getByText("Checking recent activity…")).toHaveCount(0);
-    await inbox.getByRole("button", { name: "Drafts", exact: true }).click();
+    await inbox
+      .getByRole("button", { name: "Inbox filters", exact: true })
+      .click();
+    await target
+      .getByRole("menuitemradio", { name: "Drafts", exact: true })
+      .click();
     await inbox
       .getByRole("button", { name: "Open draft for #Beta", exact: true })
       .click();
@@ -370,10 +453,10 @@ test("two pages coordinate a selected draft through actual storage events", asyn
 
 // Browser-only: native keyboard activation and post-unmount focus handoff in
 // the responsive real workspace. Failure/race permutations stay in mounted RTL.
-test("keyboard draft retirement returns to its row, a remaining row, then Back to Inbox", async ({
+test("keyboard draft retirement returns to its row, a remaining row, then Inbox filters", async ({
   page,
   app,
-}) => {
+}, testInfo) => {
   const root = app.histories.get("primary/alpha")[0].id;
   const scope = `https://primary.example:${app.viewer}`;
   await page.addInitScript(
@@ -400,7 +483,15 @@ test("keyboard draft retirement returns to its row, a remaining row, then Back t
     await expect(control).toBeFocused();
     await page.keyboard.press("Enter");
   };
-  await activate(inbox.getByRole("button", { name: "Drafts", exact: true }));
+  const filters = inbox.getByRole("button", {
+    name: "Inbox filters",
+    exact: true,
+  });
+  await activate(filters);
+  await activate(
+    page.getByRole("menuitemradio", { name: "Drafts", exact: true }),
+  );
+  await expect(filters).toBeFocused();
   const beta = inbox.getByRole("button", {
     name: "Open draft for #Beta",
     exact: true,
@@ -412,22 +503,84 @@ test("keyboard draft retirement returns to its row, a remaining row, then Back t
   const detail = inbox.getByRole("region", { name: "Draft detail" });
   for (const width of [1280, 390]) {
     await page.setViewportSize({ width, height: 900 });
-    for (const [row, close] of [
-      [beta, "Close detail"],
-      [alpha, "Close thread"],
-    ]) {
+    for (const row of [beta, alpha]) {
       await activate(row);
       await expect(detail.getByRole("textbox")).toBeVisible();
-      await activate(detail.getByRole("button", { name: close }));
+      await activate(
+        detail.getByRole("button", { name: "Close detail", exact: true }),
+      );
       await expect(detail).toHaveCount(0);
       await expect(row).toBeFocused();
       await expect(row).toBeInViewport();
     }
   }
   await activate(beta);
-  await activate(detail.getByRole("button", { name: "Delete draft…" }));
+  const deleteDraft = detail
+    .locator("header")
+    .getByRole("button", { name: "Delete draft…", exact: true });
+  await expect(deleteDraft.locator("svg")).toHaveCount(1);
+  await expect(deleteDraft).toHaveText("");
+  const dialog = page.getByRole("alertdialog", { name: "Delete draft?" });
+  // Native modal placement, focus trapping and portal dismissal are browser contracts.
+  for (const [mode, width] of [
+    ["light", 1280],
+    ["dark", 760],
+    ["dark", 390],
+  ]) {
+    await page.setViewportSize({ width, height: 900 });
+    await page.evaluate((mode) => {
+      document.documentElement.dataset.colorMode = mode;
+    }, mode);
+    // ResizeObserver must commit the new container width before the baseline.
+    // A visible editor alone can still be using the prior viewport's split.
+    const available = await inbox
+      .locator('[class*="workspace"]')
+      .evaluate((element) => element.clientWidth);
+    await expect(detail.locator("[data-panel-resize]")).toHaveAttribute(
+      "aria-valuemax",
+      String(Math.max(316, available - 320)),
+    );
+    const editor = detail.getByRole("textbox");
+    const editorElement = await editor.elementHandle();
+    if (!editorElement) throw new Error("Missing selected draft editor");
+    const before = await editorElement.boundingBox();
+    await activate(deleteDraft);
+    await expect(dialog).toBeVisible();
+    const confirm = dialog.getByRole("button", {
+      name: "Delete draft",
+      exact: true,
+    });
+    await expect(confirm).toBeFocused();
+    await expect(dialog).toHaveAttribute("aria-modal", "true");
+    const box = await dialog.boundingBox();
+    expect(box.x + box.width / 2).toBeCloseTo(width / 2, 0);
+    expect(box.y + box.height / 2).toBeCloseTo(450, 0);
+    expect(box.x).toBeGreaterThanOrEqual(0);
+    expect(box.x + box.width).toBeLessThanOrEqual(width);
+    expect(await editorElement.boundingBox()).toEqual(before);
+    await page.keyboard.press("Tab");
+    await expect(dialog.getByRole("button", { name: "Cancel" })).toBeFocused();
+    await page.keyboard.press("Tab");
+    await expect(confirm).toBeFocused();
+    await page.screenshot({
+      path: testInfo.outputPath(`delete-draft-${mode}-${width}.png`),
+    });
+    await page.keyboard.press("Escape");
+    await expect(dialog).toHaveCount(0);
+    await expect(deleteDraft).toBeFocused();
+    await expect(detail).toBeVisible();
+    await expect(editor).toContainText("Channel draft");
+  }
+  await activate(deleteDraft);
   await expect(
-    detail.getByRole("button", { name: "Delete draft", exact: true }),
+    dialog.getByRole("button", { name: "Delete draft", exact: true }),
+  ).toBeFocused();
+  await dialog.getByRole("button", { name: "Cancel" }).click();
+  await expect(dialog).toHaveCount(0);
+  await expect(deleteDraft).toBeFocused();
+  await activate(deleteDraft);
+  await expect(
+    dialog.getByRole("button", { name: "Delete draft", exact: true }),
   ).toBeFocused();
   await page.keyboard.press("Enter");
   await expect(detail).toHaveCount(0);
@@ -440,10 +593,18 @@ test("keyboard draft retirement returns to its row, a remaining row, then Back t
     .poll(() => app.report.publications.filter(({ event }) => event.kind === 9))
     .toHaveLength(1);
   await expect(detail).toHaveCount(0);
-  const back = inbox.getByRole("button", { name: "Back to Inbox" });
-  await expect(back).toBeFocused();
+  await expect(filters).toBeFocused();
   await page.keyboard.press("Enter");
+  await activate(page.getByRole("menuitemradio", { name: "All", exact: true }));
   await expect(
-    inbox.getByRole("combobox", { name: "Activity type" }),
+    inbox.getByRole("list", { name: "Inbox conversations" }),
   ).toBeVisible();
+  await expect(filters).toBeFocused();
+  // Empty Drafts still returns keyboard focus to the replacement menu trigger.
+  await activate(filters);
+  await activate(
+    page.getByRole("menuitemradio", { name: "Drafts", exact: true }),
+  );
+  await expect(inbox.getByText("No drafts", { exact: true })).toBeVisible();
+  await expect(filters).toBeFocused();
 });

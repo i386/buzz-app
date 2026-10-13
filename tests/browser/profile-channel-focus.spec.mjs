@@ -91,7 +91,11 @@ test("profile channel focus ring paints on one row and both list boundaries", as
   await single.getByRole("button", { name: "One" }).focus();
   await expectPaintedRing(page, single, single.getByRole("button"));
 
-  await page.getByRole("button", { name: /^Close (?!Thread).* tab$/ }).click();
+  await page
+    .locator(
+      '.buzz-tabs-item:not(:has([data-tab-value^="thread:"])) > button:not([role="tab"])',
+    )
+    .click();
   await page
     .getByRole("article", { name: "Conversation", exact: true })
     .getByRole("button", { name: "View Viewer profile" })

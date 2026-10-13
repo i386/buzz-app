@@ -13,7 +13,7 @@ type ButtonVariant =
   | "link"
   | "primary"
   | "quiet";
-type ButtonSize = "xs" | "sm" | "md" | "lg" | "compact" | "default";
+type ButtonSize = "inline" | "xs" | "sm" | "md" | "lg" | "compact" | "default";
 
 export type ButtonProps = Omit<
   ComponentProps<typeof BaseButton>,

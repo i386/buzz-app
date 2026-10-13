@@ -51,7 +51,7 @@ test("Tauri and the release signer use microphone entitlements and verify the si
     /<key>com\.apple\.security\.device\.audio-input<\/key>\s*<true\s*\/>/,
   );
   const verify = jobs.build.steps.find(
-    (step) => step.name === "Verify release DMG and bundled runtime",
+    (step) => step.name === "Verify release DMG",
   );
   assert.ok(
     verify.run.includes(

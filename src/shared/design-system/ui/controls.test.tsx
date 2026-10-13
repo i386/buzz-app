@@ -5,6 +5,8 @@ import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { createRef, useState } from "react";
 import { Button } from "./Button";
+import { IconButton } from "./IconButton";
+import { PlusIcon } from "../icons";
 import { Field } from "./Field";
 import { Input } from "./Input";
 import { Textarea } from "./Textarea";
@@ -14,6 +16,39 @@ import { SearchField } from "./SearchField";
 import { Composer } from "./Composer";
 
 afterEach(cleanup);
+
+test("icon actions default to small while labelled actions remain medium", () => {
+  render(
+    <>
+      <IconButton aria-label="Add item" icon={<PlusIcon />} />
+      <Button>Continue</Button>
+    </>,
+  );
+  expect(screen.getByRole("button", { name: "Add item" })).toHaveAttribute(
+    "data-size",
+    "sm",
+  );
+  expect(screen.getByRole("button", { name: "Continue" })).toHaveAttribute(
+    "data-size",
+    "md",
+  );
+});
+
+test.each([
+  ["sm", "sm"],
+  ["md", "md"],
+  ["lg", "lg"],
+  ["compact", "sm"],
+  ["toolbar", "sm"],
+  ["default", "md"],
+  ["large", "lg"],
+  ["xs", "sm"],
+] as const)("explicit icon size %s retains its contract", (size, resolved) => {
+  render(<IconButton size={size} aria-label="Add item" icon={<PlusIcon />} />);
+  const control = screen.getByRole("button", { name: "Add item" });
+  expect(control).toHaveAttribute("data-size", resolved);
+  expect(control).toHaveAttribute("data-icon-size", size);
+});
 
 test("composer enables submission only for an available non-empty draft", async () => {
   const user = userEvent.setup();

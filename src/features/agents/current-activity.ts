@@ -1,3 +1,4 @@
+import { localActivity, localWorkLabel } from "../agents/local-activity";
 import type { RelaySession } from "../relay/session";
 import type { TypingEntry } from "../relay/typing";
 import { activityTranscript, type ToolItem } from "./activity-transcript";
@@ -134,6 +135,25 @@ export function currentActivity(
         tools.length > 1
           ? `Running ${tools.length} tools`
           : toolLabel(firstTool);
+  }
+  const local = localActivity(snapshot, channelId, threadRootId);
+  for (const [agent, work] of local) {
+    agents.delete(agent);
+    if (work.state !== "working" && work.state !== "waiting") continue;
+    const roots = [
+      ...new Set(
+        (snapshot?.local ?? [])
+          .filter(
+            (row) =>
+              row.agent === agent &&
+              row.channelId === channelId &&
+              (!threadRootId || row.threadRootId === threadRootId) &&
+              (row.state === "working" || row.state === "waiting"),
+          )
+          .map((row) => row.threadRootId),
+      ),
+    ];
+    agents.set(agent, { label: localWorkLabel(work), roots });
   }
   return agents;
 }

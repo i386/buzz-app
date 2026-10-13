@@ -27,6 +27,7 @@ function setup(snapshot: ThreadSnapshot, messageId = root.id) {
     subscribe: () => () => {},
     refresh: vi.fn(async () => {}),
     loadMore: vi.fn(async () => {}),
+    retarget: vi.fn<ThreadView["retarget"]>(async () => "selected"),
     dispose: vi.fn(),
   } satisfies ThreadView;
   const thread = vi.fn(() => view);

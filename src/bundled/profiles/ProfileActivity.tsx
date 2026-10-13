@@ -12,10 +12,12 @@ export function ProfileActivity({
   session,
   pubkey,
   context,
+  onViewActivity,
 }: {
   session: RelaySession;
   pubkey: string;
   context: PanelProps["context"];
+  onViewActivity?: (() => void) | undefined;
 }) {
   const snapshot = useSyncExternalStore(
     session.agentActivity.subscribe,
@@ -82,7 +84,11 @@ export function ProfileActivity({
       <div>
         <Button
           size="compact"
-          onClick={() => (context.push ?? context.open)(target)}
+          onClick={() => {
+            if (!context.canOpen(target)) return;
+            if (onViewActivity) onViewActivity();
+            else (context.push ?? context.open)(target);
+          }}
         >
           View activity
         </Button>

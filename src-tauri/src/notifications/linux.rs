@@ -1,7 +1,7 @@
 //! Standard freedesktop notifications, with the receiver armed before Notify.
 use super::{Outcome, Pending, MAX_ACTIVE};
 use futures_lite::{future, StreamExt};
-use std::{collections::HashMap, sync::Arc};
+use std::{borrow::Cow, collections::HashMap, sync::Arc};
 use zbus::{zvariant::Value, Connection, Message, Proxy};
 
 const SERVICE: &str = "org.freedesktop.Notifications";
@@ -40,6 +40,7 @@ async fn notify(connection: &Connection, title: &str, body: &str) -> Result<Outc
         .receive_all_signals()
         .await
         .map_err(|e| e.to_string())?;
+    let body = notification_body(body, &capabilities);
     let icon = std::env::current_exe()
         .ok()
         .and_then(|path| {
@@ -52,7 +53,7 @@ async fn notify(connection: &Connection, title: &str, body: &str) -> Result<Outc
         0u32,
         icon,
         title,
-        body,
+        body.as_ref(),
         vec!["default", "Open"],
         // Sound is app-owned: the renderer plays the selected bundled sound
         // after delivery, so ask the server not to add its own.
@@ -101,6 +102,28 @@ async fn notify(connection: &Connection, title: &str, body: &str) -> Result<Outc
         }
     }
     Err("Desktop notification service disconnected".into())
+}
+
+/// The body is plain text. A server that advertises `body-markup` parses it
+/// as markup, so escape it there; typed `<harness>` must stay literal.
+fn notification_body<'a>(body: &'a str, capabilities: &[String]) -> Cow<'a, str> {
+    if !capabilities
+        .iter()
+        .any(|capability| capability == "body-markup")
+        || !body.contains(['&', '<', '>'])
+    {
+        return Cow::Borrowed(body);
+    }
+    let mut escaped = String::with_capacity(body.len());
+    for character in body.chars() {
+        match character {
+            '&' => escaped.push_str("&amp;"),
+            '<' => escaped.push_str("&lt;"),
+            '>' => escaped.push_str("&gt;"),
+            other => escaped.push(other),
+        }
+    }
+    Cow::Owned(escaped)
 }
 
 fn response(message: &Message) -> Result<Option<(u32, Outcome)>, String> {

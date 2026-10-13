@@ -1,10 +1,23 @@
 // @vitest-environment jsdom
 import { File } from "node:buffer";
-import { act, cleanup, renderHook, waitFor } from "@testing-library/react";
+import {
+  act,
+  cleanup,
+  renderHook,
+  render,
+  screen,
+  fireEvent,
+  waitFor,
+} from "@testing-library/react";
 import { assert, afterEach, expect, it, vi } from "vitest";
+import { ComposerAttachments } from "./ComposerAttachments";
 import type { RelaySession } from "../relay/session";
 import type { UploadedAttachment } from "../relay/attachments";
-import { useAttachmentDraft } from "./attachment-draft";
+import {
+  useAttachmentDraft,
+  attachmentDraft,
+  transferAttachmentDraft,
+} from "./attachment-draft";
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -56,13 +69,13 @@ function uploaded(name = "notes.txt"): UploadedAttachment {
 }
 afterEach(cleanup);
 
-it("queues files without starting network transfer until send preparation", async () => {
+it("starts uploading on add and send preparation reuses the in-flight upload", async () => {
   const h = fixture();
   const draft = renderHook(() => useAttachmentDraft(h.session, "one", "one"));
   act(() => draft.result.current.store.add([file()]));
-  expect(draft.result.current.items[0]?.status).toBe("queued");
+  await waitFor(() => expect(h.upload).toHaveBeenCalledTimes(1));
+  expect(draft.result.current.items[0]?.status).toBe("uploading");
   expect(draft.result.current.blocked).toBe(false);
-  expect(h.upload).not.toHaveBeenCalled();
 
   const send = new AbortController();
   let work: Promise<readonly UploadedAttachment[]>;
@@ -79,41 +92,69 @@ it("queues files without starting network transfer until send preparation", asyn
   expect(draft.result.current.items[0]?.status).toBe("ready");
 });
 
-it("retains files across navigation and starts work only after explicit retry/send", async () => {
+it.each(["preparing", "uploading"] as const)(
+  "resumes %s and queued files after navigation and sends without Retry",
+  async (phase) => {
+    const h = fixture();
+    const first = renderHook(() =>
+      useAttachmentDraft(h.session, "channel-one", "one"),
+    );
+    act(() => first.result.current.store.add([file("1.txt"), file("2.txt")]));
+    if (phase === "uploading")
+      await waitFor(() => expect(h.calls).toHaveLength(1));
+    else expect(h.calls).toHaveLength(0);
+    const interrupted = h.calls.length;
+    first.unmount();
+    if (interrupted) expect(h.calls[0]?.signal.aborted).toBe(true);
+    expect(
+      first.result.current.store.snapshot().map((item) => item.status),
+    ).toEqual(["queued", "queued"]);
+    const returned = renderHook(() =>
+      useAttachmentDraft(h.session, "channel-one", "one"),
+    );
+    expect(returned.result.current.blocked).toBe(false);
+    await waitFor(() => expect(h.calls).toHaveLength(interrupted + 1));
+    let work!: Promise<readonly UploadedAttachment[]>;
+    await act(async () => {
+      work = returned.result.current.store.prepareForSend(
+        new AbortController().signal,
+      );
+    });
+    expect(h.calls).toHaveLength(interrupted + 1);
+    // A late result from the aborted owner must not replace resumed work.
+    if (interrupted)
+      await act(async () => h.calls[0]?.result.resolve(uploaded("stale.txt")));
+    expect(returned.result.current.items[0]?.uploaded).toBeUndefined();
+    await act(async () =>
+      h.calls[interrupted]?.result.resolve(uploaded("1.txt")),
+    );
+    await waitFor(() => expect(h.calls).toHaveLength(interrupted + 2));
+    await act(async () => {
+      h.calls[interrupted + 1]?.result.resolve(uploaded("2.txt"));
+      expect(await work).toEqual([uploaded("1.txt"), uploaded("2.txt")]);
+    });
+    expect(returned.result.current.blocked).toBe(false);
+  },
+);
+
+it("preserves real upload errors while resuming unfinished siblings on return", async () => {
   const h = fixture();
-  const first = renderHook(() =>
-    useAttachmentDraft(h.session, "channel-one", "one"),
+  const first = renderHook(() => useAttachmentDraft(h.session, "one", "one"));
+  act(() =>
+    first.result.current.store.add([file("failed.txt"), file("pending.txt")]),
   );
-  act(() => first.result.current.store.add([file()]));
+  await waitFor(() => expect(h.calls).toHaveLength(1));
+  await act(async () => h.calls[0]?.result.reject(new Error("relay down")));
+  await waitFor(() => expect(h.calls).toHaveLength(2));
   first.unmount();
-  expect(h.upload).not.toHaveBeenCalled();
-
   const returned = renderHook(() =>
-    useAttachmentDraft(h.session, "channel-one", "one"),
+    useAttachmentDraft(h.session, "one", "one"),
   );
-  const queued = returned.result.current.items[0];
-  assert.exists(queued);
-  expect(queued.status).toBe("queued");
-  expect(returned.result.current.blocked).toBe(false);
-  act(() => returned.result.current.store.cancel());
-  expect(returned.result.current.items[0]?.status).toBe("queued");
-  expect(returned.result.current.blocked).toBe(false);
-  act(() => returned.result.current.store.retry(queued.id));
-  expect(returned.result.current.items[0]?.status).toBe("queued");
-  expect(h.upload).not.toHaveBeenCalled();
-
-  const send = new AbortController();
-  let work: Promise<readonly UploadedAttachment[]>;
-  await act(async () => {
-    work = returned.result.current.store.prepareForSend(send.signal);
-  });
-  expect(h.calls).toHaveLength(1);
-  await act(async () => {
-    h.calls[0]?.result.resolve(uploaded());
-    await work;
-  });
-  expect(returned.result.current.items[0]?.uploaded?.name).toBe("notes.txt");
-  expect(returned.result.current.blocked).toBe(false);
+  await waitFor(() => expect(h.calls).toHaveLength(3));
+  expect(returned.result.current.items[0]?.error).toBe("relay down");
+  expect(returned.result.current.items[0]?.status).toBe("error");
+  expect(returned.result.current.blocked).toBe(true);
+  expect(h.calls[2]?.file.name).toBe("pending.txt");
 });
 
 it("ignores a host progress report after an upload fails", async () => {
@@ -183,7 +224,7 @@ it("reuses successful descriptors after a partial upload failure", async () => {
   });
 });
 
-it("recovers a send abort that settles before cancellation without re-uploading ready files", async () => {
+it("aborting a send cancels eager uploads and retains ready descriptors", async () => {
   const h = fixture();
   const draft = renderHook(() => useAttachmentDraft(h.session, "one", "one"));
   act(() =>
@@ -206,10 +247,13 @@ it("recovers a send abort that settles before cancellation without re-uploading 
   });
   expect(draft.result.current.items.map((item) => item.status)).toEqual([
     "ready",
-    "queued",
+    "error",
   ]);
-  expect(draft.result.current.blocked).toBe(false);
+  expect(draft.result.current.blocked).toBe(true);
 
+  act(() =>
+    draft.result.current.store.retry(draft.result.current.items[1]?.id ?? ""),
+  );
   const retry = new AbortController();
   let retryWork: Promise<readonly UploadedAttachment[]>;
   await act(async () => {
@@ -245,6 +289,12 @@ it("removal and cancellation abort in-flight send preparation", async () => {
   act(() => draft.result.current.store.remove(item.id));
   expect(call.signal.aborted).toBe(true);
   await expect(work).rejects.toThrow();
+  expect(draft.result.current.items).toEqual([]);
+  await act(async () => {
+    call.progress?.(5, 5);
+    call.result.resolve(uploaded());
+    await call.result.promise;
+  });
   expect(draft.result.current.items).toEqual([]);
 
   act(() => draft.result.current.store.add([file("cancel.txt")]));
@@ -378,4 +428,110 @@ it("adds a copied snapshot without reupload, deduplicates and permits removal", 
   assert.exists(item);
   act(() => draft.result.current.store.remove(item.id));
   expect(draft.result.current.items).toHaveLength(0);
+});
+
+it("Send transfers the eager queue once and cancellation freezes active and queued attachments", async () => {
+  const h = fixture();
+  const source = renderHook(() =>
+    useAttachmentDraft(h.session, "composer", "one"),
+  );
+  act(() =>
+    source.result.current.store.add([
+      file("1.txt"),
+      file("2.txt"),
+      file("3.txt"),
+    ]),
+  );
+  await waitFor(() => expect(h.calls).toHaveLength(1));
+  const target = attachmentDraft(h.session, "background", "one");
+  const stop = target.subscribe(() => {});
+  const send = new AbortController();
+  act(() => transferAttachmentDraft(source.result.current.store, target));
+  act(() => source.result.current.store.clear());
+  source.unmount();
+  expect(h.calls[0]?.signal.aborted).toBe(false);
+  const work = target.prepareForSend(send.signal);
+  h.calls[0]?.result.resolve(uploaded("1.txt"));
+  await waitFor(() => expect(h.calls).toHaveLength(2));
+  h.calls[1]?.progress?.(3, 5);
+  expect(target.snapshot()[1]?.transfer).toEqual({ sent: 3, total: 5 });
+  send.abort();
+  await expect(work).rejects.toThrow();
+  expect(h.calls[1]?.signal.aborted).toBe(true);
+  const recovered = target.snapshot();
+  expect(recovered.map((item) => item.status)).toEqual([
+    "ready",
+    "error",
+    "error",
+  ]);
+  h.calls[1]?.result.resolve(uploaded("2.txt"));
+  await Promise.all(h.calls.map((call) => call.result.promise));
+  expect(target.snapshot()).toBe(recovered);
+  expect(h.upload).toHaveBeenCalledTimes(2);
+  stop();
+});
+
+it("renders real host transfer bytes as a determinate ring through completion", async () => {
+  const h = fixture();
+  function Draft() {
+    const draft = useAttachmentDraft(h.session, "progress-ring", "one");
+    return (
+      <>
+        <button type="button" onClick={() => draft.store.add([file()])}>
+          Attach fixture
+        </button>
+        <ComposerAttachments
+          items={draft.items}
+          disabled={false}
+          remove={draft.store.remove}
+          retry={draft.store.retry}
+          media={() => undefined}
+        />
+      </>
+    );
+  }
+  render(<Draft />);
+  fireEvent.click(screen.getByRole("button", { name: "Attach fixture" }));
+  await waitFor(() => expect(h.calls).toHaveLength(1));
+  const call = h.calls[0];
+  assert.exists(call);
+  expect(screen.getByRole("progressbar").hasAttribute("aria-valuenow")).toBe(
+    false,
+  );
+  for (const sent of [0, 2, 5]) {
+    act(() => call.progress?.(sent, 5));
+    const ring = screen.getByRole("progressbar");
+    expect(ring.getAttribute("aria-valuenow")).toBe(String(sent * 20));
+    expect(
+      ring
+        .querySelector("[data-upload-progress]")
+        ?.getAttribute("stroke-dasharray"),
+    ).toBe(`${sent * 20} 100`);
+  }
+  await act(async () => {
+    call.result.resolve(uploaded());
+  });
+  await waitFor(() => expect(screen.queryByRole("progressbar")).toBeNull());
+  expect(screen.getByRole("button", { name: "Remove notes.txt" })).toBeTruthy();
+});
+
+it("rejects eager upload errors until explicit Retry, including after Send handoff", async () => {
+  const h = fixture();
+  const draft = renderHook(() => useAttachmentDraft(h.session, "one", "one"));
+  act(() => draft.result.current.store.add([file()]));
+  await waitFor(() => expect(h.calls).toHaveLength(1));
+  await act(async () => h.calls[0]?.result.reject(new Error("relay down")));
+  expect(draft.result.current.blocked).toBe(true);
+  const target = attachmentDraft(h.session, "send", "one");
+  act(() => transferAttachmentDraft(draft.result.current.store, target));
+  await expect(
+    target.prepareForSend(new AbortController().signal),
+  ).rejects.toThrow("relay down");
+  expect(h.calls).toHaveLength(1);
+  expect(target.snapshot()[0]?.status).toBe("error");
+  target.retry(target.snapshot()[0]?.id ?? "");
+  await waitFor(() => expect(h.calls).toHaveLength(2));
+  const work = target.prepareForSend(new AbortController().signal);
+  h.calls[1]?.result.resolve(uploaded());
+  await expect(work).resolves.toEqual([uploaded()]);
 });

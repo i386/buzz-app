@@ -15,7 +15,7 @@ export async function buildApp(
     developmentReact,
     pluginFixtures,
     companionFixture,
-    agentManagement,
+    localAgentActivity,
     pairingFixture,
   },
   use,
@@ -79,26 +79,26 @@ export async function buildApp(
       },
       build: { outDir: join(directory, "dist"), emptyOutDir: true },
     };
-    if (agentManagement)
+    if (localAgentActivity)
       config.plugins.push({
-        name: "fixture-native-agent-control",
-        transform(_code, id) {
-          if (id !== join(root, "src/features/agents/control-native.ts"))
-            return;
-          return `
-import { createAgentControl } from "./control";
-import { controlFixture } from "./control-testing";
-export function nativeAgentControlHost() {
-  const fixture = controlFixture();
-  fixture.agent.relayUrl = "https://primary.example";
-  fixture.agent.pubkey = "2f01e5e15cca351daff3843fb70f3c2f0a1bdd05e5af888a67784ef3e10a2a01";
-  Object.assign(window, { agentManagementFixture: fixture });
-  return fixture.host;
-}
-export function createNativeAgentControl() {
-  return createAgentControl(nativeAgentControlHost());
-}
-`;
+        name: "fixture-local-agent",
+        transform(code, id) {
+          const fixture = JSON.stringify(
+            join(root, "tests/browser/local-agents-fixture.ts"),
+          );
+          if (id === join(root, "src/features/agents/native.ts")) {
+            const start = code.indexOf("export const nativeAgents =");
+            if (start < 0) throw new Error("Missing native Agents seam");
+            return (
+              code.slice(0, start) +
+              `import { localAgentsNative } from ${fixture};\nexport const nativeAgents = localAgentsNative;`
+            );
+          }
+          if (id === join(root, "src/bundled/index.ts"))
+            return (
+              `import { localAgentPlugin } from ${fixture};\n` +
+              code.replace("= [", "= [localAgentPlugin,")
+            );
         },
       });
     const start = performance.now();

@@ -70,10 +70,14 @@ test("video speed options escape the thread and restore focus after selection an
     });
   await trigger.evaluate((button) => {
     const scroller = button.closest("[data-message-scroller]");
-    scroller.scrollTop +=
-      button.getBoundingClientRect().top -
-      scroller.getBoundingClientRect().top -
-      40;
+    // WebKit truncates fractional scroll requests. Round the final position so
+    // fractional message heights still reach the same constrained-menu setup.
+    scroller.scrollTop = Math.round(
+      scroller.scrollTop +
+        button.getBoundingClientRect().top -
+        scroller.getBoundingClientRect().top -
+        40,
+    );
   });
   await expect
     .poll(() =>
@@ -511,4 +515,84 @@ test("enlarged media review reflows comments and keeps playback controls reachab
     .getByRole("button", { name: "Show comments", exact: true })
     .click();
   await expect(comments).toBeVisible();
+});
+
+// Browser-only: a CSS transform transition on an ancestor moves the top-layer
+// toolbar's slot without resizing, mutating or scrolling anything observable.
+test("comment actions revealed while the drawer slides realign when it settles", async ({
+  page,
+}) => {
+  await page.goto("/tests/fixtures/media-review.html?photo");
+  const review = page.getByRole("dialog", {
+    name: "Image viewer",
+    exact: true,
+  });
+  const drawer = review.getByRole("complementary", { name: "Media comments" });
+  const row = drawer.locator("[data-review-comment] [data-message-id]").first();
+  const actions = row.getByRole("group", {
+    name: "Message actions",
+    includeHidden: true,
+  });
+  const shown = () =>
+    expect
+      .poll(() => actions.evaluate((bar) => bar.matches(":popover-open")))
+      .toBe(true);
+  await expect(row).toBeVisible();
+  await review
+    .getByRole("button", { name: "Hide comments", exact: true })
+    .click();
+  await expect(drawer).toBeHidden();
+  // Hold the opening slide early in its transform transition, once it exists.
+  await page.evaluate(() => {
+    window.drawerHeld = new Promise((resolve) => {
+      const hold = (event) => {
+        if (
+          event.propertyName !== "transform" ||
+          !event.target.matches('aside[aria-label="Media comments"]')
+        )
+          return;
+        document.removeEventListener("transitionrun", hold);
+        const slide = event.target
+          .getAnimations()
+          .find((animation) => animation.transitionProperty === "transform");
+        slide.pause();
+        slide.currentTime = 40;
+        window.drawerSlide = slide;
+        resolve();
+      };
+      document.addEventListener("transitionrun", hold);
+    });
+  });
+  await review
+    .getByRole("button", { name: "Show comments", exact: true })
+    .click();
+  await page.evaluate(() => window.drawerHeld);
+  await row.getByText("Alex", { exact: true }).hover();
+  await shown();
+  const anchoring = () =>
+    actions.evaluate((bar) => {
+      const slot = bar.parentElement.getBoundingClientRect();
+      const rect = bar.getBoundingClientRect();
+      return {
+        right: Math.round(slot.right),
+        anchored:
+          Math.abs(slot.top - rect.bottom) < 1 &&
+          Math.abs(slot.right - rect.right) < 1,
+      };
+    });
+  const moving = await anchoring();
+  expect(moving.anchored).toBe(true);
+  await page.evaluate(() => {
+    window.drawerSlide.play();
+    return window.drawerSlide.finished.then(() => {});
+  });
+  await expect
+    .poll(() => drawer.evaluate((node) => getComputedStyle(node).transform))
+    .toBe("none");
+  // The slot settled well left of where the toolbar was revealed; the toolbar
+  // must follow it there without any further pointer, scroll or resize input.
+  const settled = await anchoring();
+  expect(moving.right - settled.right).toBeGreaterThan(20);
+  await expect.poll(anchoring).toEqual({ ...settled, anchored: true });
+  await shown();
 });

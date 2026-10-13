@@ -7,11 +7,11 @@ import { ToastSpecimens } from "./ToastSpecimens";
 
 afterEach(cleanup);
 
-it("hides portaled notices in Code and restores unresolved recovery in Preview", () => {
+it("hides portaled notices in Code and restores unresolved recovery in Preview", async () => {
   render(createElement(ToastSpecimens));
   fireEvent.click(screen.getByRole("button", { name: "Show recovery" }));
   expect(
-    screen.getByRole("dialog", { name: "Changes weren’t saved" }),
+    await screen.findByRole("dialog", { name: "Changes weren’t saved" }),
   ).toBeInTheDocument();
   fireEvent.click(screen.getByRole("tab", { name: "Code" }));
   expect(screen.getByRole("tabpanel", { name: "Code" })).toBeInTheDocument();
@@ -23,7 +23,7 @@ it("hides portaled notices in Code and restores unresolved recovery in Preview",
   ).not.toBeInTheDocument();
   fireEvent.click(screen.getByRole("tab", { name: "Preview" }));
   expect(
-    screen.getByRole("dialog", { name: "Changes weren’t saved" }),
+    await screen.findByRole("dialog", { name: "Changes weren’t saved" }),
   ).toBeInTheDocument();
   fireEvent.click(screen.getByRole("button", { name: "Retry saving" }));
   expect(

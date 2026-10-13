@@ -1,3 +1,4 @@
 patchedDependencies:
   '@base-ui/react@1.8.0': patches/@base-ui__react@1.8.0.patch
+  sonner@2.0.8: patches/sonner@2.0.8.patch
   virtua@0.51.0: patches/virtua@0.51.0.patch

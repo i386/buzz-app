@@ -13,7 +13,6 @@ import { afterEach, expect, it, vi } from "vitest";
 import { finalizeEvent, getPublicKey } from "nostr-tools";
 import { StrictMode } from "react";
 import { App } from "./App";
-import { requestSnapshotPreview } from "../features/agents/snapshot-preview";
 import { createServices, type AppServices } from "./services";
 import { matchesEvent } from "../features/relay/projection";
 import type { ReadFilter } from "../features/relay/events";
@@ -283,34 +282,4 @@ it("opens the viewer's profile from New message without discarding recipients or
   });
   await user.keyboard(" and keep editing");
   expect(editor).toHaveTextContent("Keep this unsent draft and keep editing");
-});
-
-it("mounts the received snapshot preview host without automatically importing", async () => {
-  const user = await setup();
-  await screen.findByRole("button", { name: "Your profile" });
-  const current = services;
-  if (!current) throw new Error("Missing services");
-  const connection = current.relay.snapshot();
-  if (connection.status !== "ready") throw new Error("Missing ready session");
-  const create = vi.fn();
-  Object.assign(current.agentControl, { create });
-  act(() =>
-    requestSnapshotPreview(connection.session, {
-      url: `${origin}/media/${"a".repeat(64)}.png`,
-      name: "helper.agent.png",
-      kind: "image",
-    }),
-  );
-  const dialog = await screen.findByRole("dialog", {
-    name: "Preview snapshot",
-  });
-  expect(dialog).toHaveTextContent("Preview snapshot");
-  expect(create).not.toHaveBeenCalled();
-  await user.click(within(dialog).getByRole("button", { name: "Cancel" }));
-  await waitFor(() =>
-    expect(
-      screen.queryByRole("dialog", { name: "Preview snapshot" }),
-    ).not.toBeInTheDocument(),
-  );
-  expect(create).not.toHaveBeenCalled();
 });

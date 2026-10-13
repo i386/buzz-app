@@ -265,7 +265,7 @@ test("Settings controls scale together and keep enlarged labels reachable", asyn
       // Icon buttons grow with the interface while keeping their square shape.
       await expect(
         page.getByRole("button", { name: "Search Buzz", exact: true }),
-      ).toHaveAttribute("data-icon-size", "md");
+      ).toHaveAttribute("data-icon-size", "sm");
       await expect
         .poll(() =>
           page

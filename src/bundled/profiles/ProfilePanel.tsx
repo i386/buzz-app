@@ -1,34 +1,20 @@
+import { activityTarget } from "../../features/agents/activity-target";
+import { PanelView } from "../../features/panels/PanelView";
+import { contributionKey } from "../../features/conversation/ContributionBoundary";
+import type { Panels, RegisteredPanel } from "../../features/panels/service";
 import {
   usePanelTabHost,
   usePanelTabTitle,
 } from "../../features/panels/PanelWorkspace";
 import { useAgentOwnerEvidence } from "../../features/profiles/useAgentOwnerEvidence";
-
-import { useAgentControlRefresh } from "../../features/agents/control-react";
 import { UserStatusDisplay } from "../../features/user-status/StatusDisplay";
-import {
-  ProfilePublicMetadata,
-  usePublicAgentMetadata,
-} from "./ProfilePublicMetadata";
-import { ProfileAgentActions } from "./ProfileAgentActions";
-import { ProfileAgentArchive } from "./ProfileAgentArchive";
-import { ProfileMemories } from "./ProfileMemories";
+import { ProfilePublicMetadata } from "./ProfilePublicMetadata";
 import { relayOrigin } from "../../features/communities/destination";
-import type {
-  AgentControl,
-  AgentControlState,
-  AgentLogTarget,
-} from "../../features/agents/control";
-import { ProfileHarnessLog } from "./ProfileHarnessLog";
-import { ProfileInstances } from "./ProfileInstances";
-import { ProfileAgentRuntime } from "./ProfileAgentRuntime";
-import { ProfileRuntime, useRuntimeAgents } from "./ProfileRuntime";
 import type { Navigation } from "../../features/navigation/controller";
 import { ProfileChannels } from "./ProfileChannels";
 import { useChannelIdentityNames } from "../../features/identity-names/react";
 import { usePresenceStatus } from "../../features/presence/react";
 import {
-  type ReactNode,
   useEffect,
   useMemo,
   useRef,
@@ -44,6 +30,7 @@ import { Tabs } from "../../shared/design-system/ui/Tabs";
 import { ProfileActivity } from "./ProfileActivity";
 import type { PanelProps } from "../../features/panels/service";
 import {
+  profileActivityViewKey,
   profileAgentHint,
   profilePanelKey,
   profileTarget,
@@ -55,102 +42,78 @@ import type { RelayData } from "../../features/relay/service";
 import type { RelaySession } from "../../features/relay/session";
 import { ProfileAgentIdentity } from "./ProfileAgentIdentity";
 import styles from "./Profiles.module.css";
-import { AgentDelete } from "../../features/agents2/AgentManage";
-import { useAgent2, useChannelChoices } from "../../features/agents2/react";
-import type { Agents2 } from "../../features/agents2/service";
-import { agentSections } from "../../features/agents2/tabs";
+import { AgentDelete } from "../../features/agents/AgentManage";
+import { useAgent, useChannelChoices } from "../../features/agents/react";
+import type { Agents } from "../../features/agents/service";
+import { agentSections } from "../../features/agents/tabs";
 
-const emptyState: AgentControlState = {
-  status: "unavailable",
-  data: null,
-  busy: false,
-  error: null,
-};
-const emptyControlSnapshot = () => emptyState;
 const noSubscribe = () => () => {};
+const emptyPanels: readonly RegisteredPanel[] = [];
+const noPanels = () => emptyPanels;
 
 export function ProfilePanel({
+  panels,
   relay,
   target,
   context,
   navigation,
-  control,
-  agents2,
-  instanceId,
+  agents,
   close,
-  refreshControl = true,
 }: PanelProps & {
+  panels?: Panels;
   relay: RelayData;
   navigation?: Navigation;
-  control?: AgentControl;
-  /** Agents2 agents show their type's tabs in place of harness ones. */
-  agents2?: Agents2;
-  instanceId?: string | undefined;
-  /** An enclosing exact-instance panel already owns status refresh. */
-  refreshControl?: boolean;
+  /** Agents show their type's tabs. */
+  agents?: Agents;
 }) {
   const connection = useRelayConnection(relay);
-  const pubkey = profilePanelKey(target);
+  const activityKey = profileActivityViewKey(target);
+  const pubkey = profilePanelKey(target) ?? activityKey;
   if (!pubkey) return <p>Unsupported profile.</p>;
   if (connection.status !== "ready")
     return <p>Connect to a community to view this profile.</p>;
   return (
     <ProfileDetails
-      key={`${connection.scope}:${connection.generation}:${pubkey}:${instanceId ?? ""}`}
-      refreshControl={refreshControl}
+      key={`${connection.scope}:${connection.generation}:${pubkey}:${activityKey ? "activity" : "info"}`}
+      initialTab={activityKey ? "activity" : "info"}
+      panels={panels}
       session={connection.session}
       pubkey={pubkey}
-      agentHint={profileAgentHint(target)}
-      instanceId={instanceId}
+      agentHint={profileAgentHint(target) || !!activityKey}
       context={context}
       navigation={navigation}
-      control={control}
-      agents2={agents2}
+      agents={agents}
       scope={connection.scope}
       viewer={connection.viewer}
       close={close}
-    >
-      {control && (
-        <ProfileAgentActions
-          control={control}
-          relay={relay}
-          pubkey={pubkey}
-          instanceId={instanceId}
-        />
-      )}
-    </ProfileDetails>
+    />
   );
 }
 function ProfileDetails({
-  children,
+  panels,
+  initialTab,
   agentHint,
-  refreshControl,
   session,
   pubkey,
   context,
   navigation,
-  control,
-  agents2,
+  agents,
   scope,
   viewer,
-  instanceId,
   close,
 }: {
-  agents2: Agents2 | undefined;
+  agents: Agents | undefined;
+  panels: Panels | undefined;
+  initialTab: "info" | "activity";
   agentHint: boolean;
-  instanceId?: string | undefined;
-  refreshControl: boolean;
-  children?: ReactNode;
   session: RelaySession;
   pubkey: string;
   context: PanelProps["context"];
   navigation: Navigation | undefined;
-  control: AgentControl | undefined;
   scope: string | undefined;
   viewer: string | undefined;
   close(): void;
 }) {
-  useAgentControlRefresh(refreshControl ? control : undefined);
   const selection = useMemo(
     () => selectProfiles(session.profiles, [pubkey]),
     [session.profiles, pubkey],
@@ -161,33 +124,54 @@ function ProfileDetails({
     selection.snapshot,
   );
   const profile = profiles.get(pubkey);
-  const openHarnesses = navigation
-    ? () => navigation.open({ version: 1, kind: "settings", section: "agents" })
-    : undefined;
   const [status, setStatus] = useState<"loading" | "ready" | "error">(
     "loading",
   );
   const [attempt, retry] = useState(0);
   const [copyStatus, setCopyStatus] = useState("");
-  const [logTarget, setLogTarget] = useState<AgentLogTarget | null>(null);
-  const controlState = useSyncExternalStore(
-    control?.subscribe ?? noSubscribe,
-    control?.snapshot ?? emptyControlSnapshot,
-    emptyControlSnapshot,
-  );
   const [tab, setTab] = useState<
-    "info" | "runtime" | "channels" | "memories" | `agent:${string}`
-  >("info");
-  // An Agents2 agent's sections come from its type and the app, not the harness.
-  const plugin = useAgent2(agents2, pubkey);
+    "info" | "activity" | "channels" | `agent:${string}`
+  >(initialTab);
+  // An agent's sections come from its type and the app, not the harness.
+  const plugin = useAgent(agents, pubkey);
   const channelChoices = useChannelChoices(
     plugin ? session.channels : undefined,
   );
+  const available = useSyncExternalStore(
+    panels?.subscribe ?? noSubscribe,
+    panels?.snapshot ?? noPanels,
+    noPanels,
+  );
   const sections =
-    plugin && agents2
-      ? agentSections({ agents2, ...plugin, channels: channelChoices })
+    plugin && agents
+      ? agentSections({
+          agents,
+          ...plugin,
+          channels: channelChoices,
+          conversation: context && {
+            channelId: context.channelId,
+            ...(context.rootId && { rootId: context.rootId }),
+          },
+        })
       : [];
-  const section = sections.find((item) => item.value === tab);
+  // Opened for activity, a plugin agent shows its type's own first tab (its
+  // sessions) until the reader picks a tab; harness agents keep Activity.
+  const [activityRequested, setActivityRequested] = useState(
+    initialTab === "activity",
+  );
+  const requestedTab =
+    activityRequested && tab === "activity" && sections[0]
+      ? sections[0].value
+      : tab;
+  const section = sections.find((item) => item.value === requestedTab);
+  const activity = activityTarget(pubkey, context?.channelId);
+  const resolvedActivity = panels?.resolve(activity);
+  const activityPanel =
+    resolvedActivity &&
+    available.includes(resolvedActivity) &&
+    context?.canOpen(activity)
+      ? resolvedActivity
+      : undefined;
   const tabHost = usePanelTabHost();
   const tabbed = !!tabHost;
   const region = useRef<HTMLElement>(null);
@@ -227,49 +211,15 @@ function ProfileDetails({
     attempt,
   );
   const verifiedOwner = ownership.owner;
-  const publicMetadata = usePublicAgentMetadata(
-    session,
-    pubkey,
-    verifiedOwner,
-    (status === "ready" || !!profile) && ownership.settled,
-  );
-  const isOwner = knownAgent && !!viewer && verifiedOwner === viewer;
-  // Private local configuration needs both native custody and verified ownership.
-  const {
-    count: runtimeCount,
-    agent: runtimeAgent,
-    pending: runtimePending,
-  } = useRuntimeAgents(control, scope, pubkey, instanceId);
-  const canViewRuntime = isOwner && runtimeCount > 0;
-  // The log requires an exact native record and ready ownership evidence;
-  // other runtime admission remains owned by the existing profile flow.
-  const logAuthorized =
-    !!logTarget &&
-    !!control?.readLog &&
-    !!session.authorizeAgentLog &&
-    canViewRuntime &&
-    ownership.status === "ready" &&
-    controlState.status === "ready" &&
-    runtimeAgent?.id === logTarget.id &&
-    runtimeAgent?.pubkey === logTarget.pubkey &&
-    runtimeAgent?.relayUrl === logTarget.relayUrl;
   useEffect(() => {
-    if (logTarget && !logAuthorized) setLogTarget(null);
-  }, [logTarget, logAuthorized]);
+    if (!activityPanel && !sections.length)
+      setTab((current) => (current === "activity" ? "info" : current));
+  }, [activityPanel, sections.length]);
   const selectedTab =
-    (tab === "memories" && (!isOwner || plugin)) ||
-    (tab === "runtime" && !canViewRuntime) ||
-    (tab.startsWith("agent:") && !section)
+    (requestedTab === "activity" && !activityPanel) ||
+    (requestedTab.startsWith("agent:") && !section)
       ? "info"
-      : tab;
-  useEffect(() => {
-    if (!isOwner)
-      setTab((current) => (current === "memories" ? "info" : current));
-  }, [isOwner]);
-  useEffect(() => {
-    if (!canViewRuntime)
-      setTab((current) => (current === "runtime" ? "info" : current));
-  }, [canViewRuntime]);
+      : requestedTab;
   let communityOrigin: string | undefined;
   if (scope && viewer && scope.endsWith(`:${viewer}`)) {
     try {
@@ -300,7 +250,7 @@ function ProfileDetails({
     ),
     [picture, name, knownAgent],
   );
-  usePanelTabTitle(instanceId ? `${name} · Instance` : name, tabAvatar);
+  usePanelTabTitle(name, tabAvatar);
   // As in New message, a known agent needs this community's ready native control.
   const messageable = () =>
     !displayAgent ||
@@ -351,21 +301,6 @@ function ProfileDetails({
       if (!controller.signal.aborted) setOpeningMessage(false);
     }
   }
-  const instances = control ? (
-    <ProfileInstances
-      errorHandledByHost={!!runtimeAgent}
-      control={control}
-      pubkey={pubkey}
-      context={context}
-      session={session}
-      canOpenPrivate
-      selectedId={instanceId}
-      scope={scope}
-      communityOrigin={communityOrigin}
-      viewer={viewer}
-      knownAgent={knownAgent}
-    />
-  ) : null;
   return (
     <section
       ref={region}
@@ -374,22 +309,7 @@ function ProfileDetails({
       tabIndex={-1}
       className={styles.root}
     >
-      {logAuthorized && logTarget && control && (
-        <ProfileHarnessLog
-          key={`${logTarget.id}:${logTarget.relayUrl}:${viewer}`}
-          control={control}
-          target={logTarget}
-          name={name}
-          onBack={() => {
-            setLogTarget(null);
-          }}
-        />
-      )}
-      <div
-        className={styles.profileContents}
-        inert={!tabbed && !!logTarget && logAuthorized}
-        aria-hidden={(!tabbed && !!logTarget && logAuthorized) || undefined}
-      >
+      <div className={styles.profileContents}>
         <div className={styles.identity}>
           <div className={styles.portrait}>
             <AgentAvatar
@@ -419,23 +339,31 @@ function ProfileDetails({
         </div>
         <Tabs
           value={selectedTab}
-          onValueChange={setTab}
+          onValueChange={(value) => {
+            setActivityRequested(false);
+            setTab(value);
+          }}
           items={[
             { value: "info", label: "Info" },
             ...sections.map(({ value, label }) => ({ value, label })),
-            ...(canViewRuntime
-              ? [{ value: "runtime" as const, label: "Runtime" }]
-              : []),
             { value: "channels", label: "Channels" },
-            ...(isOwner && !plugin
-              ? [{ value: "memories" as const, label: "Memories" }]
+            ...(displayAgent && activityPanel
+              ? [{ value: "activity" as const, label: "Activity" }]
               : []),
           ]}
           label="Profile sections"
           variant="panel"
           renderPanel={(selected) => (
             <div className={styles.tabContent}>
-              {selected.startsWith("agent:") ? (
+              {selected === "activity" && activityPanel ? (
+                <PanelView
+                  key={contributionKey(activityPanel)}
+                  panel={activityPanel}
+                  target={activity}
+                  context={context}
+                  close={close}
+                />
+              ) : selected.startsWith("agent:") ? (
                 sections.find((item) => item.value === selected)?.render()
               ) : selected === "info" ? (
                 <>
@@ -455,37 +383,10 @@ function ProfileDetails({
                   {profile?.about && (
                     <p className={styles.about}>{profile.about}</p>
                   )}
-                  {control && scope && (
-                    <ProfileAgentRuntime
-                      control={control}
-                      onOpenHarnesses={openHarnesses}
-                      scope={scope}
-                      pubkey={pubkey}
-                      instanceId={instanceId}
-                      owned={isOwner}
-                    />
-                  )}
-                  {children}
-                  {knownAgent && (
-                    <ProfileAgentArchive
-                      session={session}
-                      pubkey={pubkey}
-                      control={control}
-                      scope={scope}
-                      name={name}
-                      community={
-                        communityOrigin
-                          ? new URL(communityOrigin).host
-                          : undefined
-                      }
-                      running={runtimeAgent?.status === "running"}
-                      onDeleted={close}
-                    />
-                  )}
-                  {plugin && agents2 && (
+                  {plugin && agents && plugin.agent.place !== "elsewhere" && (
                     <div>
                       <AgentDelete
-                        agents2={agents2}
+                        agents={agents}
                         agent={plugin.agent}
                         onRemoved={close}
                       />
@@ -493,29 +394,14 @@ function ProfileDetails({
                   )}
                   {knownAgent && (
                     <ProfileActivity
+                      onViewActivity={
+                        activityPanel ? () => setTab("activity") : undefined
+                      }
                       session={session}
                       pubkey={pubkey}
                       context={context}
                     />
                   )}
-                  {control &&
-                    (!knownAgent || ownership.settled) &&
-                    !runtimePending &&
-                    !canViewRuntime && (
-                      <ProfileInstances
-                        errorHandledByHost
-                        control={control}
-                        pubkey={pubkey}
-                        context={context}
-                        session={session}
-                        canOpenPrivate={verifiedOwner === viewer && !!viewer}
-                        selectedId={instanceId}
-                        scope={scope}
-                        communityOrigin={communityOrigin}
-                        viewer={viewer}
-                        knownAgent={displayAgent}
-                      />
-                    )}
                   <div className={styles.publicKey}>
                     <div className={styles.keyHeading}>
                       <h3 className="text-body">Public key</h3>
@@ -553,11 +439,7 @@ function ProfileDetails({
                       context={context}
                     />
                   )}
-                  <ProfilePublicMetadata
-                    key={verifiedOwner ?? "unowned"}
-                    source={publicMetadata}
-                    nip05={profile?.nip05}
-                  />
+                  <ProfilePublicMetadata nip05={profile?.nip05} />
                   {!profile &&
                     (status === "loading" ? (
                       <p role="status">Loading profile…</p>
@@ -568,47 +450,15 @@ function ProfileDetails({
                           : "No profile metadata is available in this community."}
                       </p>
                     ))}
-                  {((!profile && status !== "loading") ||
-                    publicMetadata.failed ||
-                    ownership.failed) && (
+                  {((!profile && status !== "loading") || ownership.failed) && (
                     <Button
                       size="compact"
-                      onClick={() => {
-                        retry((value) => value + 1);
-                        publicMetadata.retry();
-                      }}
+                      onClick={() => retry((value) => value + 1)}
                     >
                       Retry profile
                     </Button>
                   )}
                 </>
-              ) : selected === "runtime" &&
-                canViewRuntime &&
-                control &&
-                verifiedOwner ? (
-                runtimeAgent ? (
-                  <ProfileRuntime
-                    control={control}
-                    onOpenHarnesses={openHarnesses}
-                    agent={runtimeAgent}
-                    session={session}
-                    owner={verifiedOwner}
-                    instances={instances}
-                    authorizeLog={
-                      ownership.status === "ready"
-                        ? session.authorizeAgentLog
-                        : undefined
-                    }
-                    onOpenLog={(target) => {
-                      if (!tabHost?.activate(tabHost.owner, "Harness log"))
-                        setLogTarget(target);
-                    }}
-                  />
-                ) : (
-                  <div className={styles.runtimeTab}>{instances}</div>
-                )
-              ) : selected === "memories" && isOwner ? (
-                <ProfileMemories session={session} pubkey={pubkey} />
               ) : (
                 <ProfileChannels
                   session={session}
@@ -616,8 +466,6 @@ function ProfileDetails({
                   navigation={navigation}
                   communityOrigin={communityOrigin}
                   viewer={viewer}
-                  control={control}
-                  scope={scope}
                 />
               )}
             </div>

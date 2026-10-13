@@ -326,7 +326,7 @@ test("independent packed author consumer and native-installed contribution survi
       await draft.evaluate((el) => [el.selectionStart, el.selectionEnd]),
     ).toEqual([2, 5]);
     await page
-      .getByRole("button", { name: "Insert emoji", exact: true })
+      .getByRole("button", { name: "Emoji and GIFS", exact: true })
       .click();
     const search = page.getByRole("searchbox", { name: "Search" });
     await search.fill("party");
@@ -347,7 +347,7 @@ test("independent packed author consumer and native-installed contribution survi
       window.conversationFixture.change("disable", "buzz.emoji"),
     );
     await expect(
-      page.getByRole("button", { name: "Insert emoji", exact: true }),
+      page.getByRole("button", { name: "Emoji and GIFS", exact: true }),
     ).toHaveCount(0);
     await expect(page.locator("em-emoji-picker")).toHaveCount(0);
     await expect(historic).toHaveCount(0);
@@ -386,7 +386,7 @@ test("independent packed author consumer and native-installed contribution survi
       window.conversationFixture.change("enable", "buzz.emoji"),
     );
     await expect(
-      page.getByRole("button", { name: "Insert emoji", exact: true }),
+      page.getByRole("button", { name: "Emoji and GIFS", exact: true }),
     ).toHaveCount(1);
     await expect(historic).toHaveCount(1);
     await draft.fill("reject :party:");
@@ -413,7 +413,7 @@ test("independent packed author consumer and native-installed contribution survi
     await expect(historic).toHaveAttribute("src", /a.test.*history.png/);
     await draft.fill("A-only draft");
     await page
-      .getByRole("button", { name: "Insert emoji", exact: true })
+      .getByRole("button", { name: "Emoji and GIFS", exact: true })
       .click();
     await search.fill("party");
     await page.evaluate(() => window.conversationFixture.saveEdit());

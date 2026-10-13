@@ -1,10 +1,9 @@
 import { workflowLabel } from "../relay/workflow-attribution";
 import { MessageEditScope } from "./MessageEditScope";
 import { useReviewSidebarMotion } from "./use-review-sidebar-motion";
-import { readReviewOrigin, useReviewEntrance } from "./use-review-entrance";
+import { readReviewOrigin } from "./use-review-entrance";
 import { VideoPlayer, videoTime } from "./VideoPlayer";
 import { useMediaElementSource } from "./use-media-element-source";
-import { seekVideoBy } from "./use-video-gestures";
 import {
   PanelHeader,
   PanelHeaderLabel,
@@ -21,11 +20,9 @@ import {
   type RefObject,
 } from "react";
 import {
-  XIcon,
   SidebarIcon,
   ChatCircleIcon,
 } from "../../shared/design-system/icons/index";
-import { createPortal } from "react-dom";
 import type { ConversationExtensions } from "../conversation/contracts";
 import type { Attachment, ChannelMessage } from "../relay/contracts";
 import type { RelaySession } from "../relay/session";
@@ -41,7 +38,7 @@ import { MessageRow } from "./MessageRow";
 import { parseMediaTimeReply } from "./media-timecode";
 import { VideoReviewReactions } from "./VideoReviewReactions";
 import styles from "./Messages.module.css";
-import { useModalBoundary } from "./useModalBoundary";
+import { MediaReviewFrame } from "./MediaReviewFrame";
 
 type MediaReviewViewerProps = {
   attachment: Attachment;
@@ -219,17 +216,10 @@ function ReviewShell({
   ).unavailable;
   const mediaTitle =
     attachment.kind === "video" ? (attachment.name ?? "Video") : "Image";
-  const backdrop = useRef<HTMLDivElement>(null);
   const frame = useRef<HTMLElement>(null);
   const video = useRef<HTMLVideoElement>(null);
   const [commentsChoice, setCommentsOpen] = useState<boolean>();
   const [selectedImageUrl, setSelectedImageUrl] = useState(attachment.url);
-  const { dismiss } = useReviewEntrance(
-    frame,
-    origin,
-    close,
-    selectionRequest === 0 && selectedImageUrl === attachment.url,
-  );
   const commentsOpen =
     commentsChoice ?? (loading ? hasComments : replies.length > 0 || !!error);
   useEffect(() => {
@@ -295,7 +285,6 @@ function ReviewShell({
     else element.addEventListener("loadedmetadata", apply, { once: true });
     return () => element.removeEventListener("loadedmetadata", apply);
   }, [attachment.url, attachment.kind, initialTime, selectionRequest]);
-  useModalBoundary(backdrop, frame, close, restoreFocus);
   const seek = (seconds: number) => {
     if (!video.current) return;
     const duration = video.current.duration;
@@ -307,168 +296,35 @@ function ReviewShell({
     video.current.dispatchEvent(new Event("timeupdate"));
     void video.current.play().catch(() => {});
   };
-  return createPortal(
-    // biome-ignore lint/a11y/noStaticElementInteractions: backdrop dismissal complements the close button and Escape shortcut.
-    <div
-      ref={backdrop}
-      className={`${styles.mediaReviewBackdrop} ${styles.darkReviewBackdrop} dark`}
-      role="presentation"
-      onMouseDown={(event) => {
-        if (event.button === 0 && event.target === event.currentTarget)
-          dismiss(true);
-      }}
-    >
-      <div
-        className={styles.mediaReviewScrim}
-        data-review-backdrop=""
-        aria-hidden="true"
-      />
-      <section
-        ref={frame}
-        className={`${styles.mediaReviewViewer} dark`}
-        data-color-mode="dark"
-        data-review-pending={origin ? "" : undefined}
-        data-video={attachment.kind === "video" || undefined}
-        data-comments-motion={commentsMotion || undefined}
-        data-comments-hidden={!commentsOpen || undefined}
-        role="dialog"
-        tabIndex={-1}
-        aria-modal="true"
-        onKeyDown={(event) => {
-          if (
-            attachment.kind !== "video" ||
-            event.currentTarget.hasAttribute("data-review-closing") ||
-            !video.current ||
-            event.defaultPrevented ||
-            event.nativeEvent.isComposing ||
-            event.altKey ||
-            event.ctrlKey ||
-            event.metaKey ||
-            event.shiftKey ||
-            (event.key !== "ArrowLeft" &&
-              event.key !== "ArrowRight" &&
-              event.key !== " ")
-          )
-            return;
-          const target = event.target;
-          if (
-            !(target instanceof Element) ||
-            !event.currentTarget.contains(target) ||
-            target.closest(
-              'input, textarea, select, [contenteditable]:not([contenteditable="false"]), [role="slider"], [role="menu"], [role="listbox"], [aria-label="Media comments"], [aria-label="Playback speed"]',
-            )
-          )
-            return;
-          if (event.key === " ") {
-            // Space still activates a deliberately focused control normally.
-            if (
-              target.closest(
-                'button, a[href], [role="button"], [role="checkbox"], [role="switch"]',
-              )
-            )
-              return;
-            event.preventDefault();
-            event.stopPropagation();
-            if (event.repeat) return;
-            if (video.current.paused) void video.current.play().catch(() => {});
-            else video.current.pause();
-            return;
-          }
-          event.preventDefault();
-          event.stopPropagation();
-          seekVideoBy(video.current, event.key === "ArrowRight" ? 10 : -10);
-        }}
-        aria-label={
-          attachment.kind === "video" ? "Video review" : "Image viewer"
-        }
-      >
-        <div
-          className={styles.mediaReviewHeading}
-          title={mediaTitle}
-          data-review-chrome=""
-          data-tauri-drag-region
-        >
-          <PanelHeader
-            title={<PanelHeaderLabel title={mediaTitle} />}
-            actions={
-              <>
-                <IconButton
-                  size="compact"
-                  aria-label={commentsOpen ? "Hide comments" : "Show comments"}
-                  aria-pressed={commentsOpen}
-                  onClick={(event) => {
-                    prepareSidebarMotion(event.detail > 0);
-                    setCommentsMotion(event.detail > 0);
-                    setCommentsOpen(!commentsOpen);
-                  }}
-                  icon={<SidebarIcon size={20} />}
-                />
-                <IconButton
-                  size="compact"
-                  type="button"
-                  aria-label="Close fullscreen viewer"
-                  data-review-dismiss=""
-                  onClick={(event) => dismiss(event.detail > 0)}
-                  icon={<XIcon size={20} aria-hidden="true" />}
-                />
-              </>
-            }
-          />
-        </div>
-        <div className={styles.mediaReviewStage} data-review-stage="">
-          {!source || unavailable || sourceUnavailable || mediaFailed ? (
-            <p
-              className={styles.mediaReviewUnavailable}
-              role={error ? "alert" : "status"}
-            >
-              {error ?? (loading ? "Loading media…" : "Media unavailable")}
-              {retry && (
-                <Button size="sm" type="button" onClick={() => void retry()}>
-                  Retry
-                </Button>
-              )}
-            </p>
-          ) : attachment.kind === "video" ? (
-            <VideoPlayer
-              key={source}
-              videoRef={video}
-              source={source}
-              poster={
-                (selectionRequest === 0 ? origin?.poster : undefined) ??
-                (attachment.previewUrl
-                  ? session.media(attachment.previewUrl)
-                  : undefined)
-              }
-              initialTime={initialTime}
-              markers={markers}
-              onMarker={(id) => {
-                setSelectedComment(id);
-                setCommentsOpen(true);
-              }}
-              onError={() => setMediaFailed(true)}
-              onTime={setCurrentTime}
-            >
-              {rootId && (
-                <VideoReviewReactions
-                  session={session}
-                  scope={scope}
-                  channelId={channelId}
-                  rootId={rootId}
-                  videoRef={video}
-                  extensions={extensions}
-                />
-              )}
-            </VideoPlayer>
-          ) : (
-            <ImageReviewStage
-              attachments={imageAttachments}
-              selectedUrl={selectedImageUrl}
-              select={setSelectedImageUrl}
-              media={session.media}
-              onOpenLink={onOpenLink}
-            />
-          )}
-        </div>
+  return (
+    <MediaReviewFrame
+      title={mediaTitle}
+      label={attachment.kind === "video" ? "Video review" : "Image viewer"}
+      isVideo={attachment.kind === "video"}
+      video={video}
+      frame={frame}
+      origin={origin}
+      canReturnToOrigin={
+        selectionRequest === 0 && selectedImageUrl === attachment.url
+      }
+      commentsOpen={commentsOpen}
+      commentsMotion={commentsMotion}
+      restoreFocus={restoreFocus}
+      close={close}
+      actions={
+        <IconButton
+          size="compact"
+          aria-label={commentsOpen ? "Hide comments" : "Show comments"}
+          aria-pressed={commentsOpen}
+          onClick={(event) => {
+            prepareSidebarMotion(event.detail > 0);
+            setCommentsMotion(event.detail > 0);
+            setCommentsOpen(!commentsOpen);
+          }}
+          icon={<SidebarIcon size={20} />}
+        />
+      }
+      sidebar={
         <aside
           data-review-chrome=""
           className={styles.mediaReviewConversation}
@@ -550,9 +406,61 @@ function ReviewShell({
             )}
           </div>
         </aside>
-      </section>
-    </div>,
-    document.body,
+      }
+    >
+      {!source || unavailable || sourceUnavailable || mediaFailed ? (
+        <p
+          className={styles.mediaReviewUnavailable}
+          role={error ? "alert" : "status"}
+        >
+          {error ?? (loading ? "Loading media…" : "Media unavailable")}
+          {retry && (
+            <Button size="sm" type="button" onClick={() => void retry()}>
+              Retry
+            </Button>
+          )}
+        </p>
+      ) : attachment.kind === "video" ? (
+        <VideoPlayer
+          key={source}
+          videoRef={video}
+          source={source}
+          poster={
+            (selectionRequest === 0 ? origin?.poster : undefined) ??
+            (attachment.previewUrl
+              ? session.media(attachment.previewUrl)
+              : undefined)
+          }
+          initialTime={initialTime}
+          markers={markers}
+          onMarker={(id) => {
+            setSelectedComment(id);
+            setCommentsOpen(true);
+          }}
+          onError={() => setMediaFailed(true)}
+          onTime={setCurrentTime}
+        >
+          {rootId && (
+            <VideoReviewReactions
+              session={session}
+              scope={scope}
+              channelId={channelId}
+              rootId={rootId}
+              videoRef={video}
+              extensions={extensions}
+            />
+          )}
+        </VideoPlayer>
+      ) : (
+        <ImageReviewStage
+          attachments={imageAttachments}
+          selectedUrl={selectedImageUrl}
+          select={setSelectedImageUrl}
+          media={session.media}
+          onOpenLink={onOpenLink}
+        />
+      )}
+    </MediaReviewFrame>
   );
 }
 

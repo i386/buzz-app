@@ -27,7 +27,10 @@ for (const width of [1280, 390, 320]) {
     });
     const list = inbox.getByRole("list", { name: "Inbox conversations" });
     const rows = list.getByRole("listitem");
-    const drafts = inbox.getByRole("button", { name: "Drafts", exact: true });
+    const filters = inbox.getByRole("button", {
+      name: "Inbox filters",
+      exact: true,
+    });
     await expect(rows).toHaveCount(3);
     await expect(status).toHaveCount(0);
     let gate;
@@ -58,15 +61,11 @@ for (const width of [1280, 390, 320]) {
             ),
           ].map((row) => ({ ...box(row), text: row.textContent })),
           header: box(element.querySelector("header")),
-          drafts: box(
-            [...element.querySelectorAll("button")].find(
-              (button) => button.textContent === "Drafts",
-            ),
-          ),
+          filters: box(element.querySelector('[aria-label="Inbox filters"]')),
         };
       });
     const measurements = [];
-    await expect(drafts).toBeVisible();
+    await expect(filters).toBeVisible();
     const before = await geometry();
     gate = { ...Promise.withResolvers(), started: false };
     try {
@@ -103,12 +102,14 @@ for (const width of [1280, 390, 320]) {
     await expect(status).toHaveCount(0);
     await expect.poll(geometry).toEqual(before);
     await expect(inbox.getByRole("alert")).toHaveCount(0);
-    await expect(
-      inbox.getByRole("combobox", { name: "Activity type" }),
-    ).toHaveText("All activity");
-    await expect(inbox.getByRole("combobox", { name: "Sender" })).toHaveText(
-      "Everyone",
-    );
+    await expect(filters).toHaveText("All");
+    await filters.click();
+    for (const name of ["People", "Agents"]) {
+      await expect(
+        page.getByRole("menuitemcheckbox", { name, exact: true }),
+      ).toBeChecked();
+    }
+    await page.keyboard.press("Escape");
     await testInfo.attach("refresh-geometry", {
       body: JSON.stringify(measurements, null, 2),
       contentType: "application/json",

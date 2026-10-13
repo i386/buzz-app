@@ -221,9 +221,6 @@
     width: max-content;
     max-width: none;
   }
-  .shell-topbar-pages .navigation-item {
-    max-width: 12rem;
-  }
   .shell-toolbar-pages,
   .shell-actions-fixed {
     display: flex;
@@ -368,6 +365,9 @@
       max-width: 220px;
     }
     .shell-navigation {
+      display: none;
+    }
+    .shell-navigation[data-sidebar-collapsible] {
       display: none;
     }
     .shell-navigation[data-expanded="true"] {

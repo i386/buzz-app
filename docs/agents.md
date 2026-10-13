@@ -1,125 +1,109 @@
-# Agents: current-Buzz compatibility V1
+# Agents
 
 ## Scope
 
-This document describes the read-only compatibility/mention slice. The Agents
-page also exposes [native local controls](agent-control.md) for create/import,
-saved settings, mention-to-add/wake and bundled Start/Stop/Restart. The read-only
-compatibility view below remains the browser fallback; native management has its
-own handover and rollback contract.
+Agents (`src/bundled/agents`, `src/features/agents`) is the app's only agent
+system: it creates, runs and deletes the viewer's agents. This document covers
+what the rest of the app knows about agents: shared selection, mentions, archive
+display, activity, names, inventory and usage. The v1 Agents page, Profiles plugin,
+Channel templates plugin, agent snapshots, team bundles, community catalog and
+agent-management request popups are gone, as are the native `agent_control_*`,
+model-discovery and harness-install commands behind them.
 
-V1 **reuses the current Buzz library and mentions existing agents in channels
-and threads**. No migration to relay-only storage. Creation, editing,
-add-existing membership, Save/recovery and all runner management are out of V1.
+Agents was called Agents2 while v1 still shipped. Startup now moves its identity
+folder to `agents/identities.json` and its browser settings to `buzz.agents.v1`
+and `buzz.agents.teams.v1`. Identity bytes and keychain entries are unchanged.
+The Agents2 plugin switch moves to `buzz.agents`; the retired v1 switch is
+removed. Plugin registry versions distinguish these preferences (native v2,
+browser v3), so a later restart preserves changes to the new switch.
 
-### Implemented compatibility view
+The temporary migrators are `src/features/agents/migrate-storage.ts`,
+`src/plugins/migrate-agent-flag.ts`,
+`crates/plugin-manager/src/migrate_agent_flag.rs`, and
+`src-tauri/src/sign_out/migrate_agents.rs`. Remove them and their call sites after
+2026-10-18 once development users have upgraded; remove the old registry-version
+readers and the legacy sign-out keep/key-deletion entries at the same time.
+This is a one-way development migration: close older Buzz copies before the
+first upgraded launch and use the upgraded build afterward. Native migration
+requires the existing exclusive instance lock; conflicts stop startup without
+replacing either folder. A pending erase handles both folder names before the
+migration runs. Browser moves write the destination before removing the source
+and resume identical interrupted copies; differing destinations are left intact
+and reported as migration errors.
 
-- The live development broker (macOS and Linux) and packaged native host read the installed Buzz library at
-  `~/Library/Application Support/xyz.block.buzz.app/agents/managed-agents.json`
-  (on Linux, `$XDG_DATA_HOME/xyz.block.buzz.app/agents/managed-agents.json`,
-  defaulting to `~/.local/share`).
-  It does not search/merge the separate `.dev` library, read agent keys from
-  Keychain, write the file, run migrations, or call old loaders with side effects.
-- Only definition ID/name, identity public key/name/definition link, and optional
-  avatar artwork leave the host. Prompts, configuration, credentials and execution receipts are not
-  projected. This is local library evidence, **not verified ownership**.
-- The main individual-agent grid is reserved for native local agents; teams follow
-  it, with old/importable/relay inventory below. Browser-only hosts cannot establish
-  current local custody: their read-only library lives in a collapsed **Other
-  agents** section below teams, not in the individual-agent grid.
-- The compatibility library shows one compact row per exact identity. Identity
-  details are available from its overflow button, not an exposed Public key link.
-  Explicit profile links still supply artwork; names never join identities.
-  Profiles with no linked identity appear separately; an archived identity does
-  not become an empty profile.
-- Only distinct keys with the same displayed name need a short npub suffix. Names
-  alone never create a profile group. Suffix collisions extend deterministically using
-  the complete inventory, including identities hidden by archive filtering.
-- Missing archive evidence keeps identities visible. Archive filtering affects
-  display only, never mention permission or runtime control.
-- One lazy host read per opening/Refresh; no polling or relay-directory startup
-  scan. Concurrent host requests coalesce. Read caps: 8 MiB / 2000 records;
-  malformed/missing files fail visibly without echoing their contents. The host
-  projects from JSON, so private fields may transiently exist in host memory;
-  there is no claim that JavaScript strings are zeroized. Browser reads time out
-  at ten seconds and session disposal/cache/access/disconnect fences clear them.
-- The compatibility view uses only `session.agentLibrary` and `session.archives`. Unused relay
-  ownership/configuration readers and native recovery code have been removed.
-- Avatars use saved library artwork, with initials on missing/failed images.
-  Optional artwork accepts HTTPS without credentials or bounded raster data URLs,
-  never file URLs or SVG data. Relay media uses the existing session media helper;
-  CSP is unchanged. No extra profile scan or polling is added.
+Agent identity is evidence, never authority. Names, library rows, local agent rows,
+archive state and presence do not prove ownership, membership or runtime state.
 
-Source parity pinned at old Buzz `b9392d9d78744df365f9276e1ffe8c1baa5ea903`:
-`desktop/src/features/agents/ui/AgentsView.tsx:221–253`,
-`lib/catalog.ts:3–12`, `ui/unifiedAgentGroups.ts:16–47`,
-`desktop/src-tauri/src/managed_agents/storage.rs:239–283`,
-`types.rs:180–209`. Old `load_personas` can update builtins and write back; this
-adapter deliberately only reads the persisted post-fold library. It does not
-port builtin refresh, live runtime ordering or Teams.
+## Local agents
 
-### Ready-to-try workflow / remaining acceptance
+`LocalAgents` (`src/features/agents/local.ts`) is a read-only snapshot of the
+viewer's live agents on this machine, in any community:
+`{ status, agents: [{ pubkey, name, relayUrl, owner }] }`, with `status` one of
+`unavailable`, `loading`, `ready` or `error`. `AgentsService.local()` produces it
+from its saved identities (deleted ones omitted), so it carries Agents' own
+loading and error state. Agents' `snapshot()` is different: it holds only the
+selected community's agents, with their settings.
 
-Use the public `BUZZ_DEV_VIEWER` pin and `just desktop` from the
-README; fixture/default startup cannot show the live local library. No private
-keys in environment files. Keep existing Buzz running: this app does not launch
-or supervise ACP.
+`app/services.ts` composes consumers before Agents exists, through
+`createLocalAgents()`. Until `bind` connects `agents.local`, the snapshot is
+`unavailable`; unbinding returns it there. Two consumers read it directly:
 
-1. Compare Agents with installed Buzz's selected library; Refresh after changing
-   that library in Buzz. Stop state should not remove cards. Duplicate display
-   names must retain distinct exact keys.
-2. In a channel where the agent is already a member, select it from `@`
-   suggestions and send a short prompt; confirm the reply from the same key.
-3. Repeat in a thread and confirm the reply lands in that thread.
+- the identity-name service, which lets a local agent's name win in its own
+  community; and
+- `session.agentChoices` (the communities service hands it to each session), which
+  marks matching agents `managed`. New message and mention choices read that flag.
 
-Browser fixtures cover library rendering/retry/session replacement and actual
-channel/thread composer publication, **not a live ACP reply**. Manual feedback
-reported a working live path, but a separately observed native/ACP trace,
-packaged acceptance and the final integration gate remain outstanding. Earlier
-envelope/fixture validation does not certify the later compatibility adapter.
-
+`sameCommunityAgents` keeps only rows whose `owner` is the viewer and whose
+`relayUrl` maps to this session's community partition. Local agents carry no
+process status, so a stopped agent is as selectable as a running one.
 
 ## Shared agent selection
 
-`session.agentChoices` is the canonical read-only selection projection. Templates,
-mention pickers, the session agent chooser and their admission checks use it—not
-`agentLibrary` directly. Its general projection combines ready legacy identities and ready native
-identities in this exact community, deduplicated by public key. Templates use its
-separate `templates` projection: native identities when native controls exist,
-including authoritative empty/loading/error states without legacy fallback;
-legacy identities only on hosts without native controls. Template refresh never
-waits for an unused legacy inventory. Native process
-status is not selection eligibility; stopped/native-only agents remain selectable.
-`agentLibrary` remains the old-library compatibility/import source. Agents management
-and the shared display-name resolver keep their own distinct presentation contracts.
+`session.agentChoices` is the canonical read-only selection projection. Mention
+pickers, New message, the session agent chooser, channel member invitations and
+their admission checks use it, not `agentLibrary` directly. It combines two
+sources, deduplicated by public key:
 
-Do not build another agent inventory in a plugin. Retain the shared projection only
-while needed; explicit Refresh retries source failures. Retaining choices preserves
-ready evidence across menu remounts. Ordinary mentions subscribe to cached legacy
-hints without loading that library; session/template selectors ensure it on demand.
-Both use the app-owned native controller's idle-only ensure, not refresh-on-keystroke.
-The existing app controller
-owns native reads/processes, while the session projection adds no runner, polling,
-directory scan or signing authority. Session retirement revokes its candidates.
-A failed source contributes no stale candidates; another ready source can remain
-usable, with partial failures surfaced through Retry. `status: ready` means usable,
-not complete: automatic-recipient inference must honor `complete`, and automatic
-saved-template resolution must wait for required pending identity/roster evidence.
+- `agentLibrary`, the display inventory (see [Community inventory](#community-inventory)):
+  the host's saved Buzz library plus the owner's relay-published records; and
+- the viewer's local agents for this exact community, flagged `managed` with a
+  `managedName`.
+
+A snapshot exposes `identities`, `selectable`, `archives`, `definitions`, `status`,
+`pending`, `complete` and a separate `templates` projection. `status: ready` means
+usable, not complete: automatic-recipient inference must honor `complete`, which
+requires a ready, error-free library and a local source that is ready or
+unavailable. A failed source contributes no stale candidates; another ready source
+stays usable, with partial failures surfaced through Retry.
+
+Do not build another agent inventory in a plugin. `useAgentChoices(session,
+includeLegacy, archive)` retains the projection while mounted, which preserves
+ready evidence across menu remounts, and ensures the lazy library and archive reads
+on demand. Ordinary mentions subscribe without loading the library
+(`includeLegacy` false); explicit Refresh retries source failures. The projection
+adds no runner, polling, directory scan or signing authority, and session
+retirement revokes its candidates.
+
+`templates` serves saved channel-kit templates and section defaults (session setup
+resolves lineups through it with `templateAgentChoices`). Its identities are the
+local agents once Agents is bound, and the library only while the local source is
+`unavailable`. It never falls back to the library after a local error.
+`templateAgentChoices` returns nothing until archive evidence is ready, and
+library-only choices additionally need visible community membership. Saved keys
+are never rebound to a namesake.
 
 Archive visibility has one owner. The projection reads `session.archives` and
 exposes `identities` (every known agent, including archived ones, for facts about
 existing content) and `selectable` (known-archived agents removed; unknown state
 fails open; the viewer is never hidden). Every forward-looking agent chooser uses
-`selectable`, including the session agent picker and profile **Add to channel**.
-Session admission in `workSessions.addAgents` rejects every known-archived key,
-including parent-channel members; unknown archive state keeps the library and
-parent-member rules. Selectors demand the lazy archive read through
-`useAgentChoices(session, includeLegacy, true)`, and the session picker shows an
-archive read failure with Retry. The same base rule,
-`archiveHides`, filters mention recipients, channel member invitations and member
-addition, and the Agents page and Agent Library. The Agents page keeps one
-documented exception: an archived identity with local controls stays listed so it
-can still be managed. Do not reimplement the rule per surface.
+`selectable`, including the session agent picker. Session admission in
+`workSessions.addAgents` rejects every known-archived key, including parent-channel
+members; unknown archive state keeps the library and parent-member rules. Selectors
+demand the lazy archive read through `useAgentChoices(session, includeLegacy, true)`,
+and the session picker shows an archive read failure with Retry. The same base rule,
+`archiveHides` (`features/relay/identity-archives.ts`), filters mention recipients,
+channel member invitations and member addition, session sharing and search. Do not
+reimplement the rule per surface.
 
 Agent artwork also has one owner: `createAgentLibrary` publishes snapshots where
 an identity without its own avatar shows its linked definition's avatar
@@ -128,22 +112,17 @@ the lookup.
 
 Action policy stays explicit: ordinary member mentions use the channel roster and
 hide known-archived identities without requiring verified non-archived evidence.
-Ordinary nonmember mentions also offer people from the selected community directory
-and eligible managed agents. Send asks before adding them; selection grants no
-access. A pasted mention of a known profile is offered the same way. Session invitations retain their existing rules, including legacy choices.
-Templates additionally require verified non-archived state (`templateAgentChoices`
-returns nothing until archive evidence is ready), and legacy-only choices
-need visible community membership. Saved keys are never rebound to a namesake.
-Template pickers and agent identity details display npubs, not raw hex keys.
-Save-as-template discloses an incomplete inferred
-lineup when its required inventory or roster evidence is partial; it never claims a full
-channel-membership copy. Shared choice visibility is not permission to grant access.
+In streams and forums, nonmember mentions also offer people from the selected
+community directory and, when the viewer can add members, the viewer's own agents
+(`managed` or not) that are not in the channel. Send asks before adding them; selection grants
+no access. A pasted mention of a known profile is offered the same way. A DM can
+name outsiders but never notifies them. Session invitations keep their existing
+rules, including library choices. Shared choice visibility is not permission to
+grant access.
 
-Regression sources: `features/agents/choices.test.ts` and
-`bundled/channel-templates/agent-selection.test.tsx`, plus existing chooser,
-composer and session-admission tests. These exercise shared selection and session admission, not native execution.
-Native/ACP acceptance and packaged validation remain separate gates; local hook
-and hosted CI results are recorded in the pull request.
+Regression source: `features/agents/choices.test.ts`, plus the chooser, composer
+and session-admission tests. They exercise shared selection and session admission,
+not native execution.
 
 ## Exact channel-member mentions
 
@@ -206,7 +185,7 @@ and already-known online/away status decide the order. Humans never join a block
 and sort first on an equal label. Remaining ties use the displayed label, then the
 full key. Each rule is a per-choice sort key, so the order is the same for any
 input order. Ownership comes
-from profile owner metadata, not a name or presence in the saved library.
+from profile owner metadata, not a name or presence in the library or local agents.
 Recency stays in memory per session/destination and is bounded to 100 destinations
 and 100 recipients each. Neither ownership nor recency overrides membership or
 match quality.
@@ -243,33 +222,31 @@ existing relay membership/send/retry validator is unchanged.
 
 After an accepted send, the next draft starts with the exact selected agent-name
 mentions, deduplicated by key. Agent classification uses already-cached profile hints
-or the shared agent-choice projection (legacy and native), not a new lookup or
+or the shared agent-choice projection (library and local agents), not a new lookup or
 permission grant. Human recipients and
 plain typed names are not carried forward. The prefill is an ordinary scoped draft:
 channel/thread/account isolation, edits, removal, undo and delivery checks still apply.
-**Settings → Messages → Remember mentioned agents** defaults on and is saved on this
+**Settings → Agents → Messages → Remember mentioned agents** defaults on and is saved on this
 device. Turning it off stops future prefills without changing the current draft;
 turning it back on does not restore old recipients. Session auto-recipient rules are
 unchanged. An outbox rejection preserves the original draft; acceptance is not proof
 of relay delivery or agent execution.
 
-**Refresh teams** on Agents reloads the provider-owned catalog, including changes
-made in another window or device. After a save/delete revision conflict, close the
-dialog, refresh, and reopen the current team before retrying; stale drafts never
-silently overwrite a newer revision.
-
-Saved teams from the Agents page are available in both mention choosers. A team
-is a shortcut, not a group identity: explicit selection inserts its saved agent
-keys as individual mentions in one undoable edit. Names never resolve membership.
-Typing a team name or Space alone does not select it. Team names also prevent
-Space from accidentally selecting a person with the same name or a prefix.
-Each query shows at most 20 matching teams, with up to four cached avatar thumbnails
-and a remainder count. Empty, oversized (more than 32 agents), changed or partially
-unavailable teams stay disabled; there is no partial expansion. Reopen or change
-the query to refresh changed team choices. The resulting draft must fit the existing
-32-mention and message-length limits. Selection never adds members: ordinary
-channels retain invite-on-send consent, DMs retain reference-only outsiders, and
-session admission remains unchanged.
+Team records in the channel kit (see [Channels](channels.md); groups, Canvas and
+`buzz-channel-kit-v2` team manifests) appear in both mention choosers as shortcuts.
+No bundled plugin writes team records now, so they appear only for records already
+in the community. A team is a shortcut, not a group identity: explicit selection
+inserts its saved agent keys as individual mentions in one undoable edit through
+`insertMentions`. Names never resolve membership. Typing a team name or Space
+alone does not select it. Team names also prevent Space from accidentally selecting
+a person with the same name or a prefix. Each query shows at most 20 matching teams,
+with up to four cached avatar thumbnails and a remainder count. Empty, oversized
+(more than 32 agents), changed or partially unavailable teams stay disabled; there
+is no partial expansion. Reopen or change the query to refresh changed team
+choices. The resulting draft must fit the existing 32-mention and message-length
+limits. Selection never adds members: ordinary channels retain invite-on-send
+consent, DMs retain reference-only outsiders, and session admission remains
+unchanged.
 
 The picker supports Up/Down navigation, Enter selection and Escape dismissal.
 
@@ -280,9 +257,8 @@ for confirmed membership, then sends notifications. **Do nothing** (or **Send
 anyway** without add permission) sends those identities as separate `mention`
 reference tags, without adding or notifying them. Close or Escape keeps the draft. Existing member mentions still notify in a
 mixed send. Reference keys are validated and bounded to 32. Selection itself never
-invites or starts anyone; confirmed outgoing notifications own agent wakeup. See
-[local agent controls](agent-control.md#normal-desktop-workflow). DM and session
-admission paths remain separate. Current notification-recipient membership is checked at
+invites or starts anyone; whether an agent answers a notification is up to its
+own runtime. DM and session admission paths remain separate. Current notification-recipient membership is checked at
 intent, before signing, and after signing before entering the transport publisher;
 retry/restored signed intent uses the same publisher check. Before **each**
 mention publication the session performs a bounded foreground finite read of this
@@ -308,8 +284,8 @@ possible. No ownership or running status is inferred from a member's name/profil
 Wire compatibility is kind 9 + `h` + exact `p` for notifications and `mention`
 for reference-only identities; direct replies also carry
 `["e", root, "", "reply"]`. Existing buzz-acp owns mention admission, replay,
-channel membership, pool wake and harness execution. This slice adds no wake loop,
-process launcher, configuration save or agent invitation operation. The local library and archive display are not mention authorization.
+channel membership, pool wake and harness execution. Mentions add no wake loop,
+process launcher, configuration save or agent invitation operation. The library, local agents and archive display are not mention authorization.
 
 Focused coverage: `mentions.test.ts`, `MessageComposer.test.tsx`,
 `mention-draft.test.ts`, broker sign/publish integration and the real React journey
@@ -319,15 +295,15 @@ session → outbox path across reconnect, route failures, stale/failed preflight
 restore, optional name failure and unknown delivery. Live ACP
 reply and packaged desktop acceptance are not established by these tests.
 
-
 ## Relay-scoped archive display
 
 `session.archives` is a lazy NIP-IA snapshot capability, independent of
 page/plugin lifetime. The dev broker passes `archiveAuthority` only when the
 community's NIP-11 advertises a valid explicit `self`; the legacy contact `pubkey`
 fallback continues to serve existing reads but cannot authenticate archive state.
-The host-supplied signed transport does not yet discover NIP-11 and therefore
-leaves this capability unavailable. No secret crosses the browser boundary.
+The native transport passes the NIP-11 `self` it validated on connect; a transport
+without an authority leaves this capability unavailable. No secret crosses the
+browser boundary.
 
 One fresh background read requests kind 13535 from that exact authority, limit 1.
 The verified response must contain exactly one empty-content, protected snapshot
@@ -340,88 +316,61 @@ Access purge, disconnect, cache clear and disposal clear evidence and cancel wor
 No startup request, periodic poll, event-union seeding or history filtering is added.
 
 This is finite evidence, not a live archive directory.
-My agents consumes it for display. As in base Buzz, mention autocomplete, the
+As in base Buzz, mention autocomplete, the
 mention picker and member-add omit archived identities: fail-open while the
 snapshot is unknown, never hiding the viewer from themself, and never touching
 history or channel membership. `not-archived` means absent from the read snapshot, not online,
-owned, authorized or guaranteed current at a later write. Delta processing, native
-discovery and packaged/live acceptance remain separate.
+owned, authorized or guaranteed current at a later write. Delta processing and
+packaged/live acceptance remain separate.
 
-The profile pane's **Archive agent / Unarchive agent** actions (base Buzz copy) send
-exact 9035/9036 requests (`["-"]`, one `p`, optional `auth`) through dedicated broker
-sign/publish routes, never the outbox writer. The render guard and a fresh pre-sign
-check accept only the target itself (NIP-IA self request, no `auth`), a verified
-NIP-OA owner, or a relay owner/admin in the relay-signed 13534 roster; the relay
-re-verifies consent. An owner request copies the target's single live `auth` tag,
-verified against the target with `kind=` clauses ignored and `created_at` bounds
-checked against the request time. Success requires a fresh 13535 re-read showing
-the new state; a publish with an unknown outcome is reconciled by that re-read, and
-only a definitive relay rejection skips it. Rows are withheld while state is
-unknown; failed checks retry in the background and on window focus, as base Buzz
-does, and a mounted profile re-reads after a disconnect or cache reset.
+`session.archives.request("archive" | "unarchive", pubkey)` sends exact 9035/9036
+requests (`["-"]`, one `p`, optional `auth`) through the session's signer and
+publisher (`identityArchive`), never the outbox writer. `consent` is the render and
+pre-sign guard: it accepts only the target itself (NIP-IA self request, no `auth`),
+a verified NIP-OA owner, or a relay owner/admin in the relay-signed 13534 roster;
+the relay re-verifies consent. An owner request copies the target's single live
+`auth` tag, verified against the target with `kind=` clauses ignored and
+`created_at` bounds checked against the request time. Success requires a fresh
+13535 re-read showing the new state; a publish with an unknown outcome is reconciled
+by that re-read, and only a definitive relay rejection skips it. No profile pane
+offers Archive or Unarchive now; the only caller is agent deletion.
 
-**Delete agent** (base Buzz `delete_managed_agent` copy) is shown only to the
-verified NIP-OA owner, for an agent with exactly one native record in this
-community. Base Buzz removes the record first and queues the archive in its native
-retention store; this app has no such store, so the irreversible step runs last:
+**Delete agent** on Agents forgets the agent's key on this device, then
+(`AgentsService.cleanup`, shared helpers in `features/agents/relay-removal.ts`)
+runs whenever its community is open:
 
 1. An exact one-member 9001 (`h`, `p`, `client-id`) goes through the outbox for every
    channel whose relay-signed 39002 roster lists the agent, plus the viewer's loaded
-   channels. Each channel's own fresh roster must then omit the agent; a roster the
-   viewer cannot read leaves that channel unconfirmed.
+   channels. Each channel's own fresh roster must then omit the agent.
 2. A fresh archive read runs; unless it already lists the identity, it is archived
-   through the request path above and confirmed.
-3. `agent_control_delete` (shared with **Agents → My agents**) checks the record
-   revision, stops the listener, then deletes this app's saved key before removing
-   the record; a key-deletion failure fails the delete and leaves it retryable.
-   Deployed remote records, which native refuses, get no Delete action.
+   through the request path above when a consent path exists. An agent that never
+   published an owner-attested profile has nothing to hide and is not archived.
+3. The saved record is forgotten.
 
-Any failure before step 3 leaves the record and Delete in place for retry. Closing
-or retargeting the profile admits no new removal, archive or native request; work
-already dispatched settles, and a native removal in flight completes without
-closing whatever profile is shown next.
+Any failure leaves the cleanup to be retried on the next refresh or connect.
+`removeRelayAgent` applies the same steps to a relay-only agent: archive when
+consent exists, delete the owner's kind 30177 record (NIP-09), then remove it from
+its channels on a best-effort basis.
 Protocol source: old Buzz `b9392d9` `docs/nips/NIP-IA.md`, especially relay identity,
 snapshot format and snapshot/delta consistency. Tests use the actual session and
 HTTP broker/verified transport, including corrupted signature rejection.
 
-## Current feedback round and deferred validation
-
-Composer: grouped @/emoji controls on the left, icon-only send on the right,
-inline recipient mentions and compact avatar suggestions. No placeholder actions,
-rich-editor migration or changed notification semantics. Cards use squircle
-avatars, short labels and expandable exact keys; no running/ownership badge.
-
-This feedback round passes typecheck, targeted Biome, 118 focused adapter/session/
-envelope/composer checks, and the Agents + channel/thread mention journeys in
-Chromium and WebKit (4 browser checks). The agent fixture checks loaded artwork
-and the exact-key disclosure. Locked Cargo metadata resolves for Apple Silicon
-macOS after dependency pruning; no native compilation was run.
-Broader scan/native/package checks and independent compatibility-adapter review
-remain deferred until an agreed integration batch. Do not gate ordinary visual
-feedback on them. Broader agent architecture proposals are outside the V1 scope.
-
 
 ## Agent Activity plugin
 
-**Agent Activity** is an independently toggleable bundled plugin that owns capture
-and the transcript panel. Conversation presentation uses a compact, floating
-avatar control above the composer, without a reserved strip or permanent avatar
-container. Hover, click, tap or keyboard opens **Working now**, reusing the sidebar's
-working-agent row. The row opens its known thread (or channel when no unique thread
-is known); a separate **View activity** action opens the agent's transcript.
+**Agent Activity** owns live capture demand and the full Transcript/Raw panel;
+host-owned saved history remains independent of plugin enablement. This branch
+adds an avatar-and-dots bubble beneath the exact message that triggered current
+work. Multiple turns group by agent; completing one turn does not hide another.
+Hover, click, tap or keyboard opens a compact avatar-and-latest-tool popup. Its
+row opens that exact agent's profile Activity tab, using the mainline transcript,
+conversation filtering and saved-history controls. Escape or outside click closes
+the popup. Human typing remains in the ordinary conversation indicator.
 
-The channel control includes work in threads. A thread control includes only
-exact-root evidence, never unconfirmed work. Current owner-visible turns provide
-brief tool status; unknown scopes fall back to channel activity. Multiple concurrent
-scopes never choose an arbitrary transcript thread. Public typing for the viewer's
-own `agentChoices` identities remains visible without telemetry; someone else's
-self-declared agent remains ordinary typing, without this owner-activity doorway.
-All projections consume existing stores and loaded profiles/channel rows, not new
-capture leases, relay reads or timers. A persistent, visually hidden status region
-announces working/typing transitions even when visual controls are absent.
+### Local plugin-agent lifecycle
 
 The popup resets on conversation changes and when current work ends. Idle and
-historical activity remain accessible from profiles and the activity panel rather
+historical activity remain accessible from the activity panel rather
 than lingering above the composer. Compact status labels omit raw arguments and
 full paths; the transcript retains the detail.
 
@@ -444,8 +393,8 @@ the plugin's lifecycle. Observer records have no thread identity, so its details
 remain explicitly channel-wide.
 
 The display-only source is `session.typing`, not the plugin's typing evidence:
-typing by one of the viewer's own agents (the local library) anywhere in the
-channel, threads included. Typing remains a working signal when observer telemetry is explicitly disabled. Other people's agents, known only from a
+typing by one of the viewer's own agents (`session.agentChoices`: local agents and
+the library) anywhere in the channel, threads included. Typing remains a working signal when observer telemetry is explicitly disabled. Other people's agents, known only from a
 self-declared profile hint, are not shown. This store keeps working with the plugin off, rejects
 future timestamps instead of capping them, schedules its own expiry eight
 seconds after the signed timestamp and stays quiet for two seconds after the
@@ -458,13 +407,6 @@ No harness change, new subscription, directory or timer is added.
 The development broker loads subscription filters at startup: restart the
 existing dev server once to receive typing; frontend HMR alone is insufficient.
 
-A known agent's profile **View activity** action remains available before the
-first frame or after a working chip disappears; people's profiles offer none. It
-preselects the exact identity and originating channel, not a thread. The
-known-agent check is display-only evidence, not an ownership badge, and the action
-may show a waiting state for identities with no published owner-visible telemetry.
-Shared agents and new activity-view permissions are out of scope.
-
 ### Transcript
 
 The panel opens on **Transcript**; **Raw** keeps the exact diagnostic records
@@ -475,7 +417,7 @@ from the `<buzz-event>` framing, other sections collapsed), the session's system
 prompt, thoughts, assistant text as Markdown, tool calls, permission requests joined to
 their tool call with the auto-approval outcome, plans, mode changes, the session's
 selected config values (e.g. model), context usage, stop reason and errors. Tool
-names and inputs differ by adapter (Pi, Goose, Codex, Claude Code), so tool rows show the
+names and inputs differ by adapter (Pi, Goose, Codex, Claude), so tool rows show the
 adapter's title and raw input as sent; only ACP's standard `kind` (icon), `status`,
 `locations` and content (text, with a wholly fenced Markdown block shown as its body,
 and `diff` as removed/added lines) are interpreted.
@@ -622,12 +564,10 @@ There is no agent-global sequence gate: producer sequences reset, skip and inter
 
 Use the [README's public-pin/Keychain setup](../README.md#relay-channels) and run
 `bin/just web` (or `bin/just desktop`). Open the printed Local URL, choose
-the agent's community and open a channel. Keep the existing Buzz runner
-active, with telemetry publication enabled on the agent, then give it work. This
-activity plugin does not start agents. App-managed agents now default to publishing
-on their next normal start; explicit `BUZZ_ACP_RELAY_OBSERVER=false` overrides for
-Pi/Goose remain honored. Existing running processes are not restarted by this change. No records may mean publishing
-is off, no new traffic, or an interrupted feed—not that an agent is idle.
+the agent's community and open a channel. Keep a runner active for that agent, with
+telemetry publication enabled, then give it work. This activity plugin does not
+start agents. No records may mean publishing is off, no new traffic, or an
+interrupted feed, not that an agent is idle.
 
 For a contextual view, click the identity's avatar/mention in the channel, then
 **View activity**. It preselects that exact key and channel; **Conversation → All conversations**
@@ -652,92 +592,22 @@ transcript. Both the development broker and packaged native identity host implem
 the archive; no runtime controller, recording export or old transcript renderer is
 included.
 
-### Evidence and remaining acceptance
+### Coverage
 
-Archive regression coverage lives in `browser-host/archive.test.mjs`,
+Archive coverage lives in `browser-host/archive.test.mjs`,
 `src-tauri/src/archive/tests.rs`, `src/features/archive/client.test.ts`, the
 activity/session/native transport tests, and `src/app/ArchiveSettings.test.tsx`.
-The real Tauri IPC test exercises command ACL, persisted encrypted rows through two
-isolated processes, account/community admission and independent clear. The browser
-archive journey uses real broker SQLite and the actual plugin/Settings wiring,
-including ciphertext-at-rest, reload without working evidence and confirmed clear.
-These are synthetic identities/telemetry. Packaged GUI quit/relaunch, real-relay
-agent ownership admission, human acceptance and hosted cross-platform checks remain
-separate gates; consult the PR for results tied to its exact head. Historical
-validation below predates this archive rework and is not evidence for the new head.
-
-`browser-host/agent-observer.test.mjs`, `browser-host/relay-broker-live.test.mjs`, and the activity/live
-service tests cover signed/encrypted WS → host decode → SSE → actual session,
-route generations, no chat reconciliation, terminal retention and stale controls.
+`browser-host/agent-observer.test.mjs`, `browser-host/relay-broker-live.test.mjs`,
+and the activity/live service tests cover signed/encrypted WS to host decode to SSE
+to the actual session, route generations, terminal retention and stale controls.
 `tests/browser/agent-activity.spec.mjs` covers the actual plugin, raw HTML
-nonexecution, keyboard disclosures, agent selection, disable/re-enable and
-light/dark layouts at 1280 and 390 pixels in Chromium and WebKit. Live retry and
-plugin-launcher regression journeys also pass with the additional observer route.
-These automated checks use only ephemeral identities and synthetic upstream
-telemetry. The owner reported a successful live activity try on 2026-09-12 before
-the mainline merge; this is feedback evidence, not an independently captured trace.
+nonexecution, keyboard disclosures, agent selection and disable/re-enable in
+Chromium and WebKit. These use ephemeral identities and synthetic telemetry.
+Packaged GUI quit/relaunch, real-relay agent ownership admission and hosted
+cross-platform checks are separate gates; consult the pull request for results
+tied to its head.
 
-The full `just scan` passed at `1183b2624485dc1e6a12e86cece22eaf7513591c`
-after merging main's Markdown and Terminal changes: 35 Node integration tests,
-1,054 Vitest tests, 16 plugin-manager Rust tests, 274 Chromium/WebKit browser
-checks (including measurements), 14 design-browser checks, 9 native Rust tests,
-formatting, types, builds and Clippy. Independent source review found no remaining
-merge-integration blocker. Channel-opening fixtures kept optional profiles held;
-warm click-to-visible samples were 16.8–19.2ms in Chromium and 50–67ms in WebKit,
-with no new head read, below the unchanged 100ms budget. These are local Apple
-Silicon fixture measurements, not a live-network SLA.
-
-Packaged/native activity uses the native observer decoder; attended native/package
-acceptance and cross-platform CI remain separate from these local results.
-
-### Composer-entry feedback rounds
-
-The first channel-only pass added a generic plugin accessory below the composer.
-On the uncommitted tree based on `d5877002e2e58a601e1f46dd67697356e665164d`,
-TypeScript, changed-file Biome, all 1,121 root Vitest tests and eight focused
-Chromium/WebKit activity journeys passed. This is historical feedback evidence,
-not validation of the current snapshot.
-
-The 2026-09-16 round moves compact activity rows above both composers, adds
-exact-thread typing indicators and a quiet sidebar working dot, and preserves
-plugin-owned capture and revoked target-opening callbacks. Multiple turns are
-grouped by exact agent key. Stale observer evidence shows status unknown, not
-completed; expired typing and ended turns leave the rows. Profile access remains.
-
-On the uncommitted tree based on `a67102aa1201adfa47a03be7d668a62ac748c152`,
-TypeScript, changed-file Biome, all 1,128 root Vitest tests (116 files), and all ten
-Chromium/WebKit activity journeys passed. The Chromium cold/warm channel-opening
-check also passed. Browser coverage includes exact-thread/sibling/channel
-isolation, sidebar semantics, channel-detail navigation, above-composer geometry,
-and light/dark 1280/390px layouts. Screenshots were inspected. Independent
-changed-path source review found no ownership, routing or lifecycle blocker;
-the subsequent future-timestamp expiry cap has a passing regression test.
-
-Wes reported the live local workflow working and approved the tightened layout
-on 2026-09-18. Activity rows are borderless, avatars align with the composer's
-left edge, and the last row sits 4px above it. Working dots gently pulse unless
-reduced motion is requested; unknown status remains static. Browser regressions
-cover these presentation contracts in both engines.
-
-The 2026-09-18 integration incorporates main `125b5ca` while retaining its rich
-composer, routed-thread navigation, sidebar activity popover and public typing
-indicator. Public typing and owner-only activity remain independent projections;
-an owner's typing agent can appear in both. The receive path rechecks session
-access/generation after shared typing subscribers run, before admitting activity.
-
-On `65213eb` plus the resolved main integration, all 1,576 Vitest tests (150 files)
-passed. Both engines passed the shared typing/layout cases (22), then the activity,
-Buzz-link and thread-history cases (20) after fixing internal activity targets
-being swallowed by the broader `buzz:` navigation classifier. Existing activity
-cases failed before that fix in both engines. Accessory lifetime coverage now
-mounts real React in StrictMode rather than mocking hooks.
-
-These are targeted integration checks, not a completed `just scan`. The earlier
-scan was interrupted during browser tests; broader hosted CI, DCO and required
-review remain separate gates. Packaged native activity now uses purpose-bound
-observer decoding; attended packaged and live-relay acceptance remain outstanding.
-
-### Shared identity names
+## Shared identity names
 
 Distinct agent keys with the same displayed name receive a short npub suffix,
 regardless of their profile links. Names are compared after trimming outer
@@ -745,35 +615,44 @@ whitespace, with case preserved. Directory qualifiers use a middle-dot separator
 (`Honey · 2abc`). Unique displayed names have no suffix. These display labels are
 not serialized into mentions. The composer retains its existing inline-chip
 qualifiers for selected namesakes, independently of live directory labels. Collision
-checks include hidden library identities and ready native identities in the
-current community, using the same native/inventory/public-profile precedence.
+checks include library identities and ready local agents in the current community.
 Name edits update the suffixes; they never merge identities or profile groups.
 
-The Agents plugin supplies display names through the app-owned identity-name
-service. Each relay session binds its own view. A ready native record takes
-precedence only in its matching community; otherwise the ready legacy display
-inventory supplies the name, then the public profile. Plugin disable restores
-public-profile names. These labels never change identity keys, membership,
-credentials, or runtime admission. Profile panels, messages, mention choices,
-activity, conversation labels and new notifications consume this view. Mention
-parsing still uses signed identity evidence before resolving its visible label.
+The Identity Naming plugin (`buzz.identity-naming`) registers its policy with the
+app-owned identity-name service (`features/identity-names`). Each relay session binds
+its own view. A ready local agent takes precedence only in its matching community;
+otherwise a signed public agent profile's name, then the library's saved name, then
+the public profile. With no policy registered, public-profile names and caller
+fallbacks apply. These labels never change identity keys, membership, credentials,
+or runtime admission. Messages, mention choices, activity, conversation labels and
+new notifications consume this view. Mention parsing still uses signed identity
+evidence before resolving its visible label. The portable policy is specified in
+`src/bundled/identity-naming/README.md`.
 
-### Additive community inventory
+## Community inventory
 
-The active session reads the owner's kind-30175 profiles and kind-30177 identities
-from its accessible relay. It also retains the local library reader. The inventory
-joins exact public keys, not equal names; explicit profile references use the
-publisher's slug mapping only when local definitions do not collide. Local names
-and artwork win for matching keys. Native configuration still wins within its
-matching community. A failed source leaves the other source visible with a warning.
+`agentLibrary` is the display inventory behind `agentChoices`. Each session reads
+the owner's kind-30175 profiles and kind-30177 identities from its accessible relay,
+and also the host's saved Buzz library: the development broker's
+`/api/relay/agent-library` reads `agent-controller/agents.json` under the
+`dev.local.buzz.foundation` data directory, and the native host reads the Classic
+post-fold `xyz.block.buzz.app/agents/managed-agents.json`. The host read is
+read-only: it writes no configuration, migrates no identities, retrieves no
+credentials and manages no processes, with 8 MiB / 2000-record caps. Only definition
+ID/name, identity public key/name/definition link and optional avatar artwork leave
+the host. Optional artwork accepts HTTPS without credentials or bounded raster data
+URLs, never file URLs or SVG data.
+
+The inventory joins exact public keys, not equal names; explicit profile references
+use the publisher's slug mapping only when local definitions do not collide. Local
+names and artwork win for matching keys. A failed source leaves the other source
+visible with a warning. Reads are lazy (once per demand or Refresh), with no polling
+or relay-directory startup scan.
 
 Discovery is not global coverage, verified membership, credentials, or execution
-status. Native cards keep their controls. Other known identities appear in a
-read-only section. Each card offers its own Import; the separate installation
-browser appears only for repair.
-No keys, config, memory, membership, or runtime state are changed by discovery.
+status. No keys, config, memory, membership, or runtime state are changed by it.
 
-### Channel session usage
+## Channel session usage
 
 The Usage tab reads saved kind-44200 metrics from the current account/community's
 host archive. Its strip and detail are **channel-associated session**

@@ -677,6 +677,9 @@ test("a forwarded Vite mode selects the relay the manifest records", async (t) =
     (await read("profiles/manifest.json")).relay,
     "https://staging.example",
   );
-  // Vite is launched in the same mode the manifest was resolved for.
-  assert.deepEqual((await read("vite.args")).slice(-2), ["--mode", "staging"]);
+  // Vite is launched in the same mode the manifest was resolved for, with the
+  // dependency cache rebuilt as `pnpm dev` does.
+  const viteArgs = await read("vite.args");
+  assert.equal(viteArgs[0], "--force");
+  assert.deepEqual(viteArgs.slice(-2), ["--mode", "staging"]);
 });

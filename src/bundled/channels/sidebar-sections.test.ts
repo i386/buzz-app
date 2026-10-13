@@ -1,6 +1,10 @@
 import { expect, it } from "vitest";
 import type { ChannelSummary } from "../../features/relay/contracts";
-import { isChannelSectionKey, sidebarSections } from "./sidebar-sections";
+import {
+  isChannelDropSectionKey,
+  isChannelSectionKey,
+  sidebarSections,
+} from "./sidebar-sections";
 
 const row = (
   id: string,
@@ -12,6 +16,29 @@ it("identifies custom and general channel sections", () => {
   expect(isChannelSectionKey("starred")).toBe(false);
   expect(isChannelSectionKey("forums")).toBe(false);
   expect(isChannelSectionKey("dms")).toBe(false);
+});
+it("allows channel drops into Starred without treating it as a create-channel section", () => {
+  for (const key of ["starred", "channels", "group:work"])
+    expect(isChannelDropSectionKey(key)).toBe(true);
+  for (const key of ["forums", "dms"])
+    expect(isChannelDropSectionKey(key)).toBe(false);
+  expect(isChannelSectionKey("starred")).toBe(false);
+});
+it("hides empty Starred and shows it only for an authorized starred row", () => {
+  expect(sidebarSections([]).some(({ key }) => key === "starred")).toBe(false);
+  const preferences = {
+    sections: [],
+    assignments: {},
+    starred: ["alpha"],
+    muted: [],
+  };
+  expect(
+    sidebarSections([], preferences).some(({ key }) => key === "starred"),
+  ).toBe(false);
+  expect(sidebarSections([row("alpha")], preferences)[0]).toMatchObject({
+    key: "starred",
+    rows: [row("alpha")],
+  });
 });
 it("intersects groups/stars with active authorized streams and movable DMs", () => {
   const roster = [

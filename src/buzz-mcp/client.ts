@@ -41,6 +41,9 @@ export interface BuzzClient {
   /** Signs `event` as the agent and posts it. */
   publish(event: Template): Promise<BuzzEvent>;
   upload(data: Uint8Array, mime: string): Promise<Upload>;
+  /** Downloads a community media blob, by its URL or `sha256[.ext]`, as
+   * base64. */
+  media(url: string): Promise<string>;
   /** A local file's bytes, for tools that take a `path`. */
   read(path: string): Promise<Uint8Array>;
   /** The agent's memory entries, decrypted. */

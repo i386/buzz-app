@@ -270,3 +270,42 @@ Independent changed-path re-review found no remaining blockers in the repairs.
 These are local fixture/service results, not checks on pushed PR heads or a future
 merged tree. Human, live-relay and attended native/packaged acceptance remain open;
 no full scan or shipping-readiness attestation is implied.
+
+
+## Visual-only pass (#770)
+
+Built on main's existing Inbox and Drafts: one filter menu, outline/filled unread
+toggle, trailing unread dots, adjacent list/detail with one header, and the shared
+centered draft-delete dialog. The list/detail divider reuses `usePanelSplit` and
+`ResizeHandle`: drag, arrows (Shift for larger steps), Home/End and double-click
+reset. The list defaults to 420px where space allows and can resize from 320px
+up to a 50/50 split with the conversation, which keeps at least 316px.
+Its chosen width is in memory across detail close/reopen and Inbox/Drafts switching,
+not persisted across restarts. At ≤700px available width, detail replaces the list
+and the divider is hidden.
+
+All matching **already-loaded** Inbox rows render without Show more. Optional
+profile enrichment remains bounded to the first 50 candidates; cached names still
+apply, and uncached later names may keep key fallbacks. No new history demand,
+profile loop, row cache, relay/session/unread/store or native changes.
+
+Main retains loading, representative People/Agents filters, grouped Mentions,
+selected-read visibility, read/retry, workflow attribution, thread follows, exact
+readers and draft persistence. Deletion retains consent and text-before-attachment
+cleanup. The former history/candidate/exact-mention work is excluded.
+
+**Separate engineering handoff:** diagnose missing older/agent conversations by
+tracing fetched events, participation evidence and filtering. Agree mixed/unknown
+sender behavior, mention policy and filter persistence separately. Coordinate
+John's archive/refresh/development work; progressive relay loading is not fixed here.
+
+**Evidence:** integration with main `ce2f66ea` preserves John's #757 archive
+retirement and #758 refresh status without shifting rows, plus main's #800 test
+pruning. It passes 116 Inbox tests, 2 shared-hook tests, TypeScript/build and 74
+Chromium/WebKit executions across Inbox, sidebar and existing panel journeys.
+Independent merge-resolution review found no blockers. The prior `5b4d45d0` head
+passed hosted CI and DCO; current-head hosted checks remain a separate gate.
+Common splitter checks stay in Inbox; Drafts keeps cross-view width, header
+alignment, narrow sizing, editing and modal/focus coverage. No browser cases were
+removed. Human confirmation and required review remain open; local synthetic
+checks do not attest native/live acceptance.

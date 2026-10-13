@@ -1,16 +1,23 @@
-import { Toast as BaseToast } from "@base-ui/react/toast";
-import { useEffect, useEffectEvent, useId, type ReactNode } from "react";
+import {
+  createContext,
+  useContext,
+  useEffect,
+  useEffectEvent,
+  useId,
+  useState,
+  useSyncExternalStore,
+  type ReactNode,
+} from "react";
+import { createPortal } from "react-dom";
+import { Toaster, toast } from "sonner";
 import { XIcon } from "../icons";
 import { Button } from "./Button";
 import { IconButton } from "./IconButton";
 
-type NoticeData = {
-  actions?: ReactNode;
-  dismissible: boolean;
-  closeLabel: string;
-};
+const ToastHost = createContext("");
+type Tone = "error" | "warning" | "info" | "success";
 
-/** One host-owned stack. Base UI owns announcements, focus and expiry. */
+/** Mount once in the host. Sonner owns announcements, expiry and swiping. */
 export function ToastProvider({
   children,
   portalContainer,
@@ -18,72 +25,134 @@ export function ToastProvider({
   children: ReactNode;
   portalContainer?: HTMLElement | undefined;
 }) {
+  const id = useId();
+  useEffect(() => {
+    // Sonner's global hotkey must not bypass the host's modal focus boundary.
+    const guardModal = (event: KeyboardEvent) => {
+      if (
+        event.code === "F6" &&
+        document.querySelector('[aria-modal="true"]:not([data-ending-style])')
+      ) {
+        event.stopPropagation();
+      }
+    };
+    window.addEventListener("keydown", guardModal, true);
+    return () => window.removeEventListener("keydown", guardModal, true);
+  }, []);
+  useEffect(
+    () => () => {
+      for (const notice of toast.getToasts()) {
+        if ("toasterId" in notice && notice.toasterId === id)
+          toast.dismiss(notice.id);
+      }
+    },
+    [id],
+  );
   return (
-    <BaseToast.Provider limit={Infinity}>
+    <ToastHost value={id}>
+      {createPortal(
+        <Toaster
+          id={id}
+          position="bottom-right"
+          swipeDirections={["left", "right"]}
+          expand
+          visibleToasts={Infinity}
+          hotkey={["F6"]}
+          customAriaLabel="App notifications"
+          className="buzz-toast-viewport"
+          offset="max(var(--space-6), env(safe-area-inset-bottom))"
+          mobileOffset="var(--space-4)"
+        />,
+        portalContainer ?? document.body,
+      )}
       {children}
-      <ToastViewport portalContainer={portalContainer} />
-    </BaseToast.Provider>
+    </ToastHost>
   );
 }
 
-function ToastViewport({
-  portalContainer,
-}: {
-  portalContainer?: HTMLElement | undefined;
-}) {
-  const { toasts } = BaseToast.useToastManager<NoticeData>();
+type ToastCardProps = {
+  title: string;
+  description?: string | undefined;
+  children?: ReactNode;
+  tone: Tone;
+  closeLabel?: string;
+  onClose?: (() => void) | undefined;
+};
+
+function ToastCard({
+  title,
+  description,
+  children,
+  tone,
+  closeLabel = "Dismiss notification",
+  onClose,
+}: ToastCardProps) {
+  const titleId = useId();
+  const descriptionId = useId();
   return (
-    <BaseToast.Portal container={portalContainer}>
-      <BaseToast.Viewport
-        data-buzz-ui=""
-        className="buzz-toast-viewport"
-        aria-label="App notifications"
-      >
-        {toasts.map((toast) => (
-          <BaseToast.Root
-            key={toast.id}
-            toast={toast}
-            inert={toast.transitionStatus === "ending"}
-            aria-hidden={toast.transitionStatus === "ending" || undefined}
-            data-buzz-ui=""
-            className="buzz-toast floating-surface"
-            swipeDirection={toast.data?.dismissible ? ["right"] : []}
-            onKeyDown={(event) => {
-              if (event.key === "Escape" && !toast.data?.dismissible)
-                event.preventBaseUIHandler();
-            }}
-          >
-            <div className="buzz-toast-heading">
-              <BaseToast.Title className="text-label-sm">
-                {toast.title}
-              </BaseToast.Title>
-              {toast.data?.dismissible && (
-                <BaseToast.Close
-                  // This stack is always visually expanded, including before hover/focus.
-                  aria-hidden={false}
-                  render={
-                    <IconButton
-                      size="sm"
-                      aria-label={toast.data.closeLabel}
-                      icon={<XIcon size={16} aria-hidden="true" />}
-                    />
-                  }
-                />
-              )}
-            </div>
-            {toast.description && (
-              <BaseToast.Description className="text-body-sm">
-                {toast.description}
-              </BaseToast.Description>
-            )}
-            {toast.data?.actions && (
-              <div className="buzz-toast-actions">{toast.data.actions}</div>
-            )}
-          </BaseToast.Root>
-        ))}
-      </BaseToast.Viewport>
-    </BaseToast.Portal>
+    <div
+      role="dialog"
+      aria-labelledby={titleId}
+      aria-describedby={description ? descriptionId : undefined}
+      data-buzz-ui=""
+      data-type={tone}
+      className="buzz-toast floating-surface"
+    >
+      <div className="buzz-toast-heading">
+        <div className="buzz-toast-message">
+          <div id={titleId} className="buzz-toast-title text-label-sm">
+            {title}
+          </div>
+          {description && (
+            <p id={descriptionId} className="text-body-sm">
+              {description}
+            </p>
+          )}
+        </div>
+        {onClose && (
+          <div className="buzz-toast-dismiss">
+            <IconButton
+              size="sm"
+              aria-label={closeLabel}
+              icon={<XIcon size={16} aria-hidden="true" />}
+              onClick={onClose}
+            />
+          </div>
+        )}
+      </div>
+      {children && <div className="buzz-toast-actions">{children}</div>}
+    </div>
   );
+}
+
+// Updating Sonner's toast object restarts its timer. Keep live notice content
+// in a small React store instead, rendered inside Sonner so swipe/focus events
+// use its tree and cannot bubble into the originating composer or menu.
+function noticeContent(initial: ToastCardProps) {
+  let content: ToastCardProps | null = initial;
+  const listeners = new Set<() => void>();
+  return {
+    getSnapshot: () => content,
+    subscribe: (listener: () => void) => {
+      listeners.add(listener);
+      return () => {
+        listeners.delete(listener);
+      };
+    },
+    update: (next: ToastCardProps | null) => {
+      content = next;
+      for (const listener of listeners) listener();
+    },
+  };
+}
+
+function NoticeContent({
+  source,
+}: {
+  source: ReturnType<typeof noticeContent>;
+}) {
+  const content = useSyncExternalStore(source.subscribe, source.getSnapshot);
+  return content && <ToastCard {...content} />;
 }
 
 /** A notice lives with its source; removing it clears its floating presentation. */
@@ -103,100 +172,99 @@ export function ToastNotice({
   closeLabel?: string;
   /** Zero keeps recovery visible until its source resolves or explicitly dismisses. */
   timeout?: number;
-  tone?: "error" | "warning" | "info" | "success";
+  tone?: Tone;
 }) {
   const id = useId();
-  const { add, update, close } = BaseToast.useToastManager<NoticeData>();
+  const toasterId = useContext(ToastHost);
+  const [source] = useState(() =>
+    noticeContent({ title, description, tone, children }),
+  );
   const dismissed = useEffectEvent(() => onDismiss?.());
-  const options = useEffectEvent(() => ({
-    title,
-    description,
-    type: tone,
-    timeout,
-    data: {
-      actions: children,
-      dismissible: timeout > 0 || !!onDismiss,
-      closeLabel,
-    },
-  }));
+  const dismissible = timeout > 0 || !!onDismiss;
   useEffect(() => {
     let active = true;
-    add({
+    let closed = false;
+    const onClose = () => {
+      if (!active || closed) return;
+      closed = true;
+      source.update(null);
+      dismissed();
+    };
+    toast.custom(() => <NoticeContent source={source} />, {
       id,
-      ...options(),
-      onClose: () => {
-        if (active) dismissed();
-      },
+      toasterId,
+      duration: Infinity,
+      onDismiss: onClose,
+      onAutoClose: onClose,
     });
     return () => {
       active = false;
-      close(id);
+      source.update(null);
+      toast.dismiss(id);
     };
-  }, [id, add, close]);
+  }, [id, toasterId, source]);
   useEffect(() => {
-    update(id, {
+    toast.custom(() => <NoticeContent source={source} />, {
+      id,
+      toasterId,
+      duration: timeout > 0 ? timeout : Infinity,
+      dismissible,
+    });
+  }, [id, toasterId, timeout, dismissible, source]);
+  useEffect(() => {
+    source.update({
       title,
       description,
-      type: tone,
-      data: {
-        actions: children,
-        dismissible: timeout > 0 || !!onDismiss,
-        closeLabel,
-      },
+      tone,
+      children,
+      closeLabel,
+      onClose: dismissible
+        ? () => {
+            toast.dismiss(id);
+          }
+        : undefined,
     });
-  }, [
-    id,
-    update,
-    title,
-    description,
-    tone,
-    children,
-    timeout,
-    onDismiss,
-    closeLabel,
-  ]);
-  useEffect(() => {
-    update(id, { timeout });
-  }, [id, update, timeout]);
+  }, [source, id, title, description, tone, children, closeLabel, dismissible]);
   return null;
 }
 
-/** Closes a notice by the id `useToastNotification` returned. An owner whose
- * notice action stops being valid (it unmounted, or its session ended) closes
- * that notice, instead of leaving a button that can no longer work. */
+/** Close host-owned feedback when its action is no longer valid. */
 export function useToastDismiss() {
-  return BaseToast.useToastManager<NoticeData>().close;
+  return toast.dismiss;
 }
 
-/** Completed actions belong to the host stack, not the originating row's lifetime. */
+/** Completed actions outlive their originating row. */
 export function useToastNotification() {
-  const { add, close } = BaseToast.useToastManager<NoticeData>();
+  const toasterId = useContext(ToastHost);
   return (
     title: string,
     tone: "success" | "error" | "info",
     action?: { label: string; onClick(): void },
-  ) => {
-    const id = add({
-      title,
-      type: tone,
-      // An action needs time to reach with the keyboard (F6, then Tab).
-      timeout: action ? 8000 : 4000,
-      data: {
-        dismissible: true,
-        closeLabel: "Dismiss notification",
-        actions: action && (
-          <Button
-            size="compact"
-            onClick={() => {
-              close(id);
-              action.onClick();
+  ) =>
+    String(
+      toast.custom(
+        (id) => (
+          <ToastCard
+            title={title}
+            tone={tone}
+            onClose={() => {
+              toast.dismiss(id);
             }}
           >
-            {action.label}
-          </Button>
+            {action && (
+              <Button
+                size="compact"
+                onClick={() => {
+                  toast.dismiss(id);
+                  action.onClick();
+                }}
+              >
+                {action.label}
+              </Button>
+            )}
+          </ToastCard>
         ),
-      },
-    });
-    return id;
-  };
+        { id: crypto.randomUUID(), toasterId, duration: action ? 8000 : 4000 },
+      ),
+    );
 }

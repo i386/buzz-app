@@ -1,0 +1,225 @@
+/* Inventory with an optional side panel (peek or new agent). */
+.browse {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  height: 100%;
+  min-height: 0;
+}
+.browse[data-side] {
+  grid-template-columns: minmax(0, 1fr) 22rem;
+}
+.inventory {
+  min-height: 0;
+  overflow: auto;
+}
+.side {
+  min-height: 0;
+  overflow: auto;
+  border-left: 1px solid var(--border-standard);
+  background: var(--surface-panel);
+  animation: side-in var(--duration-fast, 160ms) var(--ease-out, ease-out);
+}
+@keyframes side-in {
+  from {
+    opacity: 0;
+    transform: translateX(var(--space-4));
+  }
+}
+.sideBody {
+  display: grid;
+  align-content: start;
+  gap: var(--space-5);
+  padding: var(--space-4) var(--space-5) var(--space-6);
+}
+
+.portList {
+  display: grid;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.portRow {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-2) 0;
+}
+.portRow + .portRow {
+  border-top: 1px solid var(--border-standard);
+}
+
+.grid {
+  display: grid;
+  /* Fixed columns, so opening the side panel never resizes a tile. */
+  grid-template-columns: repeat(auto-fill, 10rem);
+  gap: var(--space-3);
+  padding: var(--space-6);
+  outline: none;
+}
+.tile {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-1);
+  min-width: 0;
+  padding: var(--space-5) var(--space-3) var(--space-4);
+  border: 1px solid var(--border-standard);
+  border-radius: var(--radius-container);
+  background: var(--surface-panel);
+  text-align: center;
+  cursor: pointer;
+  user-select: none;
+  transition:
+    transform var(--duration-fast, 160ms) var(--ease-out, ease-out),
+    background-color var(--duration-fast, 160ms) var(--ease-out, ease-out),
+    border-color var(--duration-fast, 160ms) var(--ease-out, ease-out);
+}
+.tile:hover {
+  background: var(--affordance-panel-hover);
+  transform: translateY(-1px);
+}
+.tile[aria-selected="true"] {
+  border-color: var(--border-focus);
+  background: var(--affordance-selected);
+}
+.tile:focus-visible {
+  outline: 2px solid var(--border-focus);
+  outline-offset: 2px;
+}
+.portrait {
+  width: 4.5rem;
+  height: 4.5rem;
+  margin-bottom: var(--space-2);
+}
+.tile[data-unavailable] .portrait {
+  opacity: 0.5;
+}
+.tileName {
+  max-width: 100%;
+  overflow: hidden;
+  font-weight: var(--type-weight-medium);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.tileSummary {
+  display: -webkit-box;
+  max-width: 100%;
+  overflow: hidden;
+  color: var(--text-secondary);
+  font-size: var(--text-body-sm-size, 0.8125rem);
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+.peekIdentity {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-3);
+}
+.portraitLarge {
+  flex: none;
+  width: 4rem;
+  height: 4rem;
+}
+.peekPlugin {
+  padding: var(--space-3) var(--space-4);
+  border-radius: var(--radius-container);
+  background: var(--surface-inset);
+}
+
+/* Build: identity rail, then the work. */
+.build {
+  display: grid;
+  grid-template-columns: 15rem minmax(0, 1fr);
+  height: 100%;
+  min-height: 0;
+}
+.rail {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  padding: var(--space-6) var(--space-5);
+  border-right: 1px solid var(--border-standard);
+  overflow: auto;
+}
+.rail .portraitLarge {
+  width: 6rem;
+  height: 6rem;
+}
+.facts {
+  display: grid;
+  gap: var(--space-1);
+  margin: 0;
+  font-size: var(--text-body-sm-size, 0.8125rem);
+}
+.facts dt {
+  color: var(--text-secondary);
+}
+.facts dt:not(:first-child) {
+  margin-top: var(--space-2);
+}
+.facts dd {
+  min-width: 0;
+  margin: 0;
+}
+.work {
+  min-width: 0;
+  max-width: 44rem;
+  padding: var(--space-4) var(--space-6) var(--space-8);
+  overflow: auto;
+}
+
+@media (max-width: 52rem) {
+  .browse[data-side] {
+    grid-template-columns: minmax(0, 1fr) 18rem;
+  }
+  .build {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: auto minmax(0, 1fr);
+  }
+  .rail {
+    flex-direction: row;
+    flex-wrap: wrap;
+    align-items: center;
+    border-right: 0;
+    border-bottom: 1px solid var(--border-standard);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .side {
+    animation: none;
+  }
+  .tile,
+  .tile:hover {
+    transition: none;
+    transform: none;
+  }
+}
+.portraitEdit {
+  display: grid;
+  gap: var(--space-2);
+  justify-items: start;
+}
+.portraitEdit > * {
+  margin-inline: 0;
+}
+
+/* Each tab's content, centered in the inventory column. */
+.content {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-6);
+  width: 100%;
+  max-width: 48rem;
+  margin-inline: auto;
+  padding: clamp(var(--space-4), 6vh, calc(var(--space-16) + var(--space-4)))
+    var(--space-6) var(--space-8);
+}
+.typeLabel {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  padding-inline: var(--space-2);
+  color: var(--text-secondary);
+  font-size: var(--text-body-sm-size, 0.8125rem);
+}

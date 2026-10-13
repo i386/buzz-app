@@ -2,6 +2,7 @@ import { workflowOwner } from "./workflow-attribution";
 import type { CustomEmoji } from "./emoji";
 import { validatedBlurhash } from "./blurhash";
 import { threadReference } from "./thread-reference";
+import { agentAudience } from "./audience";
 import { emojiTags } from "./emoji";
 import { objectBody } from "./body";
 import { newer } from "./events";
@@ -373,6 +374,7 @@ export function foldMessages(
         content: projected.content,
         ...(projected.content !== content ? { sourceContent: content } : {}),
         ...(event.kind === 40002 ? { agentEnvelope: true as const } : {}),
+        ...(agentAudience(event) ? { audience: "agents" as const } : {}),
         ...(event.kind === 40008
           ? {
               diff: Object.freeze({

@@ -37,7 +37,8 @@
   flex-direction: column;
   min-height: 0;
 }
-.emojiContent [role="tabpanel"][hidden] {
+.emojiContent [role="tabpanel"][hidden],
+.emojiContent [role="tabpanel"][data-ending-style] {
   display: none;
 }
 .emojiContent:not([data-tabs]) > :first-child {

@@ -45,6 +45,7 @@ impl Secret {
         &self,
         name: &str,
         picture: Option<&str>,
+        update_name: bool,
         about: Option<&str>,
         auth: &str,
         existing: &[serde_json::Value],
@@ -60,6 +61,10 @@ impl Secret {
                 None,
             ),
         };
+        if update_name {
+            content.insert("name".into(), json!(name));
+            content.insert("display_name".into(), json!(name));
+        }
         if let Some(about) = about {
             content.insert("about".into(), json!(about));
         }

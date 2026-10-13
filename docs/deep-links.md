@@ -165,9 +165,7 @@ xdg-open "buzz://channel/general"
   the link with the intended registered bundle. Cold-start acceptance requires no
   native copy running; warm acceptance requires that exact registered bundle
   already running. Windows/Linux use the plugin's argv handoff.
-- Ordinary development worktrees still share app data. The native agent store
-  permits one owner at a time; a second worktree may report owned storage while
-  the rest of the app remains usable.
+- Ordinary development worktrees still share app data.
 - Invite links (`buzz://join`) open the explicit join dialog; HTTPS
   `/invite/<code>` URLs are shareable through the relay landing page but are not
   registered as OS application links. Remote push is not handled.

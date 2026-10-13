@@ -79,8 +79,8 @@ test("picker, pane drop and clipboard files use the same attachment draft and ex
       mimeType: "text/plain",
       buffer: Buffer.from("picked"),
     });
-    await expect(form.getByText(/Queued$/)).toHaveCount(1);
-    expect(uploadRequests).toHaveLength(0);
+    await expect(form.getByText(/Ready$/)).toHaveCount(1);
+    expect(uploadRequests).toHaveLength(1);
     await expect(form.locator("video")).toHaveCount(0);
     const remove = form.getByRole("button", {
       name: "Remove picked.txt",
@@ -100,8 +100,16 @@ test("picker, pane drop and clipboard files use the same attachment draft and ex
       const zone = page.locator("[data-attachment-drop-zone]").first();
       await zone.dispatchEvent("dragenter", { dataTransfer: transfer });
       await expect(form).toHaveAttribute("data-file-drag", "true");
+      const hint = page
+        .getByRole("status")
+        .filter({ hasText: "Drop files into this conversation" });
+      await expect(hint).toBeVisible();
+      const hintBox = await hint.boundingBox();
+      const formBox = await form.boundingBox();
+      expect(hintBox.height).toBeGreaterThan(formBox.height);
+      expect(hintBox.y).toBeLessThan(formBox.y);
       await zone.dispatchEvent("drop", { dataTransfer: transfer });
-      await expect(form.getByText(/Queued$/)).toHaveCount(2);
+      await expect(form.getByText(/Ready$/)).toHaveCount(2);
       await expect(form).not.toHaveAttribute("data-file-drag", "true");
     } finally {
       await transfer.dispose();
@@ -119,9 +127,21 @@ test("picker, pane drop and clipboard files use the same attachment draft and ex
         }),
       );
     });
-    await expect(form.getByText(/Queued$/)).toHaveCount(3);
-    expect(uploadRequests).toHaveLength(0);
-    // Files waiting for Send show their remove control, not a busy spinner.
+    await expect(form.getByText(/Ready$/)).toHaveCount(3);
+    expect(uploadRequests).toHaveLength(3);
+    // Real modal focus returns to the navigated generic preview, not its opener.
+    await form.getByRole("button", { name: "Preview picked.txt" }).click();
+    const preview = page.getByRole("dialog", { name: "Attachment preview" });
+    await preview.getByRole("button", { name: "Next attachment" }).click();
+    await expect(
+      preview.getByText("dropped.txt", { exact: true }).first(),
+    ).toBeVisible();
+    await page.keyboard.press("Escape");
+    await expect(preview).toHaveCount(0);
+    await expect(
+      form.getByRole("button", { name: "Preview dropped.txt" }),
+    ).toBeFocused();
+    // Completed eager uploads leave the remove control available.
     await expect(form.locator("[data-uploading]")).toHaveCount(0);
     await expect(remove.locator("svg")).toHaveCount(1);
     // Real layout proves attachment cards stay in one horizontal lane.
@@ -141,10 +161,10 @@ test("picker, pane drop and clipboard files use the same attachment draft and ex
     });
 
     await form.getByRole("button", { name: "Remove dropped.txt" }).click();
-    await expect(form.getByText(/Queued$/)).toHaveCount(2);
-    expect(uploadRequests).toHaveLength(0);
+    await expect(form.getByText(/Ready$/)).toHaveCount(2);
+    expect(uploadRequests).toHaveLength(3);
     await form.getByRole("textbox").press("Enter");
-    await expect.poll(() => uploadRequests.length).toBe(2);
+    await expect.poll(() => uploadRequests.length).toBe(3);
     await expect(
       form.getByRole("button", { name: "Remove picked.txt" }),
     ).toHaveCount(0);
@@ -383,7 +403,7 @@ test("paperclip follows mentions and recipients, before the remaining tools", as
       exact: true,
     });
     const emoji = page.getByRole("button", {
-      name: "Insert emoji",
+      name: "Emoji and GIFS",
       exact: true,
     });
     await expect(mention).toBeVisible();
@@ -534,6 +554,492 @@ test("preparation preserves snapshot/animation and uses lossless WebP for pixel 
       }
     }
   } finally {
+    await server.close();
+  }
+});
+
+// Real media decoding, modal focus and exit/layout geometry require a browser.
+test("local previews stay interactive during eager upload and removal collapses the composer", async ({
+  page,
+}) => {
+  let release;
+  let requests = 0;
+  const held = new Promise((resolve) => {
+    release = resolve;
+  });
+  const server = await createServer({
+    configFile: false,
+    envFile: false,
+    plugins: [
+      react(),
+      {
+        name: "held-preview-upload",
+        configureServer(server) {
+          server.middlewares.use((req, res, next) => {
+            if (req.url !== "/api/relay/upload" || req.method !== "POST")
+              return next();
+            req.resume();
+            const status = [1, 4].includes(++requests) ? 503 : 204;
+            void held.then(() => {
+              res.writeHead(status);
+              res.end();
+            });
+          });
+        },
+      },
+    ],
+    logLevel: "error",
+    server: { host: "127.0.0.1", port: 0 },
+  });
+  await server.listen();
+  try {
+    await page.goto(
+      `http://127.0.0.1:${server.httpServer.address().port}/tests/fixtures/relay-composer.html?attachments&uploadRequests`,
+    );
+    const form = page.getByRole("form", {
+      name: "Send a message to General",
+      exact: true,
+    });
+    const editor = form.getByRole("textbox");
+    await editor.fill("Preserve this draft");
+    const height = await form.evaluate(
+      (el) => el.getBoundingClientRect().height,
+    );
+    await form.getByLabel("Choose attachments").setInputFiles([
+      {
+        name: "photo.png",
+        mimeType: "image/png",
+        buffer: await readFile(
+          new URL("../fixtures/attachment-media/still.png", import.meta.url),
+        ),
+      },
+      {
+        name: "clip.mp4",
+        mimeType: "video/mp4",
+        buffer: await readFile(
+          new URL(
+            "../fixtures/message-gallery/assets/sample.mp4",
+            import.meta.url,
+          ),
+        ),
+      },
+    ]);
+    await expect(form.getByRole("progressbar")).toHaveCount(2);
+    for (const indicator of await form.getByRole("progressbar").all()) {
+      await expect(indicator.locator("svg")).toHaveCSS(
+        "animation-duration",
+        "0.7s",
+      );
+      await expect(indicator.locator("[data-upload-progress]")).toHaveAttribute(
+        "stroke-dasharray",
+        "25 100",
+      );
+      await expect(indicator).not.toHaveAttribute("aria-valuenow");
+    }
+    const queuedRing = form.getByRole("progressbar", {
+      name: "Queued clip.mp4",
+    });
+    await expect(queuedRing).toHaveAttribute("aria-valuetext", "Queued");
+    await form.getByRole("button", { name: "Preview clip.mp4" }).hover();
+    await expect(
+      form
+        .getByRole("button", { name: "Remove clip.mp4" })
+        .locator("[data-upload-cancel]"),
+    ).toBeVisible();
+    await expect(queuedRing).toHaveCSS("opacity", "0");
+    await editor.hover();
+    await expect(queuedRing).toHaveCSS("opacity", "1");
+    const pendingRing = form.getByRole("progressbar").first();
+    await expect(pendingRing.locator("circle").first()).toHaveCSS(
+      "opacity",
+      "0.5",
+    );
+    await expect
+      .poll(() =>
+        pendingRing.locator("svg").evaluate((el) => {
+          const bounds = getComputedStyle(el);
+          const track = el.querySelector("circle");
+          const style = getComputedStyle(track);
+          return {
+            width: parseFloat(bounds.width),
+            height: parseFloat(bounds.height),
+            stroke: style.stroke,
+            visibility: style.visibility,
+          };
+        }),
+      )
+      .toEqual({
+        width: 16,
+        height: 16,
+        stroke: "rgb(255, 255, 255)",
+        visibility: "visible",
+      });
+
+    await expect
+      .poll(() =>
+        form.evaluate((el) => {
+          const tile = el
+            .querySelector('[aria-label="Preview photo.png"]')
+            .getBoundingClientRect();
+          const toolbar = el
+            .querySelector('[aria-label="Attach files"]')
+            .getBoundingClientRect();
+          const style = getComputedStyle(el);
+          const expectedTop =
+            el.getBoundingClientRect().top +
+            parseFloat(style.borderTopWidth) +
+            parseFloat(style.paddingBottom);
+          return Math.max(
+            Math.abs(tile.left - toolbar.left),
+            Math.abs(tile.top - expectedTop),
+          );
+        }),
+      )
+      .toBeLessThan(0.5);
+
+    await expect(pendingRing.locator("circle").first()).not.toHaveAttribute(
+      "stroke-dasharray",
+    );
+    const uploadingPreview = form.getByRole("button", {
+      name: "Preview photo.png",
+    });
+    const uploadingCancel = form
+      .getByRole("button", { name: "Remove photo.png" })
+      .locator("[data-upload-cancel]");
+    await uploadingPreview.hover();
+    await expect(uploadingCancel).toBeVisible();
+    await expect(pendingRing).toHaveCSS("opacity", "0");
+    await editor.hover();
+    await expect(uploadingCancel).toBeHidden();
+    await expect(pendingRing).toHaveCSS("opacity", "1");
+    await uploadingPreview.focus();
+    await expect(uploadingCancel).toBeVisible();
+    await editor.focus();
+    await expect(uploadingCancel).toBeHidden();
+    for (const percent of [0, 40, 100]) {
+      await page.evaluate(
+        (percent) =>
+          window.composerFixture.reportUploadProgress(
+            "photo.png",
+            percent,
+            100,
+          ),
+        percent,
+      );
+      await expect(pendingRing.locator("svg")).toHaveCSS(
+        "animation-name",
+        "none",
+      );
+      await expect(queuedRing.locator("svg")).toHaveCSS(
+        "animation-duration",
+        "0.7s",
+      );
+      await expect(pendingRing).toHaveAttribute(
+        "aria-valuenow",
+        String(percent),
+      );
+      await expect
+        .poll(() =>
+          pendingRing.locator("[data-upload-progress]").evaluate((el) =>
+            getComputedStyle(el)
+              .strokeDasharray.match(/[\d.]+/g)
+              ?.map(Number),
+          ),
+        )
+        .toEqual([percent, 100]);
+      if (percent === 40)
+        await page.screenshot({
+          path: test.info().outputPath("composer-upload.png"),
+        });
+      await pendingRing.screenshot({
+        path: test.info().outputPath(`upload-ring-${percent}.png`),
+      });
+    }
+    const firstPreview = form.getByRole("button", {
+      name: "Preview photo.png",
+    });
+    await page.keyboard.press("Tab");
+    await firstPreview.focus();
+    await expect(firstPreview).toBeFocused();
+    await expect(firstPreview).toHaveCSS("outline-style", "solid");
+    await expect
+      .poll(() =>
+        firstPreview.evaluate((el) => {
+          const tile = el.getBoundingClientRect();
+          const row = el.closest("ul").getBoundingClientRect();
+          const style = getComputedStyle(el);
+          const extent =
+            parseFloat(style.outlineWidth) + parseFloat(style.outlineOffset);
+          return Math.min(
+            tile.left - extent - row.left,
+            tile.top - extent - row.top,
+          );
+        }),
+      )
+      .toBeGreaterThanOrEqual(0);
+    await form.screenshot({
+      path: test.info().outputPath("keyboard-focus-corners.png"),
+    });
+    const trigger = form.getByRole("button", { name: "Preview clip.mp4" });
+    await expect
+      .poll(() => trigger.locator("video").evaluate((el) => el.videoWidth))
+      .toBeGreaterThan(0);
+    await expect
+      .poll(() =>
+        trigger.evaluate((el) => {
+          const box = el.getBoundingClientRect();
+          const corner = el
+            .closest("li")
+            .querySelector('[aria-label="Remove clip.mp4"]')
+            .getBoundingClientRect();
+          return Math.max(
+            Math.abs(corner.x + corner.width / 2 - box.right),
+            Math.abs(corner.y + corner.height / 2 - box.top),
+            Math.abs(box.width - box.height),
+          );
+        }),
+      )
+      .toBeLessThan(0.5);
+    await expect(trigger.locator("video")).toHaveCSS("object-fit", "cover");
+    await page.evaluate(() => {
+      window.reviewTransitions = [];
+      const animate = Element.prototype.animate;
+      Element.prototype.animate = function (frames, options) {
+        if (this.matches("[data-review-media]"))
+          window.reviewTransitions.push({
+            frames,
+            closing: this.closest("[data-review-closing]")?.getAttribute(
+              "data-review-closing",
+            ),
+          });
+        return animate.call(this, frames, options);
+      };
+    });
+    const beforeFailure = await form.evaluate(
+      (el) => el.getBoundingClientRect().height,
+    );
+    await trigger.click();
+    const dialog = page.getByRole("dialog", { name: "Attachment preview" });
+    await expect
+      .poll(() =>
+        page.evaluate(() =>
+          window.reviewTransitions.some(({ frames }) =>
+            frames.some((frame) => frame.clipPath?.startsWith("path(")),
+          ),
+        ),
+      )
+      .toBe(true);
+    await expect(dialog).not.toHaveAttribute("data-review-pending", "");
+    await expect
+      .poll(() =>
+        dialog.evaluate(
+          (el) =>
+            el
+              .getAnimations({ subtree: true })
+              .filter((animation) => animation.playState === "running").length,
+        ),
+      )
+      .toBe(0);
+    await dialog.screenshot({
+      path: test.info().outputPath("attachment-viewer.png"),
+    });
+    const video = dialog.locator("video");
+    await expect
+      .poll(() => video.evaluate((el) => el.readyState))
+      .toBeGreaterThanOrEqual(2);
+    await dialog
+      .getByRole("button", { name: "Play video", exact: true })
+      .click();
+    await expect
+      .poll(() => video.evaluate((el) => el.currentTime))
+      .toBeGreaterThan(0);
+    await video.evaluate((el) => {
+      window.openDraftVideo = el;
+      el.loop = true;
+    });
+    const openedSource = await video.getAttribute("src");
+    // Finish the held eager queue while the local video is actually playing.
+    release();
+    // The modal intentionally hides its background form from accessibility.
+    const backgroundForm = page.getByRole("form", {
+      name: "Send a message to General",
+      exact: true,
+      includeHidden: true,
+    });
+    await expect(backgroundForm.getByText(/Ready$/)).toHaveCount(1);
+    expect(await video.evaluate((el) => el === window.openDraftVideo)).toBe(
+      true,
+    );
+    await expect(video).toHaveAttribute("src", openedSource);
+    expect(await video.evaluate((el) => el.paused)).toBe(false);
+    await expect(
+      dialog.getByRole("button", { name: /Playback speed/ }),
+    ).toBeVisible();
+    await expect(dialog.getByRole("button", { name: /comments/i })).toHaveCount(
+      0,
+    );
+    await dialog.getByRole("button", { name: "Previous attachment" }).focus();
+    await page.keyboard.press("ArrowLeft");
+    await expect
+      .poll(() =>
+        dialog
+          .locator("img[data-review-media]")
+          .evaluate((el) => el.naturalWidth),
+      )
+      .toBeGreaterThan(0);
+    await page.keyboard.press("ArrowRight");
+    await expect(video).toBeVisible();
+    await expect
+      .poll(() => video.evaluate((el) => el.readyState))
+      .toBeGreaterThanOrEqual(2);
+    const seek = dialog.getByRole("slider", {
+      name: "Video timeline",
+      exact: true,
+    });
+    await seek.focus();
+    await page.keyboard.press("ArrowLeft");
+    await expect(video).toBeVisible();
+    await dialog.getByRole("button", { name: "Previous attachment" }).click();
+    for (const mode of ["light", "dark"]) {
+      await page.evaluate((mode) => {
+        document.documentElement.classList.toggle("dark", mode === "dark");
+      }, mode);
+      for (const width of [390, 1280]) {
+        await page.setViewportSize({ width, height: 800 });
+        await expect(
+          dialog.getByRole("button", { name: "Next attachment" }),
+        ).toBeInViewport();
+        await expect(
+          dialog.getByRole("button", { name: "Close fullscreen viewer" }),
+        ).toBeInViewport();
+      }
+    }
+    await page.evaluate(() => {
+      document.documentElement.style.fontSize = "200%";
+    });
+    await expect(
+      dialog.getByRole("button", { name: "Close fullscreen viewer" }),
+    ).toBeInViewport();
+    await dialog
+      .getByRole("button", { name: "Close fullscreen viewer" })
+      .click();
+    await expect(dialog).toHaveCount(0);
+    await expect
+      .poll(() =>
+        page.evaluate(() =>
+          window.reviewTransitions.some(({ closing }) => closing === "shared"),
+        ),
+      )
+      .toBe(true);
+    await expect(
+      form.getByRole("button", { name: "Preview photo.png" }),
+    ).toBeFocused();
+    await expect(editor).toHaveText("Preserve this draft");
+    await page.evaluate(() => {
+      document.documentElement.style.fontSize = "";
+    });
+    await page.setViewportSize({ width: 1440, height: 950 });
+    const retry = form.getByRole("button", { name: "Retry photo.png" });
+    await expect(retry).toBeVisible();
+    await expect
+      .poll(() => form.evaluate((el) => el.getBoundingClientRect().height))
+      .toBe(beforeFailure);
+    const failedRemove = form.getByRole("button", { name: "Remove photo.png" });
+    await expect(failedRemove).toBeVisible();
+    // Both error actions must fit inside the real strip scrollport.
+    for (const action of [retry, failedRemove]) {
+      expect(
+        await action.evaluate((el) => {
+          const control = el.getBoundingClientRect();
+          const strip = el.closest("ul").getBoundingClientRect();
+          return Math.min(
+            control.left - strip.left,
+            strip.right - control.right,
+            control.top - strip.top,
+          );
+        }),
+      ).toBeGreaterThanOrEqual(0);
+    }
+    for (const mode of ["light", "dark"]) {
+      await page.evaluate(
+        (mode) =>
+          document.documentElement.classList.toggle("dark", mode === "dark"),
+        mode,
+      );
+      for (const width of [390, 1280]) {
+        await page.setViewportSize({ width, height: 800 });
+        await page.evaluate(() => {
+          document.documentElement.style.fontSize = "200%";
+        });
+        await retry.click({ trial: true });
+        await failedRemove.click({ trial: true });
+      }
+    }
+    await page.evaluate(() => {
+      document.documentElement.style.fontSize = "";
+    });
+    await page.setViewportSize({ width: 1440, height: 950 });
+    await form.screenshot({
+      path: test.info().outputPath("compact-upload-retry.png"),
+    });
+    await retry.click();
+    await expect(retry).toHaveCount(0);
+    await expect(form.getByRole("progressbar")).toHaveCount(0);
+    await form.getByLabel("Choose attachments").setInputFiles({
+      name: "failed.txt",
+      mimeType: "text/plain",
+      buffer: Buffer.from("failed"),
+    });
+    await expect(
+      form.getByRole("button", { name: "Retry failed.txt" }),
+    ).toBeVisible();
+    await expect(
+      form.getByRole("button", { name: "Send message" }),
+    ).toBeDisabled();
+    await form.getByRole("button", { name: "Remove failed.txt" }).click();
+    await expect(
+      form.getByRole("button", { name: "Retry failed.txt" }),
+    ).toHaveCount(0);
+    await expect(
+      form.getByRole("button", { name: "Send message" }),
+    ).toBeEnabled();
+    await page.emulateMedia({ reducedMotion: "reduce" });
+    await page.evaluate(() => {
+      window.reviewTransitions = [];
+    });
+    await firstPreview.click();
+    await expect(
+      dialog.getByRole("img", { name: "Attachment preview", exact: true }),
+    ).toBeVisible();
+    await expect(dialog).not.toHaveAttribute("data-review-pending");
+    expect(await page.evaluate(() => window.reviewTransitions)).toEqual([]);
+    await page.keyboard.press("Escape");
+    await expect(dialog).toHaveCount(0);
+    await page.emulateMedia({ reducedMotion: "no-preference" });
+    const photoRemove = form.getByRole("button", { name: "Remove photo.png" });
+    const clipRemove = form.getByRole("button", { name: "Remove clip.mp4" });
+    await editor.focus();
+    await editor.hover();
+    await expect(photoRemove.locator("..")).toHaveCSS("opacity", "0");
+    await form.getByRole("button", { name: "Preview photo.png" }).hover();
+    await expect(photoRemove.locator("..")).toHaveCSS("opacity", "1");
+    await expect(clipRemove.locator("..")).toHaveCSS("opacity", "0");
+    await clipRemove.focus();
+    await expect(clipRemove.locator("..")).toHaveCSS("opacity", "1");
+    await photoRemove.click();
+    await form.getByRole("button", { name: "Remove clip.mp4" }).click();
+    await expect(form.getByRole("region", { name: "Attachments" })).toHaveCount(
+      0,
+    );
+    await expect
+      .poll(() => form.evaluate((el) => el.getBoundingClientRect().height))
+      .toBe(height);
+    expect(
+      await page.evaluate(() => window.composerFixture.published()),
+    ).toEqual([]);
+    await expect(editor).toHaveText("Preserve this draft");
+  } finally {
+    release();
     await server.close();
   }
 });

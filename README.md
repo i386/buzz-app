@@ -36,6 +36,11 @@ See [contributing](docs/contributing.md) for exact pins, registry settings,
 and the pinned pnpm package's Intel Mac limitation.
 
 Both commands forward arguments to their development tool (Vite or Tauri).
+Both rebuild Vite's dependency cache on every start (`vite --force`, under a
+second), so imports present at startup don't trigger a mid-load reload. Imports
+added while a server runs still can. Servers in one checkout share that cache,
+so starting a second one rebuilds it under the first, which may reload; restart
+the first if it stays blank, or run the second from its own worktree.
 The default port is derived from the worktree's path, giving each checkout a
 stable default that normally avoids collisions between parallel worktrees;
 `just desktop` prints the URL it chose. Override it with `just web --port 1431`

@@ -130,18 +130,6 @@
   overflow-wrap: anywhere;
   white-space: pre-wrap;
 }
-
-.memoryEntry {
-  overflow-wrap: anywhere;
-}
-.memoryEntry summary {
-  cursor: pointer;
-}
-.memoryBody {
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
-  margin: 0;
-}
 .agentIdentity {
   display: flex;
   flex-direction: column;
@@ -151,63 +139,6 @@
 .agentIdentity h3 {
   margin: 0;
   color: var(--text-subtle);
-}
-.runtime {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-3);
-  min-width: 0;
-}
-.runtime h3,
-.runtime dl,
-.runtime dd {
-  margin: 0;
-}
-.runtime dl {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-2);
-}
-.runtime dd,
-.runtime pre {
-  overflow-wrap: anywhere;
-  white-space: pre-wrap;
-}
-.instancesDisclosure {
-  border: 1px solid var(--border-standard);
-  border-radius: var(--radius-card);
-  overflow: hidden;
-}
-.instancesDisclosure summary {
-  cursor: pointer;
-  padding: var(--space-4);
-}
-.instancesDisclosure summary:focus-visible {
-  outline: 2px solid var(--text-primary);
-  outline-offset: -2px;
-}
-.instancesDisclosure li {
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
-  padding: var(--space-3) var(--space-4);
-  border-top: 1px solid var(--border-standard);
-}
-
-.runtimeTab {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-6);
-  min-width: 0;
-}
-.restartDiff {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-1);
-  margin: 0;
-  padding: 0;
-  list-style: none;
-  overflow-wrap: anywhere;
 }
 
 .copyField {
@@ -251,121 +182,6 @@
 .copyField:focus-visible .copyIndicator,
 .copyIndicator[data-copied="true"] {
   opacity: 1;
-}
-
-.activityRows {
-  border: 1px solid var(--border-standard);
-  border-radius: var(--radius-control);
-  overflow: hidden;
-}
-.activityRow,
-.logEntry {
-  min-height: 4rem;
-  border-bottom: 1px solid var(--border-standard);
-}
-.activityRow {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--space-3);
-  padding: var(--space-3) var(--space-4);
-}
-.activityRows > :last-child {
-  border-bottom: 0;
-}
-/* biome-ignore lint/correctness/noUnknownPseudoClass: align the shared switch inside the Activity row. */
-.activityRow :global(.buzz-switch) {
-  width: 100%;
-  justify-content: space-between;
-}
-.activityStatus {
-  padding: var(--space-1) var(--space-2);
-  border-radius: var(--radius-pill);
-  background: var(--surface-inset);
-}
-.activityStatus[data-status="running"] {
-  background: var(--status-online);
-  color: var(--text-inverse);
-}
-/* biome-ignore lint/correctness/noUnknownPseudoClass: target the shared button inside this row. */
-.logEntry :global(.buzz-button) {
-  display: flex;
-  justify-content: flex-start;
-  width: 100%;
-  min-height: 4rem;
-  gap: var(--space-3);
-  text-align: left;
-}
-/* biome-ignore lint/correctness/noUnknownPseudoClass: target the shared button label inside this row. */
-.logEntry :global(.buzz-button-label) {
-  display: flex;
-  width: 100%;
-  align-items: center;
-  gap: var(--space-3);
-}
-.logEntry svg:last-child {
-  margin-left: auto;
-}
-.harnessLog {
-  display: flex;
-  flex-direction: column;
-  min-width: 0;
-  min-height: 0;
-  flex: 1;
-  padding: var(--space-panel-inset);
-  gap: var(--space-4);
-}
-.logHeader {
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
-}
-.logSubtitle {
-  display: block;
-  color: var(--text-subtle);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.logLoading {
-  min-height: 9rem;
-  padding: var(--space-4);
-  border-radius: var(--radius-control);
-  background: var(--surface-inset);
-}
-.logLoadingBars {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-3);
-}
-.logLoadingLine {
-  height: var(--space-3);
-  width: 84%;
-  border-radius: var(--radius-control);
-  background: var(--surface-panel);
-}
-.logLoadingLine:first-child {
-  width: 58%;
-}
-.logLoadingLine:last-child {
-  width: 68%;
-}
-.logContent {
-  flex: 1;
-  min-height: 0;
-  min-width: 0;
-  margin: 0;
-  overflow: auto;
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
-  background: var(--surface-inset);
-  border-radius: var(--radius-control);
-  padding: var(--space-4);
-  user-select: text;
-}
-.logTitle {
-  flex: 1;
-  min-width: 0;
 }
 
 .profileContents {

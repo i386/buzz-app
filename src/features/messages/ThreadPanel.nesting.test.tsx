@@ -61,6 +61,15 @@ vi.mock("./MessageComposer", () => ({
     </section>
   ),
 }));
+// jsdom has no layout observer; browser resize behavior is covered in Playwright.
+vi.stubGlobal(
+  "ResizeObserver",
+  class {
+    observe() {}
+    disconnect() {}
+  },
+);
+
 beforeEach(() => {
   HTMLElement.prototype.scrollIntoView = vi.fn();
 });

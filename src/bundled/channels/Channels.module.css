@@ -50,7 +50,11 @@
   --sidenav-emoji-size: 0.8125rem;
   padding-inline: var(--sidebar-padding) var(--sidebar-padding-end);
 }
-.conversation [data-tab-pane-toggle][aria-expanded="true"] {
+.conversation
+  :is(
+    [data-tab-pane-toggle],
+    [data-channel-panel-toggle]
+  )[aria-expanded="true"] {
   /* An open pane shares the selected tab fill, rather than a held press. */
   --interaction-pressed: var(--affordance-subtle);
 }
@@ -874,37 +878,6 @@
   border-radius: var(--radius-pill);
   background: var(--affordance-subtle-hover);
 }
-.thinkingBadge i {
-  display: block;
-  width: 0.1875rem;
-  height: 0.1875rem;
-  border-radius: 50%;
-  background: var(--text-standard);
-}
-@keyframes thinking-badge-pulse {
-  0%,
-  40%,
-  100% {
-    opacity: 0.45;
-    transform: translateY(0);
-  }
-  20% {
-    opacity: 1;
-    transform: translateY(-0.125rem);
-  }
-}
-@media (prefers-reduced-motion: no-preference) {
-  .thinkingBadge i {
-    animation: thinking-badge-pulse 1.2s linear infinite;
-  }
-  .thinkingBadge i:nth-child(2) {
-    animation-delay: 80ms;
-  }
-  .thinkingBadge i:nth-child(3) {
-    animation-delay: 160ms;
-  }
-}
-
 /* Occupies the DM identity box while it replaces the avatar or count; shares
    the participant-count chip's subtle roles. */
 .typing {
@@ -997,4 +970,12 @@
 .detailsPrivate:has([data-disabled]) label {
   color: var(--text-unavailable);
   cursor: not-allowed;
+}
+
+/* The main pane's tab host fills the conversation above any bottom drawer. */
+.mainWorkspace {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-height: 0;
 }

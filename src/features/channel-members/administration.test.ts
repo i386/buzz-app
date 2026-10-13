@@ -265,6 +265,25 @@ it.each([
   await h.owner.capability.run(id, change);
   expect(h.sign).not.toHaveBeenCalled();
 });
+it("reads a labeled channel's type from its first t tag", () => {
+  const h = harness();
+  h.setEvents([
+    h.record(39000, [
+      ["d", id],
+      ["t", "stream"],
+      ["t", "workspace"],
+      ["P", viewer],
+      ["private"],
+      ["name", "Fixture"],
+      ["created_at", "100"],
+    ]),
+    required(h.events()[1]),
+    required(h.events()[2]),
+  ]);
+  expect(memberAuthority(h.events(), id, viewer, author).roles[target]).toBe(
+    "member",
+  );
+});
 it("does not fabricate Member for missing or unknown role hints", () => {
   const h = harness();
   h.setEvents([

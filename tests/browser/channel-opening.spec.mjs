@@ -296,10 +296,9 @@ test.describe("large thread opening", () => {
         history.getByText("Distinct author reply 299", { exact: true }),
       ).toBeInViewport();
       await page
-        .getByRole("button", {
-          name: /^Close (?:thread|Thread tab)$/,
-          exact: true,
-        })
+        .locator(
+          '.buzz-tabs-item:has([data-tab-value^="thread:"][aria-selected="true"]) > button:not([role="tab"]), button[aria-label="Close thread"]',
+        )
         .click();
       await expect(history).toHaveCount(0);
     }

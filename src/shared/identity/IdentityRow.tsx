@@ -1,11 +1,5 @@
 import { npubEncode } from "nostr-tools/nip19";
-import {
-  useId,
-  useRef,
-  useState,
-  type AriaAttributes,
-  type ReactNode,
-} from "react";
+import { useId, useRef, useState } from "react";
 import { CopyIcon } from "../design-system/icons";
 import { IconButton } from "../design-system/ui/IconButton";
 import { useToastNotification } from "../design-system/ui/Toast";
@@ -22,8 +16,6 @@ export function IdentityRow({
   isAgent = false,
   keyLabel = formatPublicKey(pubkey),
   detail,
-  previewDetail,
-  render,
 }: {
   pubkey: string;
   name: string;
@@ -31,18 +23,10 @@ export function IdentityRow({
   isAgent?: boolean | undefined;
   keyLabel?: string | undefined;
   detail?: string | undefined;
-  previewDetail?: ReactNode;
-  render?:
-    | ((content: ReactNode, previewProps: AriaAttributes) => ReactNode)
-    | undefined;
 }) {
   const previewId = useId();
   const descriptionId = useId();
   const [open, setOpen] = useState(false);
-  const previewProps: AriaAttributes = {
-    "aria-describedby": descriptionId,
-    "aria-details": open ? previewId : undefined,
-  };
   const anchor = useRef<HTMLSpanElement>(null);
   const copyButton = useRef<HTMLButtonElement>(null);
   const notify = useToastNotification();
@@ -85,24 +69,19 @@ export function IdentityRow({
         actionRef={copyButton}
         aria-label={`${name} identity`}
         trigger={
-          render ? (
-            <span className="flex min-w-0 flex-1">
-              {render(content, previewProps)}
-            </span>
-          ) : (
-            <button
-              type="button"
-              className="flex min-w-0 flex-1 text-left"
-              aria-label={`Preview ${name} identity`}
-              aria-haspopup="dialog"
-              aria-expanded={open}
-              aria-controls={open ? previewId : undefined}
-              {...previewProps}
-              onClick={() => setOpen(true)}
-            >
-              {content}
-            </button>
-          )
+          <button
+            type="button"
+            className="flex min-w-0 flex-1 text-left"
+            aria-label={`Preview ${name} identity`}
+            aria-haspopup="dialog"
+            aria-expanded={open}
+            aria-controls={open ? previewId : undefined}
+            aria-describedby={descriptionId}
+            aria-details={open ? previewId : undefined}
+            onClick={() => setOpen(true)}
+          >
+            {content}
+          </button>
         }
       >
         <div className="flex min-w-0 items-center gap-3">
@@ -145,7 +124,6 @@ export function IdentityRow({
             }}
           />
         </div>
-        {previewDetail}
       </PreviewCard>
     </>
   );

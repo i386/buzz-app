@@ -1,5 +1,12 @@
 import { useCallback, useLayoutEffect, useState, type RefObject } from "react";
 
+/** Shared directional navigation recipe for sent images and draft media. */
+export const galleryMotion = {
+  distance: 40,
+  duration: 0.2,
+  ease: [0.19, 1, 0.22, 1] as const,
+};
+
 type DepartingImage = {
   url: string;
   source: string;
@@ -78,10 +85,10 @@ export function useImageGalleryMotion(
     const start = () => {
       if (cancelled) return;
       delete container.dataset.galleryLoading;
-      const distance = departing.direction * 40;
+      const distance = departing.direction * galleryMotion.distance;
       const timing = {
-        duration: 200,
-        easing: "cubic-bezier(0.19, 1, 0.22, 1)",
+        duration: galleryMotion.duration * 1000,
+        easing: `cubic-bezier(${galleryMotion.ease.join(",")})`,
       };
       animations.push(
         outgoing.animate(

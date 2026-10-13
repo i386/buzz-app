@@ -187,3 +187,81 @@ it.each(["cache", "dispose", "access", "reconnect"] as const)(
     expect(vi.getTimerCount()).toBe(0);
   },
 );
+
+it("late retained trigger admission updates message and thread work synchronously without advancing the freshness clock", async () => {
+  vi.useFakeTimers();
+  vi.setSystemTime(1_800_000_000_000);
+  const viewer = keypair(),
+    agent = keypair(),
+    relay = keypair();
+  const wire = scriptedTransport(viewer.pubkey, relay.pubkey);
+  let live!: LiveCallbacks;
+  let generation = 0;
+  const owner = createRelaySession({
+    ...wire.transport,
+    agentActivity: true,
+    subscribe(callbacks) {
+      live = callbacks;
+      return {
+        update() {},
+        retry() {},
+        dispose() {},
+        observe(next) {
+          generation = next ?? 0;
+        },
+      };
+    },
+  });
+  const root = "b".repeat(64);
+  const trigger = signed(viewer, {
+    kind: 9,
+    content: "please work",
+    created_at: 1_800_000_000,
+    tags: [
+      ["h", "a"],
+      ["e", root, "", "reply"],
+    ],
+  });
+  try {
+    live.receive([roster(relay, "a", [viewer.pubkey, agent.pubkey])]);
+    owner.session.agentActivity.activate();
+    live.state({
+      status: "connected",
+      routes: [{ id: "observer", status: "live", replay: "unknown" }],
+    });
+    for (const [seq, kind] of [
+      [1, "turn_started"],
+      [2, "turn_completed"],
+    ] as const) {
+      live.observer?.(
+        {
+          id: String(seq).repeat(64),
+          agent: agent.pubkey,
+          createdAt: 1_800_000_000,
+          plaintext: JSON.stringify({
+            kind,
+            seq,
+            channelId: "a",
+            turnId: "work",
+            timestamp: new Date().toISOString(),
+            payload: { triggeringEventIds: [trigger.id] },
+          }),
+        },
+        generation,
+      );
+    }
+    expect(owner.session.agentActivity.snapshot().turns[0]?.requests).toEqual(
+      [],
+    );
+    const listener = vi.fn();
+    owner.session.agentActivity.subscribe(listener);
+    live.receive([trigger]);
+    expect(listener).toHaveBeenCalled();
+    expect(owner.session.agentActivity.snapshot().turns[0]).toMatchObject({
+      state: "ended",
+      requests: [{ messageId: trigger.id, threadRootId: root }],
+    });
+  } finally {
+    owner.dispose();
+  }
+});

@@ -1,5 +1,12 @@
 # Hermes Agent integration research
 
+> **Status: superseded by Agents.** The v1 create/edit form, Settings harness rows,
+> model picker and device-defaults card this research targeted were removed with the
+> v1 Agents system. A harness now reaches the app as an agent type that a
+> plugin registers, as the bundled Claude and Codex plugins do. The sections
+> below record the research and the slice built against the removed UI; table rows
+> whose owners no longer exist are dropped.
+
 Hermes Agent should be a Tier 2 preset: an externally installed ACP harness with
 manual setup and Hermes-owned provider configuration. Old Buzz already implements
 that classification. The new app can reuse its existing external-executable
@@ -68,7 +75,7 @@ new app's pinned bridge still requires execution against an installed version.
 ## Verified pinned bridge support
 
 The new app pins Buzz revision `4f51b9e1010e086a16c099cd8d8218ca974a5e18` in
-[agent-runtime.json](../runtime/agent-runtime.json). Its
+[historical agent-runtime.json](https://github.com/block/buzz-app/blob/a2b7db9ae/runtime/agent-runtime.json). Its
 [`run_models`](https://github.com/block/buzz/blob/4f51b9e1010e086a16c099cd8d8218ca974a5e18/crates/buzz-acp/src/lib.rs#L6073)
 already implements `buzz-acp models --json`: initialize and session creation have
 a ten-second timeout, and success, protocol error and timeout explicitly shut down
@@ -94,14 +101,9 @@ failure feedback. Browse reduces typos but cannot prevent stale or rejected pick
 
 | Owner | Current behavior | Hermes change |
 | --- | --- | --- |
-| [Native snapshot](../src-tauri/src/agents.rs) | `harness_options` emits exactly Buzz Agent, Goose and Pi. | Detect `hermes-acp` with existing `installed`, emit its absolute executable path when found, empty args/providers, and disable automatic installation. Keep a missing entry visible. |
-| [Harness Settings](../src/app/AgentSettings.tsx) | Filters native options through three fixed labels; setup controls are Pi-specific. | Keep Tier 1 rows visible. Put Hermes behind Add harness with chooser/setup details and Check again; detected Hermes also earns a main row. Reuse the shared dialog and native snapshot without an added-harness preference or other adapters. |
-| [Harness identity](../src/bundled/agents/agent-edit.ts) and [shared editor](../src/bundled/agents/AgentHarnessEditor.tsx) | Exact command match; only Goose/Pi have kind fallback. The dropdown independently matches exact values. | Add Hermes identity in the first slice. Recognize saved absolute paths independently of current discovery, preserve the executable, and keep its named selection when paths differ. Clear incompatible selectors only on an explicit switch, omit Provider, and show missing-runtime guidance. |
-| [Model picker](../src/bundled/agents/AgentModelPicker.tsx) and [native models](../src-tauri/src/agent_models.rs) | External browsing recognizes only Pi/Goose; other choices follow Databricks lookup. | First slice uses Hermes's default model and omits model browsing, custom-ID and connection-test controls. Add ACP Browse as a follow-up with exact IDs, cancellation and explicit model-failure handling. Never route Hermes to Databricks. |
-| [Defaults](../crates/agent-controller/src/agent_defaults.rs), [default card](../src/app/AgentDefaultsCard.tsx), [IPC types](../src/features/agents/control.ts) | Device defaults validate only three harness IDs. | Follow-up if Hermes becomes a device default: add its identity consistently and omit unsupported Provider/Effort controls. Preserve same-harness inheritance and Buzz Agent fallback when missing. |
 | [Old Buzz import](../crates/agent-controller/src/import.rs) | A normal `runtime: hermes` preset reference is rejected unless an override/custom definition supplies a command. | Separate follow-up: choose an import-time absolute-path mapping or launch-time resolution. Preserve missing-install recovery and source data; do not auto-start imported agents. |
 
-The [controller launch path](../crates/agent-controller/src/runtime.rs) already
+The [historical controller launch path](https://github.com/block/buzz-app/blob/a2b7db9ae/crates/agent-controller/src/runtime.rs) already
 accepts an executable absolute path, passes literal arguments through `buzz-acp`,
 and applies a nonempty model as `BUZZ_ACP_MODEL`. A nonempty Provider on an
 unmapped external harness is rejected. Therefore Hermes does not require bundling
@@ -131,9 +133,9 @@ discovery must not erase them. Check effective selectors and environment overrid
 before claiming the default-only contract. This slice does not provide old Buzz's
 model-picker parity.
 
-Reuse the existing native snapshot, Settings rows and form owners. Expected files:
-`agents.rs`, `AgentSettings.tsx`, `agent-edit.ts`, `AgentHarnessEditor.tsx` and
-`AgentModelPicker.tsx`, with the existing native validation owner if required to
+Reuse the existing native snapshot, Settings rows and form owners. Expected files
+were `agents.rs` and the since-removed v1 owners (`AgentSettings.tsx` harness rows,
+`agent-edit.ts`, `AgentHarnessEditor.tsx` and `AgentModelPicker.tsx`), with the existing native validation owner if required to
 enforce default-only selectors. Aim for roughly 150–250 production lines,
 excluding tests/docs and the separate icon work. Review the first working slice
 before expanding. No generic native metadata contract is planned.
@@ -178,7 +180,7 @@ real platform check. If defaults/import or Browse are included, cover persistenc
 exact model IDs, rejection feedback and cancellation contracts too. No full scan
 is needed for this research note.
 
-The first slice is implemented: native discovery, Settings Add harness chooser and
+The first slice was implemented against the v1 UI: native discovery, Settings Add harness chooser and
 manual setup (installed Hermes appears in the main list), saved
 path identity, shared create/edit with default-model recovery and a native launch
 guard. Focused mounted-form coverage and the controller's synthetic runtime test
@@ -190,6 +192,9 @@ does not try `.exe`/`.cmd`/`.bat`; recognizing saved paths does not fix detectio
 Browse, device defaults and old-agent import remain follow-ups. Settings icons
 have separate checks and a browser preview; those do not validate Hermes
 compatibility.
+The Settings and form parts have since been removed with the v1 UI; the native
+discovery and the controller's `harness-presets.json` remain in the Rust host, with no
+frontend consumer.
 
 The Tier 2 implementation now uses one controller-owned preset definition file,
 shared with TypeScript for metadata and saved-command recognition. Native

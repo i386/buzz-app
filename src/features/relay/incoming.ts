@@ -8,6 +8,8 @@ export type IncomingMessage = Readonly<{
   workflowOwnerId?: string | undefined;
   /** At most 4,096 source characters for a preview, not the complete message. */
   previewContent: string;
+  /** Signed `audience` tag: `agents` is coordination between agents. */
+  audience?: "agents";
 }>;
 export type IncomingListener = (messages: readonly IncomingMessage[]) => void;
 /** Verified live-phase events from one delivery. `channelId` is the route's channel

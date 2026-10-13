@@ -17,7 +17,7 @@ broader supported external reuse remains an [author-contract gate](status.md#ope
 
 **Rich conversation content.** An integration plugin recognizes a link to a GitHub pull request or a native Buzz object and supplies a panel showing that object. The Channels page decides where the panel appears. Another page can display the same content in a different arrangement.
 
-Both experiences use real session capabilities. As AI integrations become available, authors should be able to consume those capabilities without rebuilding authentication, execution, or state handling. The [Agents compatibility view](agents.md) shows the existing Buzz library read-only; mentions use current channel membership and existing runners. The connected [local controls checkpoint](agent-control.md) adds native settings and bundled process management through an injected app-owned capability. Execution and credential import stay blocked in the disposable editor; the normal management path requires its separately reviewed, attended handover.
+Both experiences use real session capabilities. As AI integrations become available, authors should be able to consume those capabilities without rebuilding authentication, execution, or state handling. Agents is the app's only agent system; [shared agent selection](agents.md) gives other plugins the viewer's local agents and the known inventory through `session.agentChoices`, and mentions use current channel membership. Execution and credential handling stay blocked in the disposable editor.
 
 ## Ownership
 
@@ -26,13 +26,30 @@ Both experiences use real session capabilities. As AI integrations become availa
 | Application host | Startup, plugin installation and activation, page navigation, persistent channel sidebar, Settings, and recovery. |
 | Page plugin | Its complete React tree, local interaction state, internal navigation, and arrangement of panels. |
 | Panel plugin | Recognizing a supported target and implementing the content and interactions for that target. |
-| Shared capabilities | Session state, relay access, retained data, local agent controls, and eventually external connections. |
+| Shared capabilities | Session state, relay access, retained data, local agents, and eventually external connections. |
 | Reusable UI components | Useful rendering and interaction behavior, configured through ordinary props. |
 | Cordis | Dependency availability and resource lifetime across plugin activation, replacement, and disposal. |
 
 Bundled and local plugins use the same contribution contracts. Within the source
 tree, shared implementation code remains importable without another registration
 layer; this is not a promise that external artifacts can import host source paths.
+
+### Interface composition
+
+Owning a React tree does not require inventing its visual system. Use the
+[design guide's surface recipes](../src/shared/design-system/DESIGN.md#compose-the-whole-surface)
+and [contribution ownership table](../src/shared/design-system/DESIGN.md#plugin-contribution-boundaries)
+before building a page, panel, Settings contribution, dialog, or menu. Establish
+which host supplies the outer surface, header, scrolling, and dismissal before
+adding any of them. The Settings host renders contributed content directly;
+registration metadata does not supply its content heading or group layout.
+
+Source plugins reuse shared components; external artifacts use their supported
+author contract and exposed roles. This is design guidance, not a new component
+SDK or automatic conformance guarantee. Keep specialized layouts and product
+behavior with the plugin, while preserving shared controls, states, and host
+lifecycle. The [adoption review](design-system-adoption.md#composition-review)
+distinguishes reusable examples from existing gaps.
 
 
 ## Code arrangement
@@ -50,8 +67,9 @@ bundled/channels/       conversation navigation, page layout and panel placement
 bundled/channel-usage/  optional archive-backed Usage panel and Channels menu launcher
 bundled/projects/       repository/project pages, issue/PR details and Git views
 features/projects/     entity route/data contracts and bounded Git read bridge
-bundled/agents/         local control UI and read-only current-Buzz library page
-features/agents/        app-owned control capability; separate session-owned library
+bundled/agents/        Agents page and agent types (harness plugins register theirs)
+features/agents/       Agents service: saved agents, creation, deletion
+features/agents/        session-owned agent inventory, choices, local agents and activity
 bundled/github/         builtin GitHub panel plugin
 bundled/bestie/         builtin Bestie page
 bundled/inbox/          builtin Inbox page for unread conversations and mentions
@@ -104,8 +122,10 @@ ctx.pages.register({
 ```
 
 Header entries move into the labelled More pages popover when they cannot fit,
-including at narrow widths. They use native-button navigation and `aria-current`,
-not tab/tabpanel semantics or companion-panel toggles. Every active page remains
+including at narrow widths. Toolbar and overflow entries use native-button
+navigation and `aria-current`, not companion-panel toggles. The wide topbar uses
+shared chrome tabs linked to retained page panels; manual selection leaves focus
+on the tab and suppresses destination autofocus. Every active page remains
 searchable, regardless of its placement.
 
 A primary page may also supply `badge`, a component the shell renders at the end
@@ -156,7 +176,7 @@ so `canOpen` is unchanged. Three bands by convention:
 | Band | Meaning |
 | --- | --- |
 | `-10` | Specialises a target another plugin already handles (a richer GitHub PR view). |
-| `0` | Default: the plugin is specific to the targets it matches (GitHub, Profiles, Activity). |
+| `0` | Default: the plugin is specific to the targets it matches (GitHub, Activity). |
 | `100` | Catch-all or fallback: anything under a scheme or host (a website panel, a globe icon). |
 
 Bundled catch-alls declare `100` themselves, so a third-party plugin specific to
@@ -192,10 +212,10 @@ contracts with their own layout and local navigation.
 
 ### Bundled defaults
 
-**Channels is the only required bundled plugin.** Bestie,
-Todos, and Templates & teams are off by default. Feedback, Diff viewer, Identity
-Naming, Agent Activity, Channel Usage, Terminal, Profiles, Links, Mentions, Emoji, GitHub, Me, Inbox,
-Projects, Agents, Workflows, Sessions, Builderlab, Hosted communities, and Community admin are
+**Channels is the only required bundled plugin.** Bestie
+and Todos are off by default. Feedback, Diff viewer, Identity
+Naming, Agent Activity, Channel Usage, Terminal, Links, Mentions, Emoji, GitHub, Me, Inbox,
+Projects, Agents, Claude, Codex, Workflows, Sessions, Builderlab, Hosted communities, and Community admin are
 on by default, but optional. Both browser and native catalogs declare that policy.
 
 Me is an empty, optional default-enabled page. Me and Channels request topbar
@@ -236,7 +256,7 @@ fence asynchronous reads on revocation. Channel Usage owns this panel and its
 archive projection; the session continues to own archive capture, access and
 retention. Plugin enablement controls visibility without changing capture settings.
 
-### Optional channel templates and Settings cards
+### Settings cards
 
 `ctx.settingsCards.register({ id, title, icon, component })` contributes a card under
 Settings → Messages, not a new route. Adding `group` instead gives the card its own
@@ -247,10 +267,14 @@ Cards receive `active()` and use ordinary
 session capabilities through injection. Host boundaries isolate rendering errors;
 exact registration identity and mounted lifetime revoke callbacks on removal.
 
-Templates & teams (`buzz.channel-templates`) is bundled **off by default** in both
-browser and desktop catalogs. Explicit saved overrides win. Enable it under
-Settings → Plugins, then manage templates under Settings → Messages → Templates and saved teams on Agents. The host sidebar owns
-personal groups and the existing + creation buttons, independently of this plugin.
+The channel template extension point (`ctx.channelTemplates`) was removed with the
+v1 Agents system. The host sidebar owns personal groups and the existing + creation
+buttons. Channel templates are now device-local (`buzz.channel-templates.v1`,
+`features/channel-templates/local.ts`): a name, agent pubkeys, Agents team ids
+and a starting Canvas, managed under Settings → Channel templates. Picking one in
+Create resolves its agents and its teams' members to those that are the owner's
+agents in this community and sends them with the Canvas as ordinary channel setup,
+which the session applies and retries as before.
 
 Hosted communities (`block.hosted-communities`) is a Block-specific bundled plugin
 under Settings → Communities. It manages Block-hosted relays through a Builderlab
@@ -277,36 +301,6 @@ over the shared `oauth_callback` sign-in, host HTTP to the manifest's single
 validates the challenge and signs only the fixed kind 24243 binding. The desktop
 credential lives in plugin memory for the plugin's lifetime and is never persisted,
 so restarting the app signs out. Other browser builds show the unavailable notice.
-
-`ctx.channelTemplates.register({ id, title, editor, groupDefault, saveAs })` supplies
-one optional composition provider. With zero or multiple active providers, no
-optional controls are selected. This host-matched preview is not a workflow API:
-The sidebar owns creation form/draft data and final dispatch; the session owns signing,
-membership, Canvas writes, exact receipts and setup completion notices. Settings and
-provider components must check `active()` before accepting delayed work or starting
-new writes; this lifecycle fence is not a sandbox or a replacement for access checks.
-
-Normal Create selects a saved template without a customization disclosure or raw
-setup dump. Templates settings retain recipe lineup/Canvas editing; saved-team
-lineups and instructions are edited on Agents. Disabling
-preserves saved group default references but does not apply them to new intent.
-Accepted drafts get a compact summary and Clear action only when the provider is
-unavailable or fails;
-re-enable does not overwrite edits or automatically apply an unresolved old default.
-Accepted setup runs independently of the template/agent catalogs after admission.
-Failures preserve frozen setup receipts and Outbox delivery evidence; dismissing a
-completion notice only hides that notice. There is no template Resume, automatic
-resend or startup continuation. Disabling is not cancellation of already accepted
-writes. Group-only and Canvas-only setup
-require no agent-library readiness; real agent selections still receive fresh host
-validation. Template-specific library demand belongs to mounted plugin controls;
-shared group/catalog storage remains session-owned.
-
-Colocated regressions cover app registration, exact-contribution revocation,
-accepted-draft retention, completion notices and preserved delivery evidence. They are not live cross-window
-or packaged/native acceptance; validation results and remaining gates belong in the
-pull request. Updating the native bundled catalog requires a desktop rebuild/restart;
-frontend hot reload alone cannot add the entry.
 
 ### Composer accessories
 
@@ -351,8 +345,8 @@ not cross-version capability negotiation.
 
 Todos (`buzz.todos`) is bundled **off by default** in browser and desktop. Enable
 it under Settings → Plugins. Its channel-header ListChecks button opens a right-hand
-side panel, grouping items as To do, Doing and Done, with add, a per-item Doing
-toggle, check/uncheck, one optional assignee per item, automatic
+side panel, grouping items as To do, In progress and Done, with add, a per-item status
+selector, check/uncheck, one optional assignee per item, automatic
 saving after each action, and explicit Refresh. It uses shared controls and theme
 tokens; Channels still owns panel geometry, responsive placement and selection. Terminal remains in the bottom drawer.
 
@@ -474,12 +468,6 @@ Enable it under Settings → Plugins.
 
 `main.tsx` creates the shared services once; `app/App.tsx` owns startup screens,
 navigation, and built-in Settings. `app/services.ts` composes the core services.
-`agentControl` is provided once on the root Cordis context and exported through
-the generated type-only author contract. Agents consumes it through injection;
-plugin disable/re-enable and community switches do not reconstruct it. Page
-unmount clears observation, not enabled intent. Root disposal fences only the
-TypeScript projection; the native app owns persistence, credential admission and
-process lifetime, and enforces launch/import gates even for direct IPC calls.
 
 Settings and Recovery subscribe directly to plugin management. Page render errors
 stay in the page boundary rather than being copied into plugin configuration.
@@ -502,10 +490,10 @@ Plugins can declare host access in `manifest.json`:
 }
 ```
 
-Plugins declaring `host` in `inject` use `ctx.host.runCommand(id)` and
+Plugins declaring `host` in `inject` use `ctx.host.runCommand(id, input?)` and
 `ctx.host.request({ url, method, headers, body })`. Command calls name a declared
 ID; the program and arguments come only from the plugin's manifest. Native
-execution uses no shell or stdin, discards stderr, and returns at most 4 KiB of
+execution uses no shell, accepts no stdin by default, discards stderr, and returns at most 4 KiB of
 UTF-8 stdout by default. A command may declare `maxOutputBytes`, an integer from
 1 through 1048576 (1 MiB), to request a different bound. Output exceeding that
 bound returns `null` without truncation. Existing declarations retain the 4 KiB
@@ -527,6 +515,9 @@ This is a command entry inside `host.commands`. The plugin parses the inventory;
 the host only enforces the declared byte limit.
 
 The direct command invocation has a five-second deadline;
+commands may declare `maxInputBytes` (1–65536) for optional UTF-8 stdin data.
+Undeclared or oversized input is rejected before spawning. Input never changes
+the installed program or arguments, and its delivery shares the existing deadline.
 cancellation or timeout kills its process group on Unix or its job process tree
 on Windows. Failure returns `null`. The app
 also searches standard Homebrew binary directories when a macOS GUI launch has a
@@ -557,7 +548,7 @@ environment (`null` removes a variable); variables starting `BUZZ_` or `NOSTR_`
 are never inherited. The program is found on the same search path as commands,
 which on macOS also includes `~/.local/bin`.
 
-`agent` names an Agents2 agent whose type the calling plugin registered. The
+`agent` names an agent whose type the calling plugin registered. The
 process then runs as that agent, as harness agents do: native puts its key in
 `BUZZ_PRIVATE_KEY` (and `NOSTR_PRIVATE_KEY`), its community in `BUZZ_RELAY_URL`
 and its owner attestation in `BUZZ_AUTH_TAG`, and puts the bundled agent tools,
@@ -639,7 +630,7 @@ profile locking, rollback, recovery and safe-mode behavior. An uncertain write r
 the preview identity for same-artifact retry; it does not refetch or rebuild.
 
 Local discovery skips symlink directories, `node_modules`, `target` and dot-prefixed
-directories such as `.git` and `.claude` (Claude Code worktrees) below the selected
+directories such as `.git` and `.claude` (Claude worktrees) below the selected
 folder; select such a folder itself to import from it. Git discovery does not skip
 dot-prefixed directories. Local discovery uses `cap-std` directory-relative reads to
 confine descendant path resolution. Files
@@ -733,8 +724,16 @@ An explicit `scope: null` restores Personal space; omitted page scope leaves the
 current community alone. Unknown providers/routes fail with the target retained
 for retry, rather than silently opening another page.
 
-Pages receive optional `navigation` in `PageProps`. Ordinary pages acknowledge a
-successful mount inside the render boundary. Pages declaring `handlesNavigation`
+Pages receive optional `navigation` in `PageProps`. Its optional `focus` is
+`"content"` by default or `"preserve"` when the opening control keeps focus; page
+autofocus must honor it. This is per-opening presentation intent, never route data
+or a saved history value. Session binding and default resolution carry it forward;
+retry preserves it, while explicit openings and history traversal default to
+content focus. The shell topbar passes `open(target, { focus: "preserve" })`
+through its page-selection handoff.
+
+Ordinary pages acknowledge a successful mount inside the render boundary.
+Pages declaring `handlesNavigation`
 acknowledge their domain presentation with `navigation.complete(...)`; Channels
 waits for its requested channel window or exact-message reveal/focus. `navigation.resolve(target)` normalizes a
 pending default destination within the same visit, caller and original deadline;
@@ -911,8 +910,8 @@ enforces text/recipient limits, and revokes commands on tool removal/replacement
 editor destination/session change, disabled/read-only state and unmount. Names are
 presentation, never recipient resolution. Editing/pasting over an identity span
 removes its intent under the existing draft rules.
-The batch command inserts a saved team as individual recipients in one undoable
-edit. It deduplicates batch keys and rejects the whole edit if any recipient is
+The batch command inserts several recipients, such as a team record's agents, as
+individual recipients in one undoable edit. It deduplicates batch keys and rejects the whole edit if any recipient is
 ineligible, or the resulting draft exceeds its text or 32-mention limit. While
 editing an existing message, both mention commands insert identity references
 without changing the original notification recipients.

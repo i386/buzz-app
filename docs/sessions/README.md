@@ -38,6 +38,11 @@ The earlier [channel-space proposal](spaces.md) is superseded design history.
   send without a mention does not infer an agent. Existing Messages sessions keep
   their ordinary recipient rules. Saved placement must load before the Me reader
   enables sending; an unavailable preference read is not evidence of Messages.
+- Me reuses Messages' sidebar working-agent signal, animated indicator and activity
+  popover, including owned-agent typing in threads and unread-thread actions.
+  Agent activity details open in Me's existing per-conversation panel workspace;
+  exact-message/thread actions use the canonical channel reader, as other Me links do.
+  Me grouping and row menus remain independent of Messages organization.
 - Me reuses Messages' secondary conversation/tool/panel tabs and pane geometry,
   with separate per-conversation Me persistence. Its main timeline remains flat.
   A single working agent's Activity indicator opens its Activity panel locally;

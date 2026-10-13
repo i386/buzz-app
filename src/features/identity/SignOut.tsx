@@ -141,7 +141,7 @@ export function SignOutDialog({
               you exported, or relay data; your npub and its history stay on the
               relays.
               {!removeAgents &&
-                " Kept agents keep their list, settings (including any API keys entered there) and keys; their saved logins and logs are erased. Kept Databricks agents need reconnecting through Browse models."}
+                " Kept agents keep their names, types and keys; their settings on this device are erased."}
             </p>
           </>
         )}

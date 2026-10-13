@@ -28,8 +28,46 @@ export type AttachmentDraft = {
   remove(id: string): void;
   retry(id: string): void;
   cancel(): void;
+  resume(): void;
   clear(): void;
 };
+type UploadTask = {
+  controller: AbortController;
+  settled(): void;
+  update(id: string, change: Partial<DraftAttachment>): void;
+};
+type DraftWork = {
+  items: readonly DraftAttachment[];
+  active: Map<string, UploadTask>;
+  pending: Map<string, Promise<UploadedAttachment>>;
+};
+const handoffs = new WeakMap<
+  AttachmentDraft,
+  {
+    take(): DraftWork;
+    receive(work: DraftWork): void;
+  }
+>();
+
+/** Send transfers the existing upload owner; clearing the composer cannot abort it. */
+export function transferAttachmentDraft(
+  source: AttachmentDraft,
+  target: AttachmentDraft,
+) {
+  if (source === target || target.snapshot().length)
+    throw new Error("Attachment upload handoff unavailable");
+  const files = source.snapshot();
+  if (files.every((item) => item.uploaded)) {
+    target.adopt(files);
+    source.clear();
+    return;
+  }
+  const from = handoffs.get(source),
+    to = handoffs.get(target);
+  if (!from || !to) throw new Error("Attachment upload handoff unavailable");
+  to.receive(from.take());
+}
+
 const drafts = new WeakMap<RelaySession, Map<string, AttachmentDraft>>();
 export const MAX_ATTACHMENT_FILES = 10;
 const MAX_RETAINED_BYTES = 2 * UPLOAD_MAX_BYTES;
@@ -50,7 +88,9 @@ export function attachmentDraft(
   const owners = partition;
   let items: readonly DraftAttachment[] = [];
   const listeners = new Set<() => void>();
-  const active = new Map<string, AbortController>();
+  let paused = false;
+  let active = new Map<string, UploadTask>();
+  let pending = new Map<string, Promise<UploadedAttachment>>();
   const emit = () => {
     for (const listener of listeners) listener();
   };
@@ -68,15 +108,21 @@ export function attachmentDraft(
     );
     emit();
   };
-  function cancelActive() {
-    for (const controller of active.values()) controller.abort();
+  function cancelActive(retryRequired = true) {
+    paused = true;
+    for (const task of active.values()) task.controller.abort();
     active.clear();
+    pending.clear();
     items = items.map((item) =>
-      item.status === "preparing" || item.status === "uploading"
+      item.status === "queued" ||
+      item.status === "preparing" ||
+      item.status === "uploading"
         ? {
             ...item,
-            status: "error",
-            error: "Upload paused. Retry to continue.",
+            status: retryRequired ? "error" : "queued",
+            error: retryRequired
+              ? "Upload paused. Retry to continue."
+              : undefined,
             transfer: undefined,
           }
         : item,
@@ -115,8 +161,10 @@ export function attachmentDraft(
     if (!attachments) throw new UploadError("unavailable");
     const controller = new AbortController();
     const combined = AbortSignal.any([signal, controller.signal]);
-    active.set(item.id, controller);
-    replace(item.id, {
+    const owner = active;
+    const task: UploadTask = { controller, update: replace, settled: pump };
+    owner.set(item.id, task);
+    task.update(item.id, {
       status: "preparing",
       error: undefined,
       transfer: undefined,
@@ -124,36 +172,36 @@ export function attachmentDraft(
     try {
       const prepared = await prepareAttachment(item.file, combined);
       combined.throwIfAborted();
-      replace(item.id, { status: "uploading" });
+      task.update(item.id, { status: "uploading" });
       const result = await abortable(
         attachments.upload(prepared, channelId, combined, (sent, total) => {
           if (
             !combined.aborted &&
-            active.get(item.id) === controller &&
+            owner.get(item.id) === task &&
             Number.isSafeInteger(sent) &&
             Number.isSafeInteger(total) &&
             total > 0 &&
             sent >= 0 &&
             sent <= total
           )
-            replace(item.id, { transfer: { sent, total } });
+            task.update(item.id, { transfer: { sent, total } });
         }),
         combined,
       );
       combined.throwIfAborted();
       const uploaded = item.voice ? { ...result, voice: item.voice } : result;
-      replace(item.id, { status: "ready", uploaded });
+      task.update(item.id, { status: "ready", uploaded });
       return uploaded;
     } catch (error) {
       if (combined.aborted) {
         if (signal.aborted && !controller.signal.aborted)
-          replace(item.id, {
+          task.update(item.id, {
             status: "queued",
             error: undefined,
             transfer: undefined,
           });
       } else
-        replace(item.id, {
+        task.update(item.id, {
           status: "error",
           transfer: undefined,
           error:
@@ -163,18 +211,43 @@ export function attachmentDraft(
         });
       throw error;
     } finally {
-      if (active.get(item.id) === controller) active.delete(item.id);
+      if (owner.get(item.id) === task) owner.delete(item.id);
+      task.settled();
     }
+  }
+  function pump() {
+    if (paused || active.size) return;
+    const next = items.find((item) => item.status === "queued");
+    if (next) start(next);
+  }
+  function start(item: DraftAttachment, signal = new AbortController().signal) {
+    if (item.status === "error")
+      return Promise.reject(
+        new Error(item.error || "Retry or remove this file."),
+      );
+    const existing = pending.get(item.id);
+    if (existing && active.has(item.id)) return abortable(existing, signal);
+    const work = prepareOne(item, signal);
+    const owner = pending;
+    owner.set(item.id, work);
+    // Eager work has no awaiting caller; errors are already visible on the item.
+    void work
+      .catch(() => {})
+      .finally(() => {
+        if (owner.get(item.id) === work) owner.delete(item.id);
+      });
+    return work;
   }
   const store = {
     snapshot: () => items,
     subscribe(listener: () => void) {
       owners.set(key, store);
       listeners.add(listener);
+      if (listeners.size === 1) store.resume();
       return () => {
         listeners.delete(listener);
         if (!listeners.size) {
-          cancelActive();
+          cancelActive(false);
           if (!items.length && owners.get(key) === store) owners.delete(key);
         }
       };
@@ -225,6 +298,8 @@ export function attachmentDraft(
       ];
       owners.set(key, store);
       emit();
+      paused = false;
+      pump();
     },
     addUploaded(attachment: UploadedAttachment) {
       if (!session.attachments) throw new UploadError("unavailable");
@@ -255,33 +330,73 @@ export function attachmentDraft(
       return true;
     },
     async prepareForSend(signal: AbortSignal) {
+      paused = false;
       if (!items.length) return [];
       const uploaded: UploadedAttachment[] = [];
-      for (const item of items) {
-        const current = items.find((candidate) => candidate.id === item.id);
-        if (!current) throw new UploadError("cancelled");
-        uploaded.push(await prepareOne(current, signal));
+      try {
+        for (const item of items) {
+          signal.throwIfAborted();
+          const current = items.find((candidate) => candidate.id === item.id);
+          if (!current) throw new UploadError("cancelled");
+          uploaded.push(await start(current, signal));
+        }
+      } catch (error) {
+        // Eager siblings share this send owner. Freeze retryable state before
+        // recovery adopts the snapshot, including transfers not yet awaited.
+        cancelActive();
+        throw error;
       }
       return uploaded;
     },
     remove(id: string) {
-      active.get(id)?.abort();
+      active.get(id)?.controller.abort();
       active.delete(id);
+      pending.delete(id);
       items = items.filter((item) => item.id !== id);
       emit();
+      pump();
     },
     retry(id: string) {
       if (!items.some((item) => item.id === id && item.status === "error"))
         return;
       replace(id, { status: "queued", error: undefined, transfer: undefined });
+      paused = false;
+      pump();
     },
-    cancel: cancelActive,
+    cancel: () => cancelActive(false),
+    resume() {
+      paused = false;
+      pump();
+    },
     clear() {
       cancelActive();
       items = [];
       emit();
     },
   };
+  handoffs.set(store, {
+    take() {
+      paused = true;
+      const work = { items, active, pending };
+      items = [];
+      active = new Map();
+      pending = new Map();
+      emit();
+      return work;
+    },
+    receive(work) {
+      paused = false;
+      items = work.items;
+      active = work.active;
+      pending = work.pending;
+      for (const task of active.values()) {
+        task.update = replace;
+        task.settled = pump;
+      }
+      owners.set(key, store);
+      emit();
+    },
+  });
   return store;
 }
 
@@ -310,8 +425,6 @@ export function useAttachmentDraft(
   return {
     store,
     items,
-    blocked: items.some((item) =>
-      ["preparing", "uploading", "error"].includes(item.status),
-    ),
+    blocked: items.some((item) => item.status === "error"),
   };
 }

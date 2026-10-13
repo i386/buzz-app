@@ -30,7 +30,7 @@ test("Up edits in the existing composer and restores native focus, draft history
       mimeType: "text/plain",
       buffer: Buffer.from("Report"),
     });
-    await expect(page.getByText(/Queued$/)).toBeVisible();
+    await expect(page.getByText(/Ready$/)).toBeVisible();
     await input.fill("Original caption");
     await input.press("Enter");
     await expect(

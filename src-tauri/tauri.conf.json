@@ -6,7 +6,7 @@
   "build": {
     "beforeDevCommand": "pnpm dev:desktop --port 1430",
     "devUrl": "http://localhost:1430",
-    "beforeBuildCommand": "node scripts/build-agent-runtime.mjs && pnpm build",
+    "beforeBuildCommand": "pnpm build",
     "frontendDist": "../dist"
   },
   "app": {
@@ -27,13 +27,12 @@
       }
     ],
     "security": {
-      "csp": "default-src 'self'; script-src 'self' blob: 'wasm-unsafe-eval'; connect-src 'self' ipc: http://ipc.localhost https://api.github.com wss:; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https: buzz-media: http://buzz-media.localhost; media-src 'self' blob: buzz-media: http://buzz-media.localhost http://127.0.0.1:* https://github.com https://user-images.githubusercontent.com https://private-user-images.githubusercontent.com https://github-production-user-asset-6210df.s3.amazonaws.com https://objects.githubusercontent.com"
+      "csp": "default-src 'self'; script-src 'self' blob: 'wasm-unsafe-eval'; connect-src 'self' ipc: http://ipc.localhost https://api.github.com wss:; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https: buzz-media: http://buzz-media.localhost; media-src 'self' blob: https://dwwgwmfqqjotj.cloudfront.net buzz-media: http://buzz-media.localhost http://127.0.0.1:* https://github.com https://user-images.githubusercontent.com https://private-user-images.githubusercontent.com https://github-production-user-asset-6210df.s3.amazonaws.com https://objects.githubusercontent.com"
     }
   },
   "bundle": {
     "active": true,
     "macOS": { "entitlements": "entitlements.plist" },
-    "resources": { "resources/agent-runtime/": "agent-runtime/" },
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",

@@ -26,6 +26,15 @@ vi.mock("./use-reading", () => ({
   readingPositioned: () => {},
 }));
 
+// jsdom has no layout observer; browser resize behavior is covered in Playwright.
+vi.stubGlobal(
+  "ResizeObserver",
+  class {
+    observe() {}
+    disconnect() {}
+  },
+);
+
 function mount(session: RelaySession, channelId: string, messageId: string) {
   const container = document.createElement("div");
   document.body.append(container);

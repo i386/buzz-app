@@ -106,7 +106,7 @@ test("GitHub API errors offer prominent external opening before retry", async ({
   context,
   app,
 }, testInfo) => {
-  const target = `${github}#discussion_r1`;
+  const target = `${github}#issuecomment-1`;
   const detailsUrl = "https://api.github.com/repos/block/buzz/pulls/1";
   // Permit only this injected response's engine console report, once by exact URL.
   app.report.githubFailures = [detailsUrl];
@@ -198,7 +198,7 @@ test("message link context menus bypass the pane and return keyboard focus", asy
   context,
   app,
 }, testInfo) => {
-  const target = `${github}?view=all#discussion_r1`;
+  const target = `${github}?view=all#issuecomment-1`;
   for (const destination of [github, ordinary]) {
     await context.route(`${destination}**`, (route) =>
       route.fulfill({

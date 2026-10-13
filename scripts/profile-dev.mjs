@@ -642,7 +642,8 @@ export async function profileWeb({
     .join(" ");
   const viteProcess = run(
     process.execPath,
-    ["node_modules/vite/bin/vite.js", ...vite.args],
+    // Rebuilds the dependency cache like `pnpm dev`; see README.
+    ["node_modules/vite/bin/vite.js", "--force", ...vite.args],
     {
       env: {
         ...process.env,

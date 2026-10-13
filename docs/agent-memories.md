@@ -61,18 +61,12 @@ view limits, scope isolation and late-result rejection across revocation, discon
 cache clear, release and disposal. These are synthetic identities/transport checks,
 not production memory reads or packaged-native acceptance.
 
-## Profile presentation
+## Consumers
 
-The Profiles plugin adds a lazy Memories tab and an isolated `ProfileMemories`
-child. No request starts until that tab mounts. Core and slug entries use native
-text disclosures, not HTML or Markdown execution. Leaving the tab, closing the
-panel or disabling Profiles disposes its view; reopening requests new evidence.
-The tab does not rely on agent-shaped avatars to decide access. Unsupported hosts
-and self targets explain the limitation without issuing a read.
-
-RTL tests exercise actual React StrictMode, the profile tab, pending work, scope
-switches, retry states and unmount. The existing Chromium/WebKit profile journey
-adds keyboard disclosure and narrow-width wrapping checks through actual plugin
-registration. No browser cases were added or removed; authority permutations remain
-in the cheaper protocol/session tests. Live relay memory, packaged/native acceptance and cross-platform acceptance
-remain unverified by these browser fixtures.
+No plugin shows memories in a UI now: the Profiles plugin and its Memories tab
+were removed. The Claude and Codex bundled runtimes open a view through
+`session.agentMemories.open(pubkey)` to read the agent's own memories for its Buzz
+tools; Claude also reads the `core` memory for a new session and reuses a
+read for five minutes. Each read refreshes one view and disposes it when settled,
+and fails unless the view's status is `ready`. Without a ready relay connection
+no view is opened.

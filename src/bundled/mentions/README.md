@@ -175,23 +175,41 @@ memory for 100 channels and 100 keys each.
 
 ## 5. Space selects only an exact, unique name
 
-When the user types Space after a query, the client selects a choice only if all
-of these are true:
+When the user types Space after a query, a choice is the **exact name** among a
+set of choices when all of these are true:
 
 - the normalized query is not empty;
-- exactly one choice with aliases has an alias or label equal to the query;
-- no choice has an alias or label that **continues** the query: the normalized
-  name is longer, starts with the normalized query, and the next code point is
-  not a letter, mark, or digit (`Jose Luis` and `Jose-Luis` continue `jose`;
-  `Josefa` does not);
-- the full choice set is known: no directory search for this query is waiting,
-  running, or failed, and the search reported no more pages; and
-- that choice is shown and can still be chosen.
+- it is the only choice in the set with aliases that has an alias or label equal
+  to the query; and
+- no choice in the whole known choice set has an alias or label that
+  **continues** the query: the normalized name is longer, starts with the
+  normalized query, and the next code point is not a letter, mark, or digit
+  (`Jose Luis` and `Jose-Luis` continue `jose`; `Josefa` does not). A label's
+  key qualifier or generated `(agent)` suffix only tells namesakes apart, so
+  `Honey · 4prr` and a generated `Honey (agent)` do not continue `honey`.
+  A literal name `Honey (agent)` still continues `honey`.
 
-Check this against the full choice set, not only the shown rows. A namesake that
-a pending search would find makes the name ambiguous, so Space MUST NOT select
-before the search finishes. Otherwise Space is a normal space. Tab, Enter, and a
-click select the highlighted row.
+The **local** choices are the ones known without the directory search: the
+channel's members and the agents the client offers for mention (section 1, items
+1 and 2, or a session's own agent list). The client selects:
+
+1. the exact name among the local choices, once every member's name is known;
+   otherwise
+2. the exact name among the full choice set, once the full choice set is known:
+   no directory search for this query is waiting, running, or failed, and the
+   search reported no more pages.
+
+In both cases the choice must be shown and can still be chosen. Check against
+the whole set, not only the shown rows.
+
+Local choices show before directory results (section 6), so a unique local name
+selects at once: directory results cannot make it ambiguous, whether or not the
+search has found them yet. A longer directory name still blocks Space once the
+search reports it, but not before. A member whose name is not known yet may be a
+namesake, so until it is, only step 2 applies. A name that only a directory
+result has could still gain a namesake from a pending search, so Space MUST NOT
+select it before the search finishes. Otherwise Space is a normal space. Tab,
+Enter, and a click select the highlighted row.
 
 ## 6. List stability (desktop behavior; not in the fixtures)
 
@@ -273,7 +291,7 @@ each choice supplies its own label.
 | --- | --- |
 | `matching` | Section 3. `expected` is the tier of `label` for `query` (0 to 3), or `null` when it does not match. |
 | `ranking` | Sections 3 and 4. `expected` is the full ordered key list. |
-| `space` | Section 5. `expected` is a key or `null`. |
+| `space` | Section 5 exact name among one complete choice set. The local-first step is tested only in the desktop UI tests. `expected` is a key or `null`. |
 | `query` | Section 2 syntax. `expected` is `{start, end, query}` or `null`. |
 | `admission` | Section 2 multi-word rule. `expected` is a boolean. |
 | `tags.write` | Section 8 writer. `expected` is the ordered `p` and `mention` tags, or an error class: `not_member`, `invalid`, or `too_many`. The sender is a member in addition to `members`. |

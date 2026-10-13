@@ -1,5 +1,6 @@
+import type { LocalAgentSource } from "../agents/local-activity";
 import { readView } from "../../shared/view-state";
-import type { AgentControl } from "../agents/control";
+import type { LocalAgents } from "../agents/local";
 import type { IdentityNames } from "../identity-names/service";
 import type { PresenceActivity } from "../presence/activity";
 import type { Context } from "@deepseek-ai/cordis";
@@ -48,8 +49,9 @@ export function provideRelay(
   connect?: (signal: AbortSignal) => Promise<ReadTransport>,
   presenceActivity?: PresenceActivity,
   identityNames?: IdentityNames,
-  agentChoices?: Pick<AgentControl, "snapshot" | "subscribe" | "refresh">,
+  agentChoices?: LocalAgents,
   resume?: { viewer: string; scope: string },
+  localAgents?: LocalAgentSource,
 ) {
   let disposed = false;
   let generation = 0;
@@ -211,6 +213,7 @@ export function provideRelay(
           const successor = createRelaySession(transport, {
             identityNames,
             agentChoices,
+            localAgents,
             ...(presenceActivity ? { presenceActivity } : {}),
             prepared: true,
             // Keep intent preparation, but do not fetch every unopened channel.

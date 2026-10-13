@@ -34,3 +34,20 @@ export function profileKey(target: string): string | undefined {
     return undefined;
   }
 }
+
+/** App-local Activity destination, never a public identity or authority claim. */
+export function profileActivityViewTarget(pubkey: string): string | undefined {
+  return profileTarget(pubkey)
+    ? `buzz:profile?agent=${pubkey.toLowerCase()}&tab=activity`
+    : undefined;
+}
+export function profileActivityViewKey(target: string): string | undefined {
+  try {
+    const agent = new URL(target).searchParams.get("agent");
+    return agent && target === profileActivityViewTarget(agent)
+      ? agent
+      : undefined;
+  } catch {
+    return undefined;
+  }
+}

@@ -207,10 +207,18 @@ export function MediaAttachment({
       style={previewStyle}
       onLoadedData={(event) => {
         const element = event.currentTarget;
-        setMeasuredDimensions({
-          width: element.videoWidth,
-          height: element.videoHeight,
-        });
+        // WebKit can emit loadeddata before nonzero dimensions are available.
+        // Invalid geometry must not replace the usable preview fallback.
+        if (
+          Number.isFinite(element.videoWidth) &&
+          element.videoWidth > 0 &&
+          Number.isFinite(element.videoHeight) &&
+          element.videoHeight > 0
+        )
+          setMeasuredDimensions({
+            width: element.videoWidth,
+            height: element.videoHeight,
+          });
         if (!preview && element.currentTime === 0) {
           // WebKit often paints no frame at exactly zero. Seeking after actual
           // frame data arrives forces a decodable opening frame.

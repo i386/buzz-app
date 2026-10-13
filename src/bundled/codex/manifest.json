@@ -1,0 +1,23 @@
+{
+  "id": "buzz.codex",
+  "name": "Codex",
+  "apiVersion": 1,
+  "host": {
+    "processes": [
+      {
+        "id": "workspace",
+        "program": "pwd"
+      },
+      {
+        "id": "app-server",
+        "program": "codex",
+        "args": ["app-server"]
+      },
+      {
+        "id": "read",
+        "program": "base64",
+        "args": ["-i"]
+      }
+    ]
+  }
+}

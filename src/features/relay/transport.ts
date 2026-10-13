@@ -10,7 +10,7 @@ import { publicationRefusal } from "../developer/traffic";
 import { avatarSource } from "../../shared/avatar-source";
 import { brokerUpload, hostUpload, type AttachmentUpload } from "./attachments";
 import type { ChannelKitHost } from "../channel-templates/host";
-import type { KitRecord, PayloadRecord } from "../channel-templates/model";
+import type { PrivateRecord } from "../channel-templates/model";
 import { workflowHost } from "../workflows/http";
 import {
   communityGitRepository,
@@ -727,10 +727,7 @@ export async function connectBrokerTransport(
     ...(session.channelKit
       ? {
           channelKit: {
-            async prepare(
-              record: KitRecord | PayloadRecord,
-              signal: AbortSignal,
-            ) {
+            async prepare(record: PrivateRecord, signal: AbortSignal) {
               const response = await fetch(`${endpoint}/channel-kit-prepare`, {
                 method: "POST",
                 credentials: "same-origin",

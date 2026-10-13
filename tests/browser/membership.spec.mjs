@@ -132,22 +132,13 @@ keyboardTest(
     ).toBeGreaterThan(0);
     await feed.focus();
     await expect(feed).toBeFocused();
-    await feed.evaluate((el) => {
-      window.keyboardScrolls = [];
-      el.addEventListener("scroll", () =>
-        window.keyboardScrolls.push(el.scrollTop),
-      );
-    });
-    // PageUp animates (the scroll-event count below asserts as much), and
-    // settled geometry is not completion: Linux WebKit can pause a gesture and
-    // resume it after the anchor is captured. Wait for its scrollend.
+    // Settled geometry is not completion: Linux WebKit can pause a gesture and
+    // resume it after the anchor is captured. Wait for its scrollend. Do not
+    // require PageUp to animate; a loaded engine can land it in one frame.
     await keyScroll(page, "PageUp");
     await expect.poll(distance).toBeGreaterThan(200);
     await settle(page);
     const saved = await anchor(page);
-    expect(
-      await page.evaluate(() => new Set(window.keyboardScrolls).size),
-    ).toBeGreaterThan(1);
     await expect.poll(() => app.relay.hasRoute("primary", "alpha")).toBe(true);
     app.membership("member_left", 0);
     const after = app.append(

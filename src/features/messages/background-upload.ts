@@ -4,6 +4,7 @@ import type { RelaySession } from "../relay/session";
 import {
   attachmentDraft,
   clearAttachmentDraft,
+  transferAttachmentDraft,
   type AttachmentDraft,
   type DraftAttachment,
 } from "./attachment-draft";
@@ -116,11 +117,13 @@ export function sendInBackground(
     files: readonly DraftAttachment[],
     preparationError?: unknown,
   ) => boolean | "conflict",
+  source?: AttachmentDraft,
 ) {
   const queue = queueFor(session);
   const key = `background:${crypto.randomUUID()}`;
   const store = attachmentDraft(session, key, channelId);
-  store.adopt(files);
+  if (source) transferAttachmentDraft(source, store);
+  else store.adopt(files);
   const job = { owner, store, controller: new AbortController() };
   const { signal } = job.controller;
   queue.jobs.push(job);

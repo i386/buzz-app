@@ -159,7 +159,7 @@ test("production WS → broker → mounted UI delivers messages and retries a pa
   await expect.poll(() => app.relay.rejected.length).toBe(1);
   await expect(
     page
-      .getByRole("dialog", { name: "Live updates need attention", exact: true })
+      .getByRole("status", { name: "Live updates need attention", exact: true })
       .filter({ hasText: "rate-limited" }),
   ).toBeVisible();
   const calls = heads(app, "alpha").length;
@@ -250,7 +250,7 @@ test("Live retry recovers an empty paused roster without restarting healthy glob
   await expect.poll(() => app.relay.rejected.length).toBe(1);
   await expect(
     page
-      .getByRole("dialog", { name: "Live updates need attention", exact: true })
+      .getByRole("status", { name: "Live updates need attention", exact: true })
       .filter({ hasText: "rate-limited" }),
   ).toBeVisible();
   await expect(

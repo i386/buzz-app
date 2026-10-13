@@ -4,10 +4,11 @@
  *
  * The ladder follows the Block writing standard for relative dates, with one
  * deliberate deviation noted on `formatDayGroupLabel`. Formats use the default
- * locale and time zone, resolved on each call, so a running app follows OS
- * changes.
+ * locale and time zone, checked again after yielding, so a running app follows
+ * OS changes without resolving the defaults for every row in one render batch.
  */
 
+let defaultsChecked = false;
 let formats:
   | {
       locale: string;
@@ -22,6 +23,7 @@ let formats:
     }
   | undefined;
 function dateFormats() {
+  if (defaultsChecked && formats) return formats;
   const { locale, timeZone } = new Intl.DateTimeFormat().resolvedOptions();
   if (formats?.locale !== locale || formats.timeZone !== timeZone) {
     const format = (options: Intl.DateTimeFormatOptions) =>
@@ -50,6 +52,10 @@ function dateFormats() {
       full: format({ dateStyle: "full", timeStyle: "long" }),
     };
   }
+  defaultsChecked = true;
+  queueMicrotask(() => {
+    defaultsChecked = false;
+  });
   return formats;
 }
 
@@ -137,6 +143,16 @@ export function formatItemTimestamp(
  * "Friday, October 2, 2026 at 3:05:09 PM EDT". */
 export function formatFullTimestamp(unixSeconds: number): string {
   return dateFormats().full.format(new Date(unixSeconds * 1_000));
+}
+
+/** A continuation clock without the day period, sharing the full date's settings. */
+export function formatCompactTime(unixSeconds: number): string {
+  return dateFormats()
+    .time.formatToParts(unixSeconds * 1_000)
+    .filter((part) => part.type !== "dayPeriod")
+    .map((part) => part.value)
+    .join("")
+    .trim();
 }
 
 /** Local midnight of the calendar day containing `date`. */

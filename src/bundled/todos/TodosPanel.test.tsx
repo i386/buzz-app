@@ -1,3 +1,4 @@
+import { CanvasConflictError } from "../../features/channel-templates/canvas-conflict";
 // @vitest-environment jsdom
 import "@testing-library/jest-dom/vitest";
 import {
@@ -12,7 +13,6 @@ import userEvent from "@testing-library/user-event";
 import { StrictMode } from "react";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { keypair, signed } from "../../features/relay/testing";
-import { npubEncode } from "nostr-tools/nip19";
 import { publicKeyLabels } from "../../shared/identity/public-key";
 import { readView } from "../../shared/view-state";
 import type { ChannelList } from "../../features/relay/contracts";
@@ -54,7 +54,7 @@ function fixture() {
     read: vi.fn(async () => current),
     save: vi.fn(
       async (_channel: string, content: string, base: string | undefined) => {
-        if (base !== current.id) throw new Error("Canvas changed");
+        if (base !== current.id) throw new CanvasConflictError();
         current = { ...head, content, id: "b".repeat(64) };
         return current;
       },
@@ -122,11 +122,18 @@ it("adds and checks tasks, saves exact base, preserves other Markdown and restor
     await screen.findByRole("checkbox", { name: "New item" }),
   ).toBeChecked();
 });
-it("moves a task through To do, Doing and Done, editing only its Canvas marker", async () => {
+it("moves a task through To do, In progress and Done, editing only its Canvas marker", async () => {
   const f = fixture(),
     user = userEvent.setup();
   render(<TodosPanel {...f.props} />);
-  const doing = () => screen.getByRole("button", { name: "Doing: First" });
+  const status = () => screen.getByRole("button", { name: "Status for First" });
+  const choose = async (name: string) => {
+    await user.click(status());
+    await user.click(await screen.findByRole("menuitemradio", { name }));
+    await waitFor(() =>
+      expect(screen.queryByRole("menu")).not.toBeInTheDocument(),
+    );
+  };
   const section = (name: string) =>
     within(screen.getByRole("region", { name }));
   const lastSave = (content: string, base: string) =>
@@ -137,24 +144,24 @@ it("moves a task through To do, Doing and Done, editing only its Canvas marker",
     );
   await screen.findByRole("checkbox", { name: "First" });
   expect(
-    screen.queryByRole("region", { name: "Doing" }),
+    screen.queryByRole("region", { name: "In progress" }),
   ).not.toBeInTheDocument();
-  expect(doing()).toHaveAttribute("aria-pressed", "false");
-  await user.click(doing());
+  expect(status()).toHaveAttribute("aria-description", "Status");
+  await choose("In progress");
   await saved();
   lastSave(original.replace("- [ ] First", "- [/] First"), head.id);
   expect(
-    section("Doing").getByRole("checkbox", { name: "First" }),
+    section("In progress").getByRole("checkbox", { name: "First" }),
   ).toBePartiallyChecked();
-  expect(doing()).toHaveAttribute("aria-pressed", "true");
-  expect(doing()).toHaveFocus();
-  await user.click(doing());
+  expect(status()).toHaveAttribute("aria-description", "Status");
+  expect(status()).toHaveFocus();
+  await choose("To do");
   await saved();
   lastSave(original, "b".repeat(64));
   expect(
     section("To do").getByRole("checkbox", { name: "First" }),
   ).not.toBeChecked();
-  await user.click(doing());
+  await choose("In progress");
   await saved();
   await user.click(screen.getByRole("checkbox", { name: "First" }));
   await saved();
@@ -172,8 +179,14 @@ it("keeps failed save changes through close/reopen and confirms destructive refr
   f.external();
   await user.click(screen.getByRole("checkbox", { name: "First" }));
   expect(await screen.findByRole("alert")).toHaveTextContent(
-    "Your changes are still here",
+    "Canvas changed elsewhere",
   );
+  expect(
+    screen.queryByRole("button", { name: /^Retry$/ }),
+  ).not.toBeInTheDocument();
+  await user.click(screen.getByRole("button", { name: "Refresh todos" }));
+  expect(await screen.findByRole("alertdialog")).toBeInTheDocument();
+  await user.click(screen.getByRole("button", { name: "Keep editing" }));
   view.unmount();
   render(<TodosPanel {...f.props} />);
   expect(await screen.findByRole("alert")).toHaveTextContent(
@@ -183,11 +196,15 @@ it("keeps failed save changes through close/reopen and confirms destructive refr
   expect(
     screen.queryByRole("button", { name: /^Retry$/ }),
   ).not.toBeInTheDocument();
-  const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
   await user.click(screen.getByRole("button", { name: "Refresh" }));
+  expect(await screen.findByRole("alertdialog")).toBeInTheDocument();
+  await user.click(screen.getByRole("button", { name: "Keep editing" }));
   expect(screen.getByRole("checkbox", { name: "First" })).toBeChecked();
-  confirm.mockReturnValue(true);
+  expect(screen.getByRole("button", { name: "Refresh" })).toHaveFocus();
   await user.click(screen.getByRole("button", { name: "Refresh" }));
+  await user.click(
+    await screen.findByRole("button", { name: "Discard and refresh" }),
+  );
   await waitFor(() =>
     expect(screen.getByRole("checkbox", { name: "First" })).not.toBeChecked(),
   );
@@ -204,11 +221,10 @@ it("retrying a failed read preserves a restored draft without asking to discard"
   f.canvas.read.mockRejectedValueOnce(new Error("Offline"));
   render(<TodosPanel {...f.props} />);
   expect(await screen.findByRole("alert")).toHaveTextContent("Offline");
-  const confirm = vi.spyOn(window, "confirm");
   await user.click(screen.getByRole("button", { name: "Refresh" }));
   await waitFor(() => expect(retry()).toBeEnabled());
   expect(screen.getByRole("checkbox", { name: "First" })).toBeChecked();
-  expect(confirm).not.toHaveBeenCalled();
+  expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
 });
 it("ignores retired reads and reconciles a save completed after unmount without resubmission", async () => {
   const f = fixture(),
@@ -365,6 +381,7 @@ it("keeps exact assignees through rename, failed-save recovery and member remova
     agentLibrary: session.agentLibrary,
   });
   const users = {
+    media: session.media,
     profiles: directory,
     names,
     channels: {
@@ -380,20 +397,22 @@ it("keeps exact assignees through rename, failed-save recovery and member remova
   };
   const select = () =>
     within(screen.getByRole("group", { name: "Assignee for First" })).getByRole(
-      "combobox",
+      "button",
     );
   const view = render(<TodosPanel {...f.props} people={users} />);
   await screen.findByRole("checkbox", { name: "First" });
   f.canvas.save.mockRejectedValueOnce(new Error("Offline"));
   await user.click(select());
   expect(
-    await screen.findByRole("option", { name: `Alex · ${labels.get(a)}` }),
+    await screen.findByRole("menuitemradio", {
+      name: `Alex · ${labels.get(a)}`,
+    }),
   ).toBeInTheDocument();
   expect(
-    screen.getByRole("option", { name: `Alex · ${labels.get(b)}` }),
+    screen.getByRole("menuitemradio", { name: `Alex · ${labels.get(b)}` }),
   ).toBeInTheDocument();
   await user.click(
-    screen.getByRole("option", { name: `Alex · ${labels.get(a)}` }),
+    screen.getByRole("menuitemradio", { name: `Alex · ${labels.get(a)}` }),
   );
   const expected = assignTodo(
     original,
@@ -407,10 +426,13 @@ it("keeps exact assignees through rename, failed-save recovery and member remova
   view.unmount();
   const restored = render(<TodosPanel {...f.props} people={users} />);
   await screen.findByRole("checkbox", { name: "First" });
-  expect(select()).toHaveTextContent(/^Alex$/);
-  expect(select().querySelector("[title]")).toHaveAttribute(
-    "title",
-    npubEncode(a),
+  expect(select()).toHaveAttribute(
+    "aria-description",
+    expect.stringContaining("Alex"),
+  );
+  expect(select().querySelector("[data-avatar-shape]")).toHaveAttribute(
+    "data-avatar-shape",
+    "circle",
   );
   act(() => {
     profiles = new Map([
@@ -419,7 +441,10 @@ it("keeps exact assignees through rename, failed-save recovery and member remova
     ]);
     for (const listener of profileListeners) listener();
   });
-  expect(select()).toHaveTextContent("Renamed");
+  expect(select()).toHaveAttribute(
+    "aria-description",
+    expect.stringContaining("Renamed"),
+  );
   await user.click(retry());
   await saved();
   expect(f.canvas.save).toHaveBeenLastCalledWith(
@@ -434,16 +459,21 @@ it("keeps exact assignees through rename, failed-save recovery and member remova
     };
     for (const listener of rosterListeners) listener();
   });
-  expect(select()).toHaveTextContent(/^Renamed$/);
+  expect(select()).toHaveAttribute(
+    "aria-description",
+    expect.stringContaining("Renamed"),
+  );
   expect(
     screen.queryByRole("button", { name: /^Retry$/ }),
   ).not.toBeInTheDocument();
   act(() => select().focus());
   await user.keyboard("{ArrowDown}");
   expect(
-    await screen.findByRole("option", { name: /not in channel/ }),
+    await screen.findByRole("menuitemradio", { name: /not in channel/ }),
   ).toHaveAttribute("aria-disabled", "true");
-  await user.click(await screen.findByRole("option", { name: "Unassigned" }));
+  await user.click(
+    await screen.findByRole("menuitemradio", { name: "Unassigned" }),
+  );
   await saved();
   expect(f.canvas.save).toHaveBeenLastCalledWith(
     context.channelId,
@@ -491,17 +521,20 @@ it("shows saved identity when profiles fail, disables missing-roster assignments
   const view = render(<TodosPanel {...f.props} people={users} />);
   const select = () =>
     within(screen.getByRole("group", { name: "Assignee for First" })).getByRole(
-      "combobox",
+      "button",
     );
   await screen.findByRole("checkbox", { name: "First" });
-  expect(select()).toHaveTextContent("Saved name");
+  expect(select()).toHaveAttribute(
+    "aria-description",
+    expect.stringContaining("Saved name"),
+  );
   await screen.findByText(/Names unavailable/);
   await user.click(screen.getByRole("button", { name: "Retry users" }));
   await waitFor(() => expect(users.profiles.ensure).toHaveBeenCalledTimes(2));
   // Captured option is stale; the click must read the current authoritative roster.
   act(() => select().focus());
   await user.keyboard("{ArrowDown}");
-  const stale = await screen.findByRole("option", {
+  const stale = await screen.findByRole("menuitemradio", {
     name:
       publicKeyLabels([a, "b".repeat(64)]).get("b".repeat(64)) ??
       "missing fixture label",
@@ -520,7 +553,10 @@ it("shows saved identity when profiles fail, disables missing-roster assignments
   };
   view.rerender(<TodosPanel {...f.props} people={users} />);
   expect(select()).toBeDisabled();
-  expect(select()).toHaveTextContent(/^Saved name$/);
+  expect(select()).toHaveAttribute(
+    "aria-description",
+    expect.stringContaining("Saved name"),
+  );
   expect(
     screen.getByText("Channel members unavailable or out of date."),
   ).toBeInTheDocument();
@@ -634,15 +670,18 @@ it("scopes live naming to channel members rather than out-of-channel namesakes",
   f.canvas.read.mockResolvedValue({ ...head, content });
   const view = render(<TodosPanel {...f.props} people={users} />);
   await screen.findByRole("checkbox", { name: "First" });
-  const trigger = screen.getByRole("combobox", { name: "Assignee for First" });
-  expect(trigger).toHaveTextContent(/^Alex$/);
+  const trigger = screen.getByRole("button", { name: "Assignee for First" });
+  expect(trigger).toHaveAttribute(
+    "aria-description",
+    expect.stringContaining("Alex"),
+  );
   await user.click(trigger);
   expect(
-    await screen.findByRole("option", {
+    await screen.findByRole("menuitemradio", {
       name: `Alex · ${publicKeyLabels([a]).get(a)}`,
     }),
   ).toBeInTheDocument();
-  expect(screen.getAllByRole("option")).toHaveLength(2);
+  expect(screen.getAllByRole("menuitemradio")).toHaveLength(2);
   view.unmount();
   names.dispose();
 });
@@ -720,7 +759,7 @@ it.each(["success", "failure", "closed"])(
         "true",
       );
       expect(
-        screen.getByRole("combobox", { name: "Assignee for Milk" }),
+        screen.getByRole("button", { name: "Assignee for Milk" }),
       ).toBeDisabled();
       await user.click(screen.getByRole("button", { name: "Add" }));
       expect(f.canvas.save).toHaveBeenCalledTimes(1);
@@ -781,3 +820,77 @@ it.each(["success", "failure", "closed"])(
     expect(f.canvas.save).toHaveBeenCalledTimes(outcome === "failure" ? 3 : 2);
   },
 );
+
+it("updates the assigned avatar from live profiles through the session media owner", async () => {
+  const f = fixture();
+  const pubkey = "a".repeat(64);
+  let profiles: ReturnType<typeof people.profiles.snapshot> = new Map([
+    [pubkey, { name: "Alex", picture: "first.png" }],
+  ]);
+  const listeners = new Set<() => void>();
+  const media = vi.fn((picture: string) => `/media/${picture}`);
+  const users = {
+    ...people,
+    media,
+    profiles: {
+      ...people.profiles,
+      snapshot: () => profiles,
+      subscribe: (listener: () => void) => {
+        listeners.add(listener);
+        return () => {
+          listeners.delete(listener);
+        };
+      },
+      ensure: async () => {},
+    },
+  };
+  f.canvas.read.mockResolvedValue({
+    ...head,
+    content: assignTodo(original, readTodos(original).items[0]?.offset ?? -1, {
+      pubkey,
+      name: "Alex",
+    }),
+  });
+  const view = render(<TodosPanel {...f.props} people={users} />);
+  await screen.findByRole("checkbox", { name: "First" });
+  const trigger = screen.getByRole("button", { name: "Assignee for First" });
+  expect(trigger.querySelector("img")).toHaveAttribute(
+    "src",
+    "/media/first.png",
+  );
+  expect(media).toHaveBeenCalledWith("first.png", "small");
+  expect(trigger.querySelector("[data-avatar-shape]")).toHaveAttribute(
+    "data-avatar-shape",
+    "circle",
+  );
+  act(() => {
+    profiles = new Map([
+      [pubkey, { name: "Alex", picture: "updated.png", isAgent: true }],
+    ]);
+    for (const listener of listeners) listener();
+  });
+  expect(trigger.querySelector("img")).toHaveAttribute(
+    "src",
+    "/media/updated.png",
+  );
+  expect(trigger.querySelector("[data-avatar-shape]")).toHaveAttribute(
+    "data-avatar-shape",
+    "squircle",
+  );
+  expect(f.canvas.save).not.toHaveBeenCalled();
+  view.unmount();
+  expect(listeners.size).toBe(0);
+});
+
+it("preserves actionable save failure details", async () => {
+  const f = fixture();
+  f.canvas.save.mockRejectedValueOnce(new Error("Keep Canvas below 24 KiB"));
+  render(<TodosPanel {...f.props} />);
+  await screen.findByRole("checkbox", { name: "First" });
+  await userEvent
+    .setup()
+    .click(screen.getByRole("checkbox", { name: "First" }));
+  expect(await screen.findByRole("alert")).toHaveTextContent(
+    "Keep Canvas below 24 KiB",
+  );
+});

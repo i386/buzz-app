@@ -37,6 +37,31 @@ export function createOAuthSession(
       if (!credential) throw new Error("Sign in to Builderlab first.");
       return credential;
     },
+    /** Creation joins Settings' login without owning or canceling that attempt. */
+    async ensureSignedIn(signal: AbortSignal): Promise<void> {
+      signal.throwIfAborted();
+      if (disposed) throw new Error("Builderlab session is closed.");
+      if (credential) return;
+      await new Promise<void>((resolve, reject) => {
+        const cleanup = () => {
+          listeners.delete(changed);
+          signal.removeEventListener("abort", abort);
+        };
+        const abort = () => {
+          cleanup();
+          reject(signal.reason);
+        };
+        const changed = () => {
+          if (state.status === "pending") return;
+          cleanup();
+          if (credential) resolve();
+          else reject(new Error(state.error ?? "Sign-in canceled."));
+        };
+        listeners.add(changed);
+        signal.addEventListener("abort", abort, { once: true });
+        void this.signIn();
+      });
+    },
     cancel: reset,
     signOut: reset,
     async signIn() {

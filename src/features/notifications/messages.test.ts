@@ -53,6 +53,29 @@ it("does not notify workflow owners for another recipient, but still notifies ex
   });
 });
 
+it("never alerts for coordination between agents, even when it mentions the viewer", async () => {
+  vi.spyOn(Date, "now").mockReturnValue(1_780_000_000_000);
+  const h = await setup();
+  const tags = [["p", h.viewer.pubkey]];
+  h.emit(
+    [
+      message(h.relay, "room", "@Wes run the suite", 1_780_000_000, [
+        ...tags,
+        ["audience", "agents"],
+      ]),
+    ],
+    "live",
+  );
+  await flush();
+  expect(h.show).not.toHaveBeenCalled();
+  h.emit(
+    [message(h.relay, "room", "@Wes the suite passed", 1_780_000_000, tags)],
+    "live",
+  );
+  await vi.waitFor(() => expect(h.show).toHaveBeenCalledOnce());
+  expect(h.show.mock.calls[0]?.[0].body).toBe("@Wes the suite passed");
+});
+
 it.each([9, 40002])(
   "only production live kind-%s traffic can notify, never history/replay/local observation",
   async (kind) => {

@@ -7,8 +7,9 @@ import {
   render as mount,
   screen,
 } from "@testing-library/react";
-import { ToastProvider } from "../../shared/design-system/ui/Toast";
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+});
 import { renderToStaticMarkup } from "react-dom/server";
 import type { RelaySession } from "../../features/relay/session";
 import { LiveStatus } from "./LiveStatus";
@@ -47,8 +48,8 @@ function render(
   );
   if (diagnostics) return renderToStaticMarkup(component);
   cleanup();
-  mount(component, { wrapper: ToastProvider });
-  return document.querySelector(".buzz-toast")?.textContent ?? "";
+  mount(component);
+  return screen.queryByRole("status")?.textContent ?? "";
 }
 it.each<Partial<Snapshot>>([
   {},
@@ -61,16 +62,18 @@ it.each<Partial<Snapshot>>([
   { heads: [{ channelId: "a", state: "deferred" }] },
 ])(
   "does not turn ordinary setup into a yellow recovery warning: %j",
-  (patch) => {
-    expect(render(patch)).toBe("");
+  async (patch) => {
+    expect(await render(patch)).toBe("");
   },
 );
-it("reports clean connection progress in diagnostics without a retry action", () => {
+it("reports clean connection progress in diagnostics without a retry action", async () => {
   expect(
-    render({ routes: [{ ...channel, status: "pending" }] }, false, true),
+    await render({ routes: [{ ...channel, status: "pending" }] }, false, true),
   ).toContain("connecting");
-  expect(render({}, false, true)).toContain("stream established");
-  expect(render({ status: "connecting" }, false, true)).not.toContain("button");
+  expect(await render({}, false, true)).toContain("stream established");
+  expect(await render({ status: "connecting" }, false, true)).not.toContain(
+    "button",
+  );
 });
 it.each<Partial<Snapshot>>([
   { status: "error" },
@@ -82,12 +85,12 @@ it.each<Partial<Snapshot>>([
   { heads: [{ channelId: "a", state: "error", error: "Head read failed" }] },
   { roster: { state: "error", error: "Roster refused" } },
   { roster: { state: "deferred" } },
-])("retains recovery for degraded coverage or failures: %j", (patch) => {
-  expect(render(patch)).toContain("Retry live updates");
+])("retains recovery for degraded coverage or failures: %j", async (patch) => {
+  expect(await render(patch)).toContain("Retry live updates");
 });
 it.each(["channel", "global"])(
   "keeps bounded pending %s quota recovery in Diagnostics only",
-  (owner) => {
+  async (owner) => {
     const error = "rate-limited: quota exceeded; retry in 2s";
     const routes: Snapshot["routes"] =
       owner === "channel"
@@ -96,8 +99,8 @@ it.each(["channel", "global"])(
             channel,
             { id: "profiles", status: "pending", replay: "unknown", error },
           ];
-    expect(render({ routes })).toBe("");
-    const diagnostics = render({ routes }, false, true);
+    expect(await render({ routes })).toBe("");
+    const diagnostics = await render({ routes }, false, true);
     expect(diagnostics).toContain("recovering automatically");
     expect(diagnostics).toContain(`Last rejection: ${error}`);
     expect(diagnostics).not.toContain("stream established");
@@ -147,15 +150,15 @@ it.each<Partial<Snapshot>>([
   },
 ])(
   "does not hide actionable or unsupported failures behind automatic recovery: %j",
-  (patch) => {
-    const html = render({ routes: [recovering], ...patch });
+  async (patch) => {
+    const html = await render({ routes: [recovering], ...patch });
     expect(html).toContain("Retry live updates");
     expect(html).not.toContain("retry in 4s");
   },
 );
-it("a recovering global cannot hide a selected channel failure", () => {
+it("a recovering global cannot hide a selected channel failure", async () => {
   expect(
-    render({
+    await render({
       routes: [
         { ...channel, status: "error", error: "Selected stream stopped" },
         { id: "profiles", status: "pending", replay: "unknown", error: quota },
@@ -163,41 +166,44 @@ it("a recovering global cannot hide a selected channel failure", () => {
     }),
   ).toContain("Selected stream stopped");
 });
-it("keeps partial roster coverage visible even with healthy established routes", () => {
-  expect(render({}, true)).toContain("Some channels are missing");
-  expect(render({}, true)).toContain("Retry live updates");
-  expect(render({ routes: [recovering] }, true)).toContain(
+it("keeps partial roster coverage visible even with healthy established routes", async () => {
+  expect(await render({}, true)).toContain("Some channels are missing");
+  expect(await render({}, true)).toContain("Retry live updates");
+  expect(await render({ routes: [recovering] }, true)).toContain(
     "Some channels are missing",
   );
 });
 
 it.each(["pending"] as const)(
   "keeps partial roster coverage quiet while discovery is %s",
-  (state) => {
-    expect(render({ roster: { state } }, true)).toBe("");
-    expect(render({ roster: { state } }, true, true)).not.toContain(
+  async (state) => {
+    expect(await render({ roster: { state } }, true)).toBe("");
+    expect(await render({ roster: { state } }, true, true)).not.toContain(
       "Some channels are missing",
     );
   },
 );
 it.each(["error", "deferred"] as const)(
   "offers roster recovery when partial discovery is %s",
-  (state) => {
-    const notice = render({ roster: { state } }, true);
+  async (state) => {
+    const notice = await render({ roster: { state } }, true);
     expect(notice).toContain("Channel list needs refreshing.");
     expect(notice).toContain("Retry live updates");
   },
 );
 it.each<Partial<Snapshot>>([{ error: "Socket refused" }])(
   "pending partial discovery does not hide another failure: %j",
-  (patch) => {
-    const notice = render({ ...patch, roster: { state: "pending" } }, true);
+  async (patch) => {
+    const notice = await render(
+      { ...patch, roster: { state: "pending" } },
+      true,
+    );
     expect(notice).toContain("Retry live updates");
     expect(notice).not.toContain("Some channels are missing");
   },
 );
 
-it("diagnostics does not duplicate notices; changing the selected channel/session replaces recovery ownership", () => {
+it("diagnostics does not duplicate notices; changing the selected channel/session replaces recovery ownership", async () => {
   const oldRetry = vi.fn();
   const retry = vi.fn();
   const live = (channelId: string, action: () => void) => {
@@ -218,7 +224,7 @@ it("diagnostics does not duplicate notices; changing the selected channel/sessio
     channelId: string,
     visible = true,
   ) => (
-    <ToastProvider>
+    <>
       {visible && (
         <>
           <LiveStatus
@@ -234,15 +240,15 @@ it("diagnostics does not duplicate notices; changing the selected channel/sessio
           />
         </>
       )}
-    </ToastProvider>
+    </>
   );
   const view = mount(content(oldSession, "a"));
-  expect(screen.getAllByRole("dialog")).toHaveLength(1);
+  expect(screen.getAllByRole("status")).toHaveLength(1);
   view.rerender(content(newSession, "b"));
-  expect(screen.getAllByRole("dialog")).toHaveLength(1);
+  expect(screen.getAllByRole("status")).toHaveLength(1);
   fireEvent.click(screen.getByRole("button", { name: "Retry live updates" }));
   expect(retry).toHaveBeenCalledOnce();
   expect(oldRetry).not.toHaveBeenCalled();
   view.rerender(content(newSession, "b", false));
-  expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+  expect(screen.queryByRole("status")).not.toBeInTheDocument();
 });

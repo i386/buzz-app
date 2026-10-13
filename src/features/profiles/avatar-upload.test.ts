@@ -1,6 +1,5 @@
 // @vitest-environment jsdom
 import { expect, it, vi } from "vitest";
-import { encodeAgentSnapshot, type AgentSnapshot } from "../agents/snapshot";
 import { pngChunks, snapshotChunk } from "../messages/image-metadata";
 import { uploadAvatar } from "./avatar-upload";
 
@@ -13,17 +12,7 @@ vi.mock("../communities/connection", () => ({
 }));
 
 it("strips private snapshot metadata at the avatar upload boundary", async () => {
-  const manifest: AgentSnapshot = {
-    format: "buzz-agent-snapshot",
-    version: 1,
-    definition: { name: "Inert", runtime: "buzz-agent" },
-    profile: { displayName: "Inert" },
-    memory: {
-      level: "core",
-      entries: [{ slug: "core", body: "INERT_PRIVATE_MEMORY" }],
-    },
-  };
-  const bytes = encodeAgentSnapshot(manifest, "png");
+  const bytes = snapshotPng("INERT_PRIVATE_MEMORY");
   const file = new File([bytes], "snapshot.agent.png", { type: "image/png" });
   const signal = new AbortController().signal;
   expect(snapshotChunk(pngChunks(bytes))).toBeDefined();
@@ -42,14 +31,7 @@ it.each(["iCCP", "eXIf"])(
   "redraws a still PNG with %s before uploading and excludes private metadata",
   async (kind) => {
     uploadAttachment.mockClear();
-    const manifest: AgentSnapshot = {
-      format: "buzz-agent-snapshot",
-      version: 1,
-      definition: { name: "Inert" },
-      profile: { displayName: "Inert" },
-      memory: { level: "none", entries: [] },
-    };
-    const source = encodeAgentSnapshot(manifest, "png");
+    const source = snapshotPng("Inert");
     const exif = new Uint8Array(28);
     exif.set(new TextEncoder().encode("Exif\0\0II"));
     const tiff = new DataView(exif.buffer, 6);
@@ -68,7 +50,7 @@ it.each(["iCCP", "eXIf"])(
       ...pngChunk(kind, kind === "iCCP" ? new Uint8Array([1]) : exif),
       ...source.subarray(8 + header.length),
     ]);
-    const redraw = encodeAgentSnapshot(manifest, "png");
+    const redraw = snapshotPng("Inert");
     const bitmap = { width: 1, height: 1, close: vi.fn() };
     const originalBitmap = globalThis.createImageBitmap;
     Object.defineProperty(globalThis, "createImageBitmap", {
@@ -122,4 +104,37 @@ function pngChunk(type: string, payload: Uint8Array): Uint8Array {
   }
   view.setUint32(8 + payload.length, (crc ^ 0xffffffff) >>> 0);
   return out;
+}
+
+/** A 1x1 transparent PNG carrying an agent-snapshot text chunk, as old Buzz
+ * shares wrote them. */
+function snapshotPng(manifest: string): Uint8Array<ArrayBuffer> {
+  const header = new Uint8Array(13);
+  new DataView(header.buffer).setUint32(0, 1);
+  new DataView(header.buffer).setUint32(4, 1);
+  header.set([8, 6], 8);
+  return new Uint8Array([
+    137,
+    80,
+    78,
+    71,
+    13,
+    10,
+    26,
+    10,
+    ...pngChunk("IHDR", header),
+    ...pngChunk(
+      "tEXt",
+      new TextEncoder().encode(`buzz_agent_snapshot\0${btoa(manifest)}`),
+    ),
+    // Zlib stored block holding filter 0 and one transparent RGBA pixel.
+    ...pngChunk(
+      "IDAT",
+      new Uint8Array([
+        0x78, 0x01, 0x01, 0x05, 0x00, 0xfa, 0xff, 0, 0, 0, 0, 0, 0x00, 0x05,
+        0x00, 0x01,
+      ]),
+    ),
+    ...pngChunk("IEND", new Uint8Array()),
+  ]);
 }

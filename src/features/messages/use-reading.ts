@@ -48,8 +48,9 @@ export function useReading({
     const surface = element.closest("[data-reading-surface]");
     // A tabbed thread's header is outside its content, but aria-labelledby
     // identifies its owning tab. Never borrow focus from a sibling tab.
-    const tabPanel = surface?.closest('[role="tabpanel"]');
     const focusedTab = (node: EventTarget | null) => {
+      // Retained content can move panes without restarting this observation.
+      const tabPanel = surface?.closest('[role="tabpanel"]');
       const label = tabPanel?.getAttribute("aria-labelledby");
       const tab = label ? document.getElementById(label) : null;
       return (
