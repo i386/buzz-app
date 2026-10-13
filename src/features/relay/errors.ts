@@ -34,3 +34,27 @@ export function readErrorKind(error: unknown): ReadErrorKind {
     return "denied";
   return "unavailable";
 }
+/** Native IPC rejects with plain strings, so its transport failures are known
+ * by message (src-tauri/src/relay.rs `send` and `read_response`), plus the
+ * NIP-11 discovery read that every native connection starts with. */
+const NATIVE_TRANSIENT = new Set([
+  "Relay request could not be confirmed",
+  "Relay response was interrupted",
+  "Community discovery failed",
+]);
+/** True when trying the same read again can succeed without anyone acting:
+ * the relay or network was unavailable, slow, or the read was cancelled. A
+ * denial, an invalid response or a deterministic local check is not. */
+export function isTransientFailure(error: unknown): boolean {
+  if (error instanceof ReadError)
+    return error.kind === "unavailable" || error.kind === "cancelled";
+  if (typeof error === "string") return NATIVE_TRANSIENT.has(error);
+  // fetch rejects with TypeError when the network is unreachable.
+  return (
+    error instanceof TypeError ||
+    (error instanceof Error &&
+      (error.name === "AbortError" ||
+        error.name === "TimeoutError" ||
+        NATIVE_TRANSIENT.has(error.message)))
+  );
+}

@@ -30,7 +30,11 @@ it("retries a failed read forever with a capped delay", () => {
   const read = source();
   const recovery = createRecovery([read]);
   read.set("failed");
-  expect(recovery.snapshot()).toEqual({ recovering: true, attempt: 0 });
+  expect(recovery.snapshot()).toEqual({
+    recovering: true,
+    attempt: 0,
+    shown: false,
+  });
   const delays = [...RECOVERY_DELAYS_MS, 30_000, 30_000, 30_000];
   for (const [index, delay] of delays.entries()) {
     vi.advanceTimersByTime(delay - 1);
@@ -52,9 +56,17 @@ it("retries only the failed sources and clears once every source settles", () =>
   vi.advanceTimersByTime(RECOVERY_DELAYS_MS[0] ?? 0);
   expect(failed.retry).toHaveBeenCalledTimes(1);
   expect(healthy.retry).not.toHaveBeenCalled();
-  expect(recovery.snapshot()).toEqual({ recovering: true, attempt: 1 });
+  expect(recovery.snapshot()).toEqual({
+    recovering: true,
+    attempt: 1,
+    shown: true,
+  });
   failed.set("settled");
-  expect(recovery.snapshot()).toEqual({ recovering: false, attempt: 0 });
+  expect(recovery.snapshot()).toEqual({
+    recovering: false,
+    attempt: 0,
+    shown: false,
+  });
   vi.advanceTimersByTime(60_000);
   expect(failed.retry).toHaveBeenCalledTimes(1);
   recovery.dispose();
@@ -75,6 +87,32 @@ it("retryNow skips the wait and restarts the delay sequence", () => {
   expect(recovery.snapshot().attempt).toBe(0);
   vi.advanceTimersByTime(RECOVERY_DELAYS_MS[0] ?? 0);
   expect(read.retry).toHaveBeenCalledTimes(6);
+  recovery.dispose();
+});
+
+it("keeps a shown notice up through retryNow until every source settles", () => {
+  const read = source();
+  const recovery = createRecovery([read]);
+  read.set("failed");
+  // Before the first automatic retry a manual or signal retry stays quiet.
+  recovery.retryNow();
+  expect(recovery.snapshot().shown).toBe(false);
+  read.set("failed");
+  vi.advanceTimersByTime(RECOVERY_DELAYS_MS[0] ?? 0);
+  expect(recovery.snapshot().shown).toBe(true);
+  // Retry now restarts the delay but must not hide the notice and its
+  // focused button while the retried read is still running.
+  recovery.retryNow();
+  expect(recovery.snapshot()).toMatchObject({ attempt: 0, shown: true });
+  read.set("failed");
+  expect(recovery.snapshot().shown).toBe(true);
+  recovery.retryNow();
+  read.set("settled");
+  expect(recovery.snapshot()).toEqual({
+    recovering: false,
+    attempt: 0,
+    shown: false,
+  });
   recovery.dispose();
 });
 

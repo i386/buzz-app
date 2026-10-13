@@ -399,7 +399,7 @@ it("purges a public nonmember after real CLOSED and omitted metadata, without a 
 });
 
 it.each(["cancelled", "unavailable"])(
-  "keeps two CLOSED public previews hidden through %s rechecks and supports deliberate recovery",
+  "keeps two CLOSED public previews hidden through %s rechecks and recovers them through the session owner",
   async (failure) => {
     const h = await setup();
     try {
@@ -467,9 +467,13 @@ it.each(["cancelled", "unavailable"])(
       expect(h.owner.session.live.snapshot().error).toContain(
         "Public preview access needs rechecking",
       );
-      // A failed recheck is not a signed denial: the identical signed public version
-      // can restore access on explicit retry, but it cannot resurrect purged content.
-      h.owner.session.live.retry();
+      // A failed recheck is not a signed denial. Session recovery owns it: the
+      // identical signed public version can restore access on its retry, but it
+      // cannot resurrect purged content.
+      expect(h.owner.session.live.snapshot().previews).toBe("suspended");
+      expect(h.owner.session.recovery?.snapshot().recovering).toBe(true);
+      h.owner.session.recovery?.retryNow();
+      expect(h.owner.session.live.snapshot().previews).toBe("checking");
       await settle();
       const retry = h.wire.pending.splice(0);
       const preview = retry.find(({ filters }) =>
@@ -481,6 +485,7 @@ it.each(["cancelled", "unavailable"])(
       for (const id of ids)
         expect(h.owner.session.channels.get?.(id)?.readOnly).toBe(true);
       expect(h.owner.session.live.snapshot().error).toBeUndefined();
+      expect(h.owner.session.live.snapshot().previews).toBeUndefined();
       for (const view of views) {
         expect(view.snapshot().events).toEqual([]);
         view.dispose();

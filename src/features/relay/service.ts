@@ -11,7 +11,7 @@ import {
   transportOrigin,
   transportPartition,
 } from "./partition";
-import { ReadError, readErrorKind } from "./errors";
+import { isTransientFailure, ReadError, readErrorKind } from "./errors";
 import { RECOVERY_DELAYS_MS } from "./recovery";
 import type { ReadTransport } from "./transport";
 const WAKE_TICK_MS = 5_000;
@@ -69,15 +69,21 @@ export function provideRelay(
     session: store.session,
   });
   const listeners = new Set<() => void>();
-  // A failed connection always tries again. Only disconnect() stops trying.
+  // A connection that failed for a transient reason (network, timeout) always
+  // tries again. Only disconnect() stops trying. A denial or a deterministic
+  // failure keeps its error visible and waits for the user.
   let reconnectTimer: ReturnType<typeof setTimeout> | undefined;
   let reconnects = 0;
+  /** Whether the latest connection failure can clear without anyone acting.
+   * Later publishes of the same failure (cache handoff) keep it. */
+  let transientFailure = false;
   const publish = (next: RelaySnapshot) => {
     snapshot = Object.freeze(next);
     clearTimeout(reconnectTimer);
     reconnectTimer = undefined;
+    if (next.status !== "error") transientFailure = false;
     if (next.status === "ready" && !next.cached) reconnects = 0;
-    else if (next.status === "error" && !disposed)
+    else if (next.status === "error" && transientFailure && !disposed)
       reconnectTimer = setTimeout(
         () => service.retry(),
         RECOVERY_DELAYS_MS[
@@ -207,6 +213,7 @@ export function provideRelay(
           return;
         controller.abort();
         connecting = false;
+        transientFailure = true;
         publish({
           ...snapshot,
           status: "error",
@@ -300,18 +307,21 @@ export function provideRelay(
               return;
             store.dispose();
             store = createRelaySession(null, { identityNames });
+            transientFailure = false;
             publish({
               status: "error",
               generation,
               session: store.session,
               error: String(error),
             });
-          } else
+          } else {
+            transientFailure = isTransientFailure(error);
             publish({
               ...snapshot,
               status: "error",
               error: String(error),
             });
+          }
         })
         .finally(() => {
           clearTimeout(timer);

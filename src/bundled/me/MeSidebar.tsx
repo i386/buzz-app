@@ -16,6 +16,7 @@ import {
 import type { Navigation } from "../../features/navigation/controller";
 import type { OpenTarget } from "../../features/navigation/targets";
 import { useMePlacement } from "../../features/sessions/personal";
+import { Button } from "../../shared/design-system/ui/Button";
 import { NavigationItem } from "../../shared/design-system/ui/NavigationItem";
 import { SessionSections } from "../sessions/SessionSections";
 import { readChannelSidebarWidth } from "../channels/useSidebarView";
@@ -151,11 +152,20 @@ function PersonalHistory({
       {list.status === "error" && !recoveryShown && (
         <p role="alert">{list.error}</p>
       )}
-      {/* The channel list and Me placement recover through one automatic
-          owner; its notice is the single Retry. */}
+      {/* Network and relay outages for the channel list and Me placement
+          recover through one automatic owner; its notice is the single Retry.
+          Other failures need the user and keep their own Retry. */}
       <RecoveryNotice recovery={session.recovery} />
-      {placement.status !== "ready" && !recoveryShown && (
-        <p role="status">{placement.error ?? "Loading Me placement…"}</p>
+      {placement.status === "error" && !placement.transient ? (
+        <p role="status">
+          {placement.error}{" "}
+          <Button onClick={() => void session.mePlacement.refresh()}>
+            Retry Me
+          </Button>
+        </p>
+      ) : (
+        placement.status !== "ready" &&
+        !recoveryShown && <p role="status">Loading Me placement…</p>
       )}
       {!conversations.length &&
         list.status === "ready" &&

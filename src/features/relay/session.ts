@@ -86,7 +86,7 @@ import {
   type EventData,
 } from "./events";
 import { eventVisibility } from "./event-access";
-import { ReadError, readErrorKind } from "./errors";
+import { isTransientFailure, ReadError, readErrorKind } from "./errors";
 import {
   PublishRejected,
   browserOutboxStorage,
@@ -101,6 +101,7 @@ import { createMessages } from "./messages";
 import { createThreadView } from "./threads";
 import { ByteLru } from "./budget";
 import { createRelayProfiler } from "./profiling";
+import { liveRecoveryStatus } from "./live-recovery";
 import {
   createRecovery,
   type RecoverySource,
@@ -890,36 +891,55 @@ export function createRelaySession(
     generation: number;
     state: "pending" | "verified" | "deferred" | "error";
     error?: string | undefined;
+    transient?: boolean;
     retryAt?: number;
   };
   const catchups = new Map<string, Catchup>();
   let liveGeneration = 0;
-  let liveView = Object.freeze({
-    ...liveSnapshot,
-    roster: channels.roster(),
-    heads: Object.freeze(
-      [] as {
+  /** Suspended-preview metadata rechecks in flight. */
+  let previewChecks = 0;
+  type LiveView = LiveSnapshot &
+    Readonly<{
+      roster: ReturnType<typeof channels.roster>;
+      heads: readonly Readonly<{
         channelId: string;
         state: "pending" | "verified" | "deferred" | "error";
         error?: string;
-      }[],
-    ),
+        transient?: true;
+      }>[];
+      /** Public previews closed by the relay, awaiting a metadata recheck. A
+       * failed recheck keeps them suspended; recovery retries it. */
+      previews?: "checking" | "suspended";
+    }>;
+  let liveView: LiveView = Object.freeze({
+    ...liveSnapshot,
+    roster: channels.roster(),
+    heads: Object.freeze([]),
   });
   const publishLive = () => {
     if (closed) return;
+    const suspended = channels.suspendedPreviews().length > 0;
     liveView = Object.freeze({
       ...liveSnapshot,
-      ...(channels.suspendedPreviews().length
+      ...(suspended
         ? {
             error: "Public preview access needs rechecking.",
           }
         : {}),
       roster: channels.roster(),
       heads: Object.freeze(
-        [...catchups].map(([channelId, { state, error }]) =>
-          Object.freeze({ channelId, state, ...(error ? { error } : {}) }),
+        [...catchups].map(([channelId, { state, error, transient }]) =>
+          Object.freeze({
+            channelId,
+            state,
+            ...(error ? { error } : {}),
+            ...(error && transient ? { transient: true as const } : {}),
+          }),
         ),
       ),
+      ...(suspended
+        ? { previews: previewChecks ? "checking" : "suspended" }
+        : {}),
     });
     for (const listener of liveListeners) notify(listener);
   };
@@ -1554,34 +1574,24 @@ export function createRelaySession(
     status: () => RecoveryStatus,
     retry: () => void,
   ): RecoverySource => Object.freeze({ subscribe, status, retry });
-  const loadState = (status: string): RecoveryStatus =>
-    status === "error" ? "failed" : status === "loading" ? "busy" : "settled";
-  // Background reads only. A failed read always retries; see recovery.ts.
-  // The live source also owns the channel roster (live.retry retries it).
-  const liveRecovery = recoverable(
-    live.subscribe,
-    () => {
-      const view = live.snapshot();
-      // "retrying" counts as failed so wake, network and focus signals skip
-      // the live layer's own backoff wait too.
-      if (
-        view.status === "error" ||
-        view.status === "retrying" ||
-        view.roster.state === "error" ||
-        view.roster.state === "deferred" ||
-        view.heads.some((head) => head.state === "error") ||
-        view.routes.some((route) => route.status === "error")
-      )
-        return "failed";
-      // A retried read in flight is not proof of recovery. Reporting it as
-      // settled would reset the delay and loop the retry every second.
-      return view.status === "connecting" ||
-        view.roster.state === "pending" ||
-        view.heads.some((head) => head.state === "pending") ||
-        view.routes.some((route) => route.status === "pending")
+  // Only failures a retry can fix enter recovery. A denial or a deterministic
+  // failure stays visible on its own surface; see isTransientFailure.
+  const loadState = (
+    state: Readonly<{ status: string; transient?: true | undefined }>,
+  ): RecoveryStatus =>
+    state.status === "error"
+      ? state.transient
+        ? "failed"
+        : "settled"
+      : state.status === "loading"
         ? "busy"
         : "settled";
-    },
+  // Background reads only. A failed read always retries; see recovery.ts.
+  // The live source also owns the channel roster and suspended public
+  // previews (live.retry retries both).
+  const liveRecovery = recoverable(
+    live.subscribe,
+    () => liveRecoveryStatus(live.snapshot()),
     live.retry,
   );
   const recovery = transport
@@ -1589,22 +1599,22 @@ export function createRelaySession(
         liveRecovery,
         recoverable(
           channelKit.capability.subscribe,
-          () => loadState(channelKit.capability.snapshot().status),
+          () => loadState(channelKit.capability.snapshot()),
           () => void channelKit.capability.refresh(),
         ),
         recoverable(
           mePreferences.placement.subscribe,
-          () => loadState(mePreferences.placement.snapshot().status),
+          () => loadState(mePreferences.placement.snapshot()),
           () => void mePreferences.placement.refresh(),
         ),
         recoverable(
           sidebarPreferences.queries.subscribe,
-          () => loadState(sidebarPreferences.queries.snapshot().status),
+          () => loadState(sidebarPreferences.queries.snapshot()),
           () => void sidebarPreferences.queries.refresh(),
         ),
         recoverable(
           lifecycle.capability.subscribe,
-          () => loadState(lifecycle.capability.snapshot().status),
+          () => loadState(lifecycle.capability.snapshot()),
           () => void lifecycle.capability.refreshVisibility(),
         ),
       ])
@@ -2030,14 +2040,20 @@ export function createRelaySession(
     },
   });
   function revalidatePreviews(ids: readonly string[]) {
+    if (!channels.queries.resolve) return;
     for (let start = 0; start < ids.length; start += 128) {
+      previewChecks++;
       void channels.queries
-        .resolve?.(ids.slice(start, start + 128), { signal: lifetime.signal })
-        // A failed/cancelled lookup stays suspended and visible in live status.
-        // Retry is deliberate; no independent recovery timer or signed denial.
+        .resolve(ids.slice(start, start + 128), { signal: lifetime.signal })
+        // A failed/cancelled lookup stays suspended until fresh signed
+        // metadata arrives. Session recovery retries it; it is not a denial.
         .catch(() => {})
-        .finally(publishLive);
+        .finally(() => {
+          previewChecks--;
+          publishLive();
+        });
     }
+    if (ids.length) publishLive();
   }
   /** Named member-added hints awaiting one exact read, the confirmation in
    * flight for each channel, and whether the running full pass inherited grants
@@ -2294,6 +2310,7 @@ export function createRelaySession(
       if (!valid()) return;
       job.state = readErrorKind(error) === "cancelled" ? "deferred" : "error";
       job.error = job.state === "error" ? String(error) : undefined;
+      job.transient = isTransientFailure(error);
       if (error instanceof ReadError && error.retryAfterMs !== undefined) {
         job.retryAt = performance.now() + error.retryAfterMs;
         // Keep lightweight obligations, not paced requests inside reader deadlines.
@@ -2302,6 +2319,7 @@ export function createRelaySession(
           if (queued) {
             queued.state = "error";
             queued.error = job.error;
+            queued.transient = job.transient;
             queued.retryAt = job.retryAt;
             channels.catchUpFailed(id, error);
           }

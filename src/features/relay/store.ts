@@ -2,7 +2,7 @@ import { channelRowKind, rowProfileIds, messagePreview } from "./membership";
 import type { Outbox } from "./outbox";
 import { MessageProjection } from "./message-projection";
 import { createRelayProfiler, type RelayProfiler } from "./profiling";
-import { ReadError, readErrorKind } from "./errors";
+import { isTransientFailure, ReadError, readErrorKind } from "./errors";
 import type {
   ChannelReference,
   ChannelList,
@@ -162,6 +162,8 @@ export function createChannelStore(
   type RosterRefresh = Readonly<{
     state: "idle" | "pending" | "verified" | "deferred" | "error";
     error?: string;
+    /** Set with an error that a later retry can fix; see isTransientFailure. */
+    transient?: true;
   }>;
   let rosterRefresh: RosterRefresh = Object.freeze({ state: "idle" });
   let list: ChannelList = transport
@@ -1211,7 +1213,11 @@ export function createChannelStore(
       if (disposed || generation !== epoch) return;
       outcome = isAbort(error)
         ? { state: "deferred" }
-        : { state: "error", error: describe(error) };
+        : {
+            state: "error",
+            error: describe(error),
+            ...(isTransientFailure(error) ? { transient: true as const } : {}),
+          };
       if (error instanceof ReadError && error.retryAfterMs !== undefined)
         listRetryAt = performance.now() + error.retryAfterMs;
       if (denyAllOnFailure && readErrorKind(error) === "denied") {

@@ -1,4 +1,5 @@
 import type { RelayReader } from "../relay/reader";
+import { isTransientFailure } from "../relay/errors";
 import type { RelayEvent, ReadFilter } from "../relay/events";
 import type { Outbox, LocalEvents } from "../relay/outbox";
 import type { ChannelKitHost } from "./host";
@@ -33,6 +34,8 @@ type Snapshot = {
   status: "idle" | "loading" | "ready" | "error" | "unavailable";
   entries: readonly KitEntry[];
   error?: string | undefined;
+  /** Set with an error that a later retry can fix; see isTransientFailure. */
+  transient?: true | undefined;
 };
 /** Session-owned reads and narrow recipe operations; the existing outbox owns delivery. */
 export function createChannelKit({
@@ -79,7 +82,12 @@ export function createChannelKit({
     if (pending && after) await pending;
     if (pending) return pending;
     const generation = epoch;
-    update({ ...state, status: "loading", error: undefined });
+    update({
+      ...state,
+      status: "loading",
+      error: undefined,
+      transient: undefined,
+    });
     pending = (async () => {
       try {
         const events = await fresh([
@@ -147,7 +155,12 @@ export function createChannelKit({
         if (generation === epoch) update({ status: "ready", entries: current });
       } catch (error) {
         if (!signal.aborted && generation === epoch)
-          update({ ...state, status: "error", error: String(error) });
+          update({
+            ...state,
+            status: "error",
+            error: String(error),
+            transient: isTransientFailure(error) || undefined,
+          });
       } finally {
         if (generation === epoch) pending = undefined;
       }

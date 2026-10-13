@@ -66,6 +66,7 @@ it("live retry recovers roster catch-up refused after globals established", asyn
     expect(h.owner.session.live.snapshot().roster).toEqual({
       state: "error",
       error: "Relay requests paused",
+      transient: true,
     });
     h.owner.session.live.retry();
     h.owner.session.channels.refreshList?.();
@@ -773,6 +774,7 @@ it("a concurrent roster failure without a cooldown retires the exact confirmatio
     expect(h.owner.session.live.snapshot().roster).toEqual({
       state: "error",
       error: "Roster failed",
+      transient: true,
     });
     expect(h.wire.pending).toHaveLength(0);
     h.owner.session.live.retry();
@@ -994,6 +996,7 @@ it.each(["interrupted", "failed"])(
         expect(h.owner.session.live.snapshot().roster).toEqual({
           state: "error",
           error: "Roster failed",
+          transient: true,
         });
         expect(h.wire.pending).toHaveLength(0);
         h.owner.session.live.retry();

@@ -1,4 +1,5 @@
 import type { HeadPersistence } from "./persistence";
+import { isTransientFailure } from "./errors";
 import { projectSidebarPreferences } from "./sidebar-preferences";
 import type {
   SidebarAssignmentMutator,
@@ -29,6 +30,8 @@ type Snapshot = Readonly<{
   status: "idle" | "loading" | "ready" | "error" | "unsupported";
   data?: SidebarPreferences;
   error?: string;
+  /** Set with an error that a later retry can fix; see isTransientFailure. */
+  transient?: true;
   cached?: true;
   sortErrors?: readonly SortFailure[];
   moves?: readonly (MoveIntent & { pending: boolean; error?: string })[];
@@ -61,6 +64,7 @@ export function createSidebarPreferencesStore(
   let mutation = 0;
   let confirmed: SidebarPreferences | undefined;
   let readFailure: string | undefined;
+  let readTransient = false;
   const writable = () =>
     !closed &&
     !!confirmed &&
@@ -168,7 +172,11 @@ export function createSidebarPreferencesStore(
       // concurrent read made stale by a write must leave recovery available.
       ...(readFailure === undefined
         ? { status: "ready" as const }
-        : { status: "error" as const, error: readFailure }),
+        : {
+            status: "error" as const,
+            error: readFailure,
+            ...(readTransient ? { transient: true as const } : {}),
+          }),
       data: retained(
         withPendingMoves(
           pendingSorts.size
@@ -213,10 +221,13 @@ export function createSidebarPreferencesStore(
           mutation === refreshMutation
         ) {
           readFailure = error instanceof Error ? error.message : String(error);
+          readTransient = isTransientFailure(error);
+          const { transient: _transient, ...rest } = snapshot;
           publish({
-            ...snapshot,
+            ...rest,
             status: "error",
             error: readFailure,
+            ...(readTransient ? { transient: true as const } : {}),
           });
         }
       } finally {

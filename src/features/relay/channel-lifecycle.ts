@@ -3,6 +3,7 @@ import { attestedOwner } from "../agents/owner-attestation";
 import type { RelayReader } from "./reader";
 import type { RelayWriter } from "./transport";
 import { PublishRejected } from "./outbox";
+import { isTransientFailure } from "./errors";
 import { hasTag, newer, type RelayEvent } from "./events";
 import { openMetadata } from "./discovery";
 import {
@@ -30,6 +31,8 @@ export type DmVisibility = Readonly<{
   status: "idle" | "loading" | "ready" | "error";
   hidden: readonly string[];
   error?: string;
+  /** Set with an error that a later retry can fix; see isTransientFailure. */
+  transient?: true;
 }>;
 export interface ChannelLifecycleCapability {
   readonly available: boolean;
@@ -272,6 +275,9 @@ export function createChannelLifecycle({
               status: "error",
               hidden: snapshot.hidden,
               error: error instanceof Error ? error.message : String(error),
+              ...(isTransientFailure(error)
+                ? { transient: true as const }
+                : {}),
             });
         })
         .finally(() => {

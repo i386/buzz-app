@@ -217,6 +217,10 @@ function ReadySidebar({
   const readAction = useChannelReadAction();
   const readWrite = readAction.state;
   const [rowFocus, setRowFocus] = useState<string>();
+  const kitState = useSyncExternalStore(
+    queries.channelKit.subscribe,
+    queries.channelKit.snapshot,
+  );
   const hiddenDms = useHiddenDms(scope, queries, list);
   const lifecycle = queries.channelLifecycle;
   const dmVisibility = useSyncExternalStore(
@@ -985,9 +989,19 @@ function ReadySidebar({
             preferences.status === "loading" || startup.updating || undefined
           }
         >
-          {/* Templates, Me placement, saved preferences, hidden conversations
-              and live updates recover through one automatic owner. */}
+          {/* Network and relay outages for templates, Me placement, saved
+              preferences, hidden conversations and live updates recover
+              through one automatic owner. Other failures need the user and
+              keep their own message and Retry. */}
           {!cached && <RecoveryNotice recovery={queries.recovery} />}
+          {kitState.status === "error" && !kitState.transient && (
+            <p role="alert">
+              {kitState.error}{" "}
+              <Button onClick={() => void queries.channelKit.refresh()}>
+                Retry templates
+              </Button>
+            </p>
+          )}
           {setupNotices.map((notice) => (
             <ToastNotice
               key={notice.id}
@@ -1003,6 +1017,16 @@ function ReadySidebar({
               </Button>
             </ToastNotice>
           ))}
+          {!cached &&
+            dmVisibility.status === "error" &&
+            !dmVisibility.transient && (
+              <div role="alert">
+                Hidden conversations could not be refreshed.{" "}
+                <Button onClick={() => void lifecycle.refreshVisibility()}>
+                  Retry hidden conversations
+                </Button>
+              </div>
+            )}
           <SidebarUnread listRef={sidebar.list} dmPreviews={unreadDmPreviews}>
             <SidebarNavigation>{children}</SidebarNavigation>
             <ChannelSidebarDnd
@@ -1295,7 +1319,22 @@ function ReadySidebar({
                 </button>
               </div>
             ))}
-          {!cached && startup.ready && preferences.status === "unsupported" ? (
+          {!cached &&
+          startup.ready &&
+          preferences.status === "error" &&
+          !preferences.transient ? (
+            <ToastNotice
+              title="Saved sidebar preferences couldn’t refresh"
+              description="Your conversations are still available."
+              tone="warning"
+            >
+              <Button type="button" size="sm" onClick={preferences.reload}>
+                Retry
+              </Button>
+            </ToastNotice>
+          ) : !cached &&
+            startup.ready &&
+            preferences.status === "unsupported" ? (
             <p className={styles.preferenceNotice} role="status">
               Saved groups and stars aren’t supported by this host yet.
             </p>

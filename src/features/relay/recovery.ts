@@ -15,7 +15,11 @@ export type RecoverySource = Readonly<{
 export type RecoverySnapshot = Readonly<{
   /** True while at least one source shows a failure. */
   recovering: boolean;
+  /** Backoff index. retryNow restarts it; it does not hide the notice. */
   attempt: number;
+  /** True from the first automatic retry until every source settles. Kept
+   * apart from `attempt` so a manual or signal retry keeps the notice up. */
+  shown: boolean;
 }>;
 export type RelayRecovery = Readonly<{
   snapshot(): RecoverySnapshot;
@@ -29,7 +33,11 @@ export type RelayRecovery = Readonly<{
 export const RECOVERY_DELAYS_MS = Object.freeze([
   1_000, 2_000, 4_000, 8_000, 16_000, 30_000,
 ]);
-const IDLE: RecoverySnapshot = Object.freeze({ recovering: false, attempt: 0 });
+const IDLE: RecoverySnapshot = Object.freeze({
+  recovering: false,
+  attempt: 0,
+  shown: false,
+});
 
 export function createRecovery(
   sources: readonly RecoverySource[],
@@ -45,13 +53,15 @@ export function createRecovery(
   const listeners = new Set<() => void>();
   let snapshot = IDLE,
     attempt = 0,
+    shown = false,
     timer: unknown,
     running = false,
     disposed = false;
   const publish = (next: RecoverySnapshot) => {
     if (
       next.recovering === snapshot.recovering &&
-      next.attempt === snapshot.attempt
+      next.attempt === snapshot.attempt &&
+      next.shown === snapshot.shown
     )
       return;
     snapshot = next;
@@ -70,14 +80,15 @@ export function createRecovery(
       // A retry in flight is not proof of recovery: keep the notice and the
       // delay sequence until every source settles.
       if (snapshot.recovering && states.includes("busy")) {
-        publish(Object.freeze({ recovering: true, attempt }));
+        publish(Object.freeze({ recovering: true, attempt, shown }));
         return;
       }
       attempt = 0;
+      shown = false;
       publish(IDLE);
       return;
     }
-    publish(Object.freeze({ recovering: true, attempt }));
+    publish(Object.freeze({ recovering: true, attempt, shown }));
     if (timer !== undefined) return;
     const delay =
       RECOVERY_DELAYS_MS[Math.min(attempt, RECOVERY_DELAYS_MS.length - 1)] ??
@@ -85,6 +96,7 @@ export function createRecovery(
     timer = timers.setTimeout(() => {
       timer = undefined;
       attempt++;
+      shown = true;
       run();
     }, delay);
   }

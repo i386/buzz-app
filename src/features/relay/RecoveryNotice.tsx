@@ -3,7 +3,11 @@ import { Button } from "../../shared/design-system/ui/Button";
 import { ToastNotice } from "../../shared/design-system/ui/Toast";
 import type { RelayRecovery } from "./recovery";
 
-const NONE = Object.freeze({ recovering: false, attempt: 0 });
+const NONE = Object.freeze({
+  recovering: false,
+  attempt: 0,
+  shown: false,
+});
 const subscribeNone = () => () => {};
 const snapshotNone = () => NONE;
 const noClaims = () => 0;
@@ -40,7 +44,7 @@ export function useRecovery(recovery: RelayRecovery | undefined) {
   return {
     recovering: !!recovery && state.recovering,
     // Stay hidden for a failure that the first automatic retry fixes.
-    shown: !!recovery && state.recovering && state.attempt >= 1,
+    shown: !!recovery && state.shown,
   };
 }
 

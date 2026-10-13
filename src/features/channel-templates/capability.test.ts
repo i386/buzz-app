@@ -11,6 +11,7 @@ import {
 import { keypair, metadata, roster, signed } from "../relay/testing";
 import { matchesEvent } from "../relay/projection";
 import type { ReadFilter, RelayEvent } from "../relay/events";
+import { ReadError } from "../relay/errors";
 import {
   createOutbox,
   PublishRejected,
@@ -242,6 +243,20 @@ it("never re-signs an expired uncertain operation and clears candidates on retir
   });
   await expect(f.capability.save(record.value, undefined)).rejects.toThrow();
 });
+it("marks a relay outage as transient so recovery can retry it", async () => {
+  const f = fixture();
+  vi.mocked(f.reader.read).mockRejectedValueOnce(
+    new ReadError("unavailable", "Relay request failed (502)", 502),
+  );
+  await f.capability.refresh();
+  expect(f.capability.snapshot()).toMatchObject({
+    status: "error",
+    transient: true,
+  });
+  await f.capability.refresh();
+  expect(f.capability.snapshot().status).toBe("ready");
+  expect(f.capability.snapshot().transient).toBeUndefined();
+});
 it("fails visibly rather than exposing a partial or mismatched catalog", async () => {
   const f = fixture();
   const event = signed(viewer, {
@@ -255,6 +270,8 @@ it("fails visibly rather than exposing a partial or mismatched catalog", async (
   f.events.push(...Array(500).fill(event));
   await f.capability.refresh();
   expect(f.capability.snapshot().error).toMatch(/read limit/);
+  // Rereading the same catalog cannot fix this: automatic recovery skips it.
+  expect(f.capability.snapshot().transient).toBeUndefined();
   expect(f.host.decode).not.toHaveBeenCalled();
   f.events.splice(1);
   f.host.decode.mockResolvedValue([]);

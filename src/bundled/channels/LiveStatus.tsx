@@ -1,10 +1,11 @@
-import { useSyncExternalStore } from "react";
+import { useEffect, useRef, useSyncExternalStore } from "react";
 import type { RelaySession } from "../../features/relay/session";
 import {
   RECOVERY_TITLE,
   RetryNowButton,
   useInlineRecovery,
 } from "../../features/relay/RecoveryNotice";
+import { liveRecoveryStatus } from "../../features/relay/live-recovery";
 import styles from "./LiveStatus.module.css";
 
 export function LiveStatus({
@@ -13,6 +14,7 @@ export function LiveStatus({
   partialRoster,
   diagnostics = false,
   recovery,
+  onRecovered,
 }: {
   live: RelaySession["live"];
   channelId: string | undefined;
@@ -21,10 +23,21 @@ export function LiveStatus({
   /** The session recovery owner. A mounted status shows its notice inline
    * above the composer, in place of the floating fallback. */
   recovery?: RelaySession["recovery"];
+  /** Recovery removed the focused Retry now button; move focus on. */
+  onRecovered?: (() => void) | undefined;
 }) {
   const { recovering: retrying, shown } = useInlineRecovery(
     diagnostics ? undefined : recovery,
   );
+  // A removed element does not always report blur, so check where focus
+  // landed once the notice is gone.
+  const focused = useRef(false);
+  useEffect(() => {
+    if (shown || !focused.current) return;
+    focused.current = false;
+    const active = document.activeElement;
+    if (!active || active === document.body) onRecovered?.();
+  }, [shown, onRecovered]);
   const snapshot = useSyncExternalStore(
     live.subscribe,
     live.snapshot,
@@ -99,6 +112,14 @@ export function LiveStatus({
         role="status"
         aria-label={RECOVERY_TITLE}
         className={styles.recovery}
+        onFocus={() => {
+          focused.current = true;
+        }}
+        onBlur={(event) => {
+          focused.current = event.currentTarget.contains(
+            event.relatedTarget as Node | null,
+          );
+        }}
       >
         <div className={styles.message}>
           <p className="text-label-sm text-warning">{RECOVERY_TITLE}</p>
@@ -108,8 +129,10 @@ export function LiveStatus({
     );
   // Startup, bounded automatic quota recovery and the first automatic retry do
   // not need user attention.
-  if (!issue || retrying) return null;
-  // What automatic recovery cannot change (capacity, a partial roster).
+  if (!issue || (retrying && liveRecoveryStatus(snapshot) !== "settled"))
+    return null;
+  // What automatic recovery cannot change: capacity, a partial roster, a
+  // denial or a sign-in failure.
   return (
     <section
       role="status"

@@ -27,8 +27,8 @@ const base: Snapshot = {
 function recoveryIn(state: "idle" | "shown") {
   const snapshot = Object.freeze(
     state === "shown"
-      ? { recovering: true, attempt: 1 }
-      : { recovering: false, attempt: 0 },
+      ? { recovering: true, attempt: 1, shown: true }
+      : { recovering: false, attempt: 0, shown: false },
   );
   return {
     snapshot: () => snapshot,
@@ -309,8 +309,12 @@ it("diagnostics does not duplicate notices; changing the selected channel/sessio
 });
 
 it("stays quiet before the first automatic retry, then shows one inline notice whose Retry now retries the session", async () => {
-  const failed: Snapshot = { ...base, status: "error" };
-  const quietState = Object.freeze({ recovering: true, attempt: 0 });
+  const failed: Snapshot = { ...base, status: "retrying" };
+  const quietState = Object.freeze({
+    recovering: true,
+    attempt: 0,
+    shown: false,
+  });
   const live = {
     snapshot: () => failed,
     subscribe: () => () => {},
@@ -344,4 +348,62 @@ it("stays quiet before the first automatic retry, then shows one inline notice w
   expect(live.retry).not.toHaveBeenCalled();
   // Only the title and the button: no explanatory copy.
   expect(notice).toHaveTextContent(/^Reconnecting to relay…Retry now$/);
+});
+
+it("hands focus on when recovery removes the focused Retry now button", () => {
+  const failed: Snapshot = { ...base, status: "retrying" };
+  const live = {
+    snapshot: () => failed,
+    subscribe: () => () => {},
+    retry: vi.fn(),
+  };
+  const onRecovered = vi.fn();
+  const content = (state: "idle" | "shown", view: Snapshot = failed) => (
+    <LiveStatus
+      live={{ ...live, snapshot: () => view }}
+      channelId="a"
+      partialRoster={false}
+      recovery={recoveryIn(state)}
+      onRecovered={onRecovered}
+    />
+  );
+  const view = mount(content("shown"));
+  screen.getByRole("button", { name: "Retry now" }).focus();
+  view.rerender(content("idle", base));
+  expect(screen.queryByRole("button")).not.toBeInTheDocument();
+  expect(onRecovered).toHaveBeenCalledTimes(1);
+  // An unfocused notice leaves focus where the user put it.
+  view.rerender(content("shown"));
+  view.rerender(content("idle", base));
+  expect(onRecovered).toHaveBeenCalledTimes(1);
+});
+
+it("shows a permanent live failure even while other reads recover", () => {
+  const denied: Snapshot = {
+    ...base,
+    status: "error",
+    error: "Relay rejected live authentication",
+  };
+  const live = {
+    snapshot: () => denied,
+    subscribe: () => () => {},
+    retry: vi.fn(),
+  };
+  const quietState = Object.freeze({
+    recovering: true,
+    attempt: 0,
+    shown: false,
+  });
+  const quiet = { ...recoveryIn("idle"), snapshot: () => quietState };
+  mount(
+    <LiveStatus
+      live={live}
+      channelId="a"
+      partialRoster={false}
+      recovery={quiet}
+    />,
+  );
+  expect(
+    screen.getByRole("status", { name: "Live updates limited" }),
+  ).toHaveTextContent("Relay rejected live authentication");
 });
