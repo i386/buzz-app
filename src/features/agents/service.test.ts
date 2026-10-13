@@ -232,6 +232,7 @@ function fakeNative(identities: AgentIdentity[] = []) {
             relay: "",
           },
         ],
+        teams: [],
         warnings: ["Could not read one store"],
       }),
     ),
@@ -534,59 +535,121 @@ it("imports a shared agent as a new identity with its name and picture, adopting
 /** The imported copy of old Buzz team `id` in `community`. */
 const betaTeam = (id: string, community = "https://relay.example.test") =>
   `beta-${createHash("sha256").update(`${id}\n${community}`).digest("hex")}`;
-const nightShift = {
+const [alder, birch, carrow] = [bot, sibling, "e".repeat(64)];
+const NAMES: Record<string, string> = {
+  [alder]: "Alder",
+  [birch]: "Birch",
+  [carrow]: "Carrow",
+};
+/** Old Buzz's Night Shift as native lists it, with these members. */
+const nightShift = (
+  members: readonly string[],
+  text: { name?: string; instructions?: string } = {},
+) => ({
   id: "old-night-shift",
   name: "Night Shift",
   instructions: "Ship small.",
-};
-/** Native's import reports `team` as the old store has it then. */
-function portsOnTeam(
+  ...text,
+  members: members.map((pubkey) => ({
+    pubkey,
+    name: NAMES[pubkey] as string,
+    source: "installed" as const,
+  })),
+});
+/** Its copy here in `community`, as saved. */
+const savedShift = (members: readonly string[], community?: string) => ({
+  id: betaTeam("old-night-shift", community),
+  name: "Night Shift",
+  instructions: "Ship small.",
+  members,
+});
+function listsTeam(
   native: ReturnType<typeof fakeNative>,
-  team: { id: string; name: string; instructions: string } | undefined,
+  team: ReturnType<typeof nightShift>,
 ) {
-  const port = native.port.getMockImplementation();
-  native.port.mockImplementation(async (...args) => {
-    const ported = await (port as NonNullable<typeof port>)(...args);
-    return team ? { ...ported, team } : ported;
+  native.portable.mockResolvedValue({
+    agents: team.members.map(({ pubkey, name }) => ({
+      source: "installed" as const,
+      pubkey,
+      name,
+      relay: "",
+    })),
+    teams: [team],
+    warnings: [],
   });
 }
+const importTeam = (service: AgentsService) =>
+  service.portTeam({ id: "old-night-shift", type: "example/echo" });
 const importOld = (service: AgentsService, pubkey: string) =>
   service.port({ source: "installed", pubkey, type: "example/echo" });
+const portedKeys = (native: ReturnType<typeof fakeNative>) =>
+  native.port.mock.calls.map(([, pubkey]) => pubkey);
+const here = (pubkey: string, relay = "wss://relay.example.test") => ({
+  pubkey,
+  relay,
+  owner: viewer,
+  type: "example/echo",
+  name: NAMES[pubkey] as string,
+  deleted: false,
+});
 
-it("puts an imported agent on its old Buzz team, created by its first member and joined by the rest", async () => {
+it("imports a team with the members that came, names the rest, and leaves later single imports off it", async () => {
   const { service, native, storage } = await setup();
-  portsOnTeam(native, nightShift);
-  const first = await importOld(service, bot);
-  expect(first.teamError).toBeUndefined();
-  expect(service.snapshot().teams).toEqual([
-    { ...nightShift, id: betaTeam("old-night-shift"), members: [bot] },
+  listsTeam(native, nightShift([alder, birch, carrow]));
+  const port = native.port.getMockImplementation() as NonNullable<
+    ReturnType<typeof native.port.getMockImplementation>
+  >;
+  native.port.mockImplementation(async (...args) => {
+    if (args[1] === birch) throw new Error("Keychain access was denied");
+    return port(...args);
+  });
+  const result = await importTeam(service);
+  expect(result.team).toEqual(savedShift([alder, carrow]));
+  expect(result.imported.map((agent) => agent.pubkey)).toEqual([alder, carrow]);
+  expect(result.failed).toEqual([
+    { name: "Birch", error: "Keychain access was denied" },
   ]);
-  // Edited here since: a teammate joins, and the edits stay.
+  expect(result.teamError).toBeUndefined();
+  // Imported on its own afterwards, it never joins the team.
+  native.port.mockImplementation(port);
+  const stored = storage.getItem("buzz.agents.teams.v1");
+  await importOld(service, birch);
+  expect(service.find(birch)).toBeDefined();
+  expect(storage.getItem("buzz.agents.teams.v1")).toBe(stored);
+  expect(service.snapshot().teams).toEqual([savedShift([alder, carrow])]);
+});
+
+it("puts members imported one by one on the team without importing them again", async () => {
+  const { service, native } = await setup();
+  listsTeam(native, nightShift([alder, birch]));
+  await importOld(service, alder);
+  const result = await importTeam(service);
+  expect(result.team).toEqual(savedShift([alder, birch]));
+  expect(result.imported.map((agent) => agent.pubkey)).toEqual([birch]);
+  expect(portedKeys(native)).toEqual([alder, birch]);
+});
+
+it("imports a team again without duplicates, keeping its edits here", async () => {
+  const { service, native } = await setup();
+  listsTeam(native, nightShift([alder, birch]));
+  await importTeam(service);
   await service.saveTeam({
     id: betaTeam("old-night-shift"),
     name: "Renamed",
     instructions: "Mine.",
-    members: [bot],
+    members: [alder, birch],
   });
-  await importOld(service, sibling);
-  // A same-name team of the owner's is never matched.
-  await service.saveTeam({
-    name: "Night Shift",
-    instructions: "",
-    members: [],
-  });
-  await importOld(service, "e".repeat(64));
-  // Imported again: never a duplicate member.
-  await importOld(service, bot);
-  const [imported, own] = service.snapshot().teams;
-  expect(imported).toEqual({
-    id: betaTeam("old-night-shift"),
-    name: "Renamed",
-    instructions: "Mine.",
-    members: [bot, sibling, "e".repeat(64)],
-  });
-  expect(own).toMatchObject({ name: "Night Shift", members: [] });
-  expect(storage.getItem("buzz.agents.teams.v1")).toContain("e".repeat(64));
+  const again = await importTeam(service);
+  expect(again.imported).toEqual([]);
+  expect(service.snapshot().teams).toEqual([
+    {
+      id: betaTeam("old-night-shift"),
+      name: "Renamed",
+      instructions: "Mine.",
+      members: [alder, birch],
+    },
+  ]);
+  expect(portedKeys(native)).toEqual([alder, birch]);
 });
 
 it("never takes over a same-name team the owner made before importing", async () => {
@@ -597,66 +660,52 @@ it("never takes over a same-name team the owner made before importing", async ()
     instructions: "Mine.",
     members: [bot],
   });
-  portsOnTeam(native, nightShift);
-  await importOld(service, sibling);
-  expect(service.snapshot().teams).toEqual([
-    own,
-    { ...nightShift, id: betaTeam("old-night-shift"), members: [sibling] },
-  ]);
+  listsTeam(native, nightShift([carrow]));
+  await importTeam(service);
+  expect(service.snapshot().teams).toEqual([own, savedShift([carrow])]);
 });
 
-it("recreates a deleted imported team with the next member imported", async () => {
+it("recreates a deleted imported team when it is imported again", async () => {
   const { service, native } = await setup();
-  portsOnTeam(native, nightShift);
-  await importOld(service, bot);
+  listsTeam(native, nightShift([alder]));
+  await importTeam(service);
   await service.removeTeam(betaTeam("old-night-shift"));
-  await importOld(service, sibling);
-  expect(service.snapshot().teams).toEqual([
-    { ...nightShift, id: betaTeam("old-night-shift"), members: [sibling] },
-  ]);
+  listsTeam(native, nightShift([alder, birch]));
+  await importTeam(service);
+  expect(service.snapshot().teams).toEqual([savedShift([alder, birch])]);
 });
 
-it("creates a team with no instructions as one with none, and writes no team for an agent on none", async () => {
-  const { service, native, storage } = await setup();
-  await importOld(service, bot);
-  expect(storage.getItem("buzz.agents.teams.v1")).toBeNull();
-  portsOnTeam(native, { id: "quiet", name: "Quiet", instructions: "" });
-  await importOld(service, sibling);
-  expect(service.snapshot().teams).toEqual([
-    {
-      id: betaTeam("quiet"),
-      name: "Quiet",
-      instructions: "",
-      members: [sibling],
-    },
-  ]);
-});
-
-it("saves the team as import read it, not as the list showed it", async () => {
+it("saves the team as old Buzz has it at import, not as the list showed it", async () => {
   const { service, native } = await setup();
-  native.portable.mockResolvedValueOnce({
-    agents: [
-      {
-        source: "installed",
-        pubkey: bot,
-        name: "Older",
-        relay: "",
-        team: { id: "old-night-shift", name: "Listed", instructions: "Stale." },
-      },
-    ],
-    warnings: [],
-  });
+  listsTeam(
+    native,
+    nightShift([alder, birch], { name: "Listed", instructions: "Stale." }),
+  );
   await service.portable();
-  portsOnTeam(native, nightShift);
-  await importOld(service, bot);
-  expect(service.snapshot().teams).toEqual([
-    { ...nightShift, id: betaTeam("old-night-shift"), members: [bot] },
-  ]);
+  listsTeam(native, nightShift([alder, birch, carrow]));
+  const result = await importTeam(service);
+  expect(result.team).toEqual(savedShift([alder, birch, carrow]));
+  expect(portedKeys(native)).toEqual([alder, birch, carrow]);
 });
 
-it("keys an imported team to the community its agent was made in, even if another is opened meanwhile", async () => {
+it("imports nothing when the community changes while old Buzz is read", async () => {
   const { service, native, second, select } = await setup();
-  portsOnTeam(native, nightShift);
+  listsTeam(native, nightShift([alder]));
+  const listed = native.portable.getMockImplementation() as NonNullable<
+    ReturnType<typeof native.portable.getMockImplementation>
+  >;
+  native.portable.mockImplementationOnce(async () => {
+    select(second.origin);
+    return listed();
+  });
+  await expect(importTeam(service)).rejects.toThrow("Community changed");
+  expect(native.port).not.toHaveBeenCalled();
+  expect(service.snapshot().teams).toEqual([]);
+});
+
+it("keeps a team import in the community it started in, stopping when another is opened", async () => {
+  const { service, native, second, select } = await setup();
+  listsTeam(native, nightShift([alder, birch]));
   const port = native.port.getMockImplementation() as NonNullable<
     ReturnType<typeof native.port.getMockImplementation>
   >;
@@ -664,40 +713,56 @@ it("keys an imported team to the community its agent was made in, even if anothe
     select(second.origin);
     return port(...args);
   });
-  await importOld(service, bot);
-  expect(service.snapshot().teams.map((team) => team.id)).toEqual([
-    betaTeam("old-night-shift"),
-  ]);
-  // Its teammate made in the other community gets that community's copy.
-  // Once the other community is connected.
-  await vi.waitFor(async () => {
-    await importOld(service, sibling);
-  });
-  expect(native.port).toHaveBeenLastCalledWith(
+  const result = await importTeam(service);
+  expect(native.port).toHaveBeenCalledTimes(1);
+  expect(native.port).toHaveBeenCalledWith(
     "installed",
-    sibling,
-    second.origin,
+    alder,
+    "https://relay.example.test",
     viewer,
     "example/echo",
   );
-  expect(service.snapshot().teams).toEqual([
-    { ...nightShift, id: betaTeam("old-night-shift"), members: [bot] },
-    {
-      ...nightShift,
-      id: betaTeam("old-night-shift", second.origin),
-      members: [sibling],
-    },
+  expect(result.failed).toEqual([
+    { name: "Birch", error: "Community changed" },
   ]);
+  expect(result.team).toEqual(savedShift([alder]));
+  expect(service.snapshot().teams).toEqual([savedShift([alder])]);
   const relays = new Map(
     (await native.list()).map((identity) => [identity.pubkey, identity.relay]),
   );
-  expect([relays.get(bot), relays.get(sibling)]).toEqual([
-    "wss://relay.example.test",
-    second.origin.replace(/^https:/, "wss:"),
-  ]);
+  expect([...relays]).toEqual([[alder, "wss://relay.example.test"]]);
 });
 
-it("keeps an imported agent whose team cannot be saved, and changes no team", async () => {
+it("leaves a member that lives in another community off the team, and never moves it", async () => {
+  const { service, native } = await setup({
+    identities: [here(birch, "wss://other.example.test")],
+  });
+  listsTeam(native, nightShift([alder, birch]));
+  const result = await importTeam(service);
+  expect(result.elsewhere).toEqual(["Birch"]);
+  expect(result.team).toEqual(savedShift([alder]));
+  expect(portedKeys(native)).toEqual([alder]);
+});
+
+it("lists a team whose members are all here, and imports it from them", async () => {
+  const { service, native } = await setup({
+    identities: [here(alder), here(birch)],
+  });
+  listsTeam(native, nightShift([alder, birch]));
+  const found = await service.portable();
+  expect(found.agents).toEqual([]);
+  expect(found.teams).toEqual([nightShift([alder, birch])]);
+  const result = await importTeam(service);
+  expect(result).toEqual({
+    team: savedShift([alder, birch]),
+    imported: [],
+    failed: [],
+    elsewhere: [],
+  });
+  expect(native.port).not.toHaveBeenCalled();
+});
+
+it("keeps a team's imported members when the team cannot be saved, and changes no team", async () => {
   const storage = memoryStorage();
   const { service, native } = await setup({ storage });
   await service.create({ type: "example/echo", name: "Echo" });
@@ -709,13 +774,11 @@ it("keeps an imported agent whose team cannot be saved, and changes no team", as
     if (key === "buzz.agents.teams.v1") throw new Error("Quota exceeded");
     setItem(key, value);
   };
-  portsOnTeam(native, nightShift);
-  const agent = await importOld(service, sibling);
-  expect(agent).toMatchObject({
-    pubkey: sibling,
-    teamError: { name: "Night Shift" },
-  });
-  expect(service.find(sibling)).toBeDefined();
+  listsTeam(native, nightShift([carrow]));
+  const result = await importTeam(service);
+  expect(result.teamError).toEqual({ name: "Night Shift" });
+  expect(result.team).toBeUndefined();
+  expect(service.find(carrow)).toBeDefined();
   expect(storage.getItem("buzz.agents.teams.v1")).toBe(stored);
   expect(service.snapshot().teams).toBe(teams);
 });

@@ -19,11 +19,15 @@ import type {
   AgentViewProps,
   Agents,
   AgentsSnapshot,
-  Ported,
   RegisteredAgentType,
   TeamChange,
+  TeamPort,
 } from "../../features/agents/service";
-import type { PortableAgent } from "../../features/agents/native";
+import type {
+  OldTeam,
+  PortableAgent,
+  PortableAgents,
+} from "../../features/agents/native";
 import type { RelayData } from "../../features/relay/service";
 import type { Navigation } from "../../features/navigation/controller";
 import type { PageNavigation } from "../../features/navigation/service";
@@ -240,8 +244,21 @@ function setup(
       return created;
     }),
     finish: vi.fn(async (_: string) => created),
-    portable: vi.fn(async () => ({ agents: portable, warnings: [] })),
-    port: vi.fn(async (): Promise<Ported> => created),
+    portable: vi.fn(
+      async (): Promise<PortableAgents> => ({
+        agents: portable,
+        teams: [],
+        warnings: [],
+      }),
+    ),
+    port: vi.fn(async () => created),
+    portTeam: vi.fn(
+      async (): Promise<TeamPort> => ({
+        imported: [],
+        failed: [],
+        elsewhere: [],
+      }),
+    ),
     save: vi.fn(async () => {}),
     previewRetype: vi.fn(
       () =>
@@ -857,6 +874,7 @@ it("tells same-named agents to import apart by their keys", async () => {
       ...portable,
       { source: "development", pubkey: "c".repeat(64), name: "Bea", relay: "" },
     ],
+    teams: [],
     warnings: [],
   });
   await user.click(screen.getByRole("tab", { name: "Import" }));
@@ -896,39 +914,126 @@ it("shows why importing an agent failed and keeps it listed", async () => {
   expect(screen.getByRole("button", { name: "Import Ada" })).toBeEnabled();
 });
 
-it("says which old Buzz team an agent joins, and stays on Import when it could not join", async () => {
-  const user = userEvent.setup();
-  const { agents } = setup([]);
-  agents.portable.mockResolvedValueOnce({
-    agents: [
-      portable[0] as PortableAgent,
-      {
-        ...(portable[1] as PortableAgent),
-        team: { id: "old", name: "Night Shift", instructions: "Ship small." },
-      },
-    ],
-    warnings: [],
-  });
-  agents.port.mockResolvedValueOnce({
-    ...agent("Bea", 2),
-    teamError: { name: "Night Shift" },
-  });
-  await user.click(screen.getByRole("tab", { name: "Import" }));
-  const list = await screen.findByRole("region", { name: "Agents to import" });
-  expect(
-    within(list).getByText("Buzz 0.X · Joins team Night Shift"),
-  ).toBeInTheDocument();
-  expect(within(list).getByText("Buzz 1.0 harness agent")).toBeInTheDocument();
-  await user.click(screen.getByRole("button", { name: "Import Bea" }));
+const nightShift: OldTeam = {
+  id: "old-night-shift",
+  name: "Night Shift",
+  instructions: "Ship small.",
+  members: [
+    { pubkey: "b".repeat(64), name: "Bea", source: "installed" },
+    { pubkey: "c".repeat(64), name: "Cy", source: "installed" },
+  ],
+};
+const onImport = () =>
   expect(screen.getByRole("tab", { name: "Import" })).toHaveAttribute(
     "aria-selected",
     "true",
   );
+
+it("lists old teams apart from agents, and imports one as a team", async () => {
+  const user = userEvent.setup();
+  const { agents } = setup([]);
+  agents.portable.mockResolvedValueOnce({
+    agents: portable,
+    teams: [nightShift],
+    warnings: [],
+  });
+  await user.click(screen.getByRole("tab", { name: "Import" }));
+  const teams = await screen.findByRole("region", { name: "Teams to import" });
+  expect(
+    within(teams).getByRole("heading", { name: "Teams" }),
+  ).toBeInTheDocument();
+  expect(within(teams).getByText("Night Shift")).toBeInTheDocument();
+  // Cy is here already; Bea is still listed as an agent.
+  expect(
+    within(teams).getByText("2 members · 1 already here"),
+  ).toBeInTheDocument();
+  const list = screen.getByRole("region", { name: "Agents to import" });
+  expect(within(list).queryByText(/team/i)).not.toBeInTheDocument();
+  await user.click(
+    screen.getByRole("button", { name: "Import team Night Shift" }),
+  );
+  expect(agents.portTeam).toHaveBeenCalledWith({
+    id: "old-night-shift",
+    type: "test/echo",
+  });
+  expect(screen.getByRole("tab", { name: "Your agents" })).toHaveAttribute(
+    "aria-selected",
+    "true",
+  );
+});
+
+it("keeps a team whose members are all here importable with no agents to list", async () => {
+  const user = userEvent.setup();
+  const { agents } = setup([]);
+  agents.portable.mockResolvedValueOnce({
+    agents: [],
+    teams: [nightShift],
+    warnings: [],
+  });
+  await user.click(screen.getByRole("tab", { name: "Import" }));
+  await user.click(
+    await screen.findByRole("button", { name: "Import team Night Shift" }),
+  );
+  expect(
+    screen.queryByRole("region", { name: "Agents to import" }),
+  ).not.toBeInTheDocument();
+  expect(agents.portTeam).toHaveBeenCalled();
+  expect(screen.getByRole("tab", { name: "Your agents" })).toHaveAttribute(
+    "aria-selected",
+    "true",
+  );
+});
+
+it("stays on Import and names each part of a team import that did not come", async () => {
+  const user = userEvent.setup();
+  const { agents } = setup([]);
+  agents.portable.mockResolvedValue({
+    agents: portable,
+    teams: [nightShift],
+    warnings: [],
+  });
+  const team = { id: "t", name: "Night Shift", instructions: "", members: [] };
+  agents.portTeam
+    .mockResolvedValueOnce({
+      team,
+      imported: [{ ...agent("Bea", 2), pubkey: "b".repeat(64) }],
+      failed: [{ name: "Cy", error: "Keychain access was denied" }],
+      elsewhere: [],
+    })
+    .mockResolvedValueOnce({
+      imported: [],
+      failed: [],
+      elsewhere: ["Cy"],
+      teamError: { name: "Night Shift" },
+    })
+    .mockResolvedValueOnce({
+      team,
+      imported: [],
+      failed: [],
+      elsewhere: ["Cy"],
+    });
+  await user.click(screen.getByRole("tab", { name: "Import" }));
+  const importTeam = await screen.findByRole("button", {
+    name: "Import team Night Shift",
+  });
+  await user.click(importTeam);
+  onImport();
+  expect(screen.getByRole("alert")).toHaveTextContent(
+    "Imported team Night Shift with Bea. Couldn't import Cy: Keychain access was denied.",
+  );
+  // Bea came, so it is no longer offered on its own.
   expect(
     screen.queryByRole("button", { name: "Import Bea" }),
   ).not.toBeInTheDocument();
+  await user.click(importTeam);
+  onImport();
   expect(screen.getByRole("alert")).toHaveTextContent(
-    "Imported Bea, but couldn't add it to team Night Shift. Add it in Teams.",
+    "Couldn't save team Night Shift. Add its members in Teams. Kept out: Cy, in another community.",
+  );
+  await user.click(importTeam);
+  onImport();
+  expect(screen.getByRole("alert")).toHaveTextContent(
+    "Imported team Night Shift. Kept out: Cy, in another community.",
   );
 });
 

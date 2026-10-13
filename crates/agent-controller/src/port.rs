@@ -1,8 +1,9 @@
 //! Agent identities an earlier agent system saved on this machine, which Agents
 //! can take over: the harness controller's library and old Buzz's. The identity
 //! and its public name, picture and description move, with its instructions
-//! and workspace as a `Carry` for the new type to adopt, and old Buzz's team it
-//! was on; other harness settings stay behind. Neither store is ever written.
+//! and workspace as a `Carry` for the new type to adopt; other harness settings
+//! and memberships stay behind. Old Buzz's teams are listed apart, each with its
+//! members, for the app to rebuild. Neither store is ever written.
 use crate::config::{agent_id, canonical_key, canonical_relay, MAX_AGENTS};
 use crate::import::read_json;
 use crate::{Credentials, LegacySource, Result, Secret};
@@ -45,10 +46,6 @@ pub struct Portable {
     /// Settings any type may adopt. Only taking the agent over reports them.
     #[serde(skip)]
     pub carry: Carry,
-    /// The old Buzz team it was on, if that team still exists and is not one
-    /// old Buzz built in.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub team: Option<OldTeam>,
 }
 
 /// An old Buzz team as old Buzz last saved it, keyed by its old ID.
@@ -58,6 +55,16 @@ pub struct OldTeam {
     pub name: String,
     /// Its shared instructions, "" for none.
     pub instructions: String,
+    /// Each identity on it, named and sourced as the agent list has it, whether
+    /// or not it was taken over already.
+    pub members: Vec<OldMember>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct OldMember {
+    pub pubkey: String,
+    pub name: String,
+    pub source: PortSource,
 }
 
 /// What an agent kept in an earlier system that a new type may give it.
@@ -74,6 +81,9 @@ pub struct Carry {
 #[derive(Debug, Default, Serialize)]
 pub struct Portables {
     pub agents: Vec<Portable>,
+    /// Old Buzz's teams with at least one member, built-in ones left out. The
+    /// Installed and Development copies of one merge, Installed's text first.
+    pub teams: Vec<OldTeam>,
     /// A store that could not be read; the others are still listed.
     pub warnings: Vec<String>,
 }
@@ -98,7 +108,10 @@ impl OldStores {
         ] {
             match self.read(source) {
                 Ok((agents, teams)) => {
-                    found.warnings.extend(teams.err());
+                    match teams {
+                        Ok(teams) => teams.into_iter().for_each(|team| found.merge(team)),
+                        Err(error) => found.warnings.push(error),
+                    }
                     found.agents.extend(
                         agents
                             .into_iter()
@@ -109,11 +122,18 @@ impl OldStores {
                 Err(error) => found.warnings.push(error),
             }
         }
+        found.teams.retain(|team| !team.members.is_empty());
+        // Named and sourced as the copy that is listed.
+        for member in found.teams.iter_mut().flat_map(|team| &mut team.members) {
+            if let Some(agent) = found.agents.iter().find(|a| a.pubkey == member.pubkey) {
+                member.name.clone_from(&agent.name);
+                member.source = agent.source;
+            }
+        }
         found
     }
-    /// One listed identity, its team and its key, all re-read from the store it
-    /// is in, so the caller names only its choice. Unreadable teams leave it
-    /// with none.
+    /// One listed identity and its key, both re-read from the store it is in, so
+    /// the caller names only its choice.
     pub fn take(
         &self,
         source: PortSource,
@@ -136,8 +156,8 @@ impl OldStores {
         Ok((agent, key))
     }
     /// Its identities, each with where its key is: the harness credential ID, or
-    /// the key old Buzz kept in the record itself, if it did. Teams that cannot
-    /// be read are reported apart, and attach to no one.
+    /// the key old Buzz kept in the record itself, if it did, and its teams with
+    /// their members. Teams that cannot be read are reported apart.
     fn read(&self, source: PortSource) -> Result<Read> {
         let (path, records) = match source.legacy() {
             None => (self.harness.clone(), "agents"),
@@ -149,7 +169,7 @@ impl OldStores {
             ),
         };
         if !path.try_exists().unwrap_or(true) {
-            return Ok((vec![], Ok(())));
+            return Ok((vec![], Ok(vec![])));
         }
         let file =
             read_json(&path, false).map_err(|_| format!("Could not read {}", path.display()))?;
@@ -168,18 +188,45 @@ impl OldStores {
             }
             _ => Ok(vec![]),
         };
-        let known = teams.as_deref().unwrap_or_default();
-        let found = records
-            .iter()
-            .filter_map(|record| portable(source, record, records, known))
-            .collect();
-        Ok((found, teams.map(drop)))
+        let mut teams = teams;
+        let mut found = vec![];
+        for record in records {
+            let Some((agent, key)) = portable(source, record, records) else {
+                continue;
+            };
+            let id = record["team_id"].as_str();
+            if let Some(team) = teams.iter_mut().flatten().find(|t| Some(&*t.id) == id) {
+                team.members.push(OldMember {
+                    pubkey: agent.pubkey.clone(),
+                    name: agent.name.clone(),
+                    source,
+                });
+            }
+            found.push((agent, key));
+        }
+        Ok((found, teams))
     }
 }
 
-/// A store's identities, each with where its key is, and whether its teams
+impl Portables {
+    /// Adds a store's team, or its new members to the same team from another.
+    fn merge(&mut self, team: OldTeam) {
+        match self.teams.iter_mut().find(|row| row.id == team.id) {
+            None => self.teams.push(team),
+            Some(row) => {
+                for member in team.members {
+                    if !row.members.iter().any(|m| m.pubkey == member.pubkey) {
+                        row.members.push(member);
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// A store's identities, each with where its key is, and its teams if they
 /// could be read.
-type Read = (Vec<(Portable, String)>, Result<()>);
+type Read = (Vec<(Portable, String)>, Result<Vec<OldTeam>>);
 
 /// Old Buzz's teams beside its agents, built-in ones left out. A missing file
 /// has none; any invalid team makes the file unreadable.
@@ -215,6 +262,7 @@ fn old_teams(path: &std::path::Path) -> Result<Vec<OldTeam>> {
                 id: id.into(),
                 name: team_name(team["name"].as_str().unwrap_or("")),
                 instructions: instructions.trim().into(),
+                members: vec![],
             });
         }
     }
@@ -237,12 +285,7 @@ fn team_name(raw: &str) -> String {
         .collect()
 }
 
-fn portable(
-    source: PortSource,
-    record: &Value,
-    records: &[Value],
-    teams: &[OldTeam],
-) -> Option<(Portable, String)> {
+fn portable(source: PortSource, record: &Value, records: &[Value]) -> Option<(Portable, String)> {
     let text = |key: &str| record.get(key).and_then(Value::as_str).unwrap_or("");
     let harness = source == PortSource::Harness;
     let pubkey = text("pubkey");
@@ -297,11 +340,6 @@ fn portable(
                 // Old Buzz saved no workspace.
                 workspace: harness.then(|| present(text("workspace"))).flatten(),
             },
-            // Missing from the file: deleted in old Buzz, or one it built in.
-            team: teams
-                .iter()
-                .find(|team| record["team_id"].as_str() == Some(&team.id))
-                .cloned(),
         },
         credential,
     ))

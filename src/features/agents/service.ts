@@ -469,10 +469,18 @@ export type PortInput = Readonly<
       instructions?: string;
     }
 >;
-/** An imported agent; `teamError` names the old Buzz team it could not be
- * added to, though the agent itself was kept. */
-export type Ported = Agent &
-  Readonly<{ teamError?: Readonly<{ name: string }> }>;
+/** What importing an old Buzz team did. Members that came are kept even when
+ * others, or the team itself, did not. */
+export type TeamPort = Readonly<{
+  /** The team as saved, absent when no member is here to put on it. */
+  team?: Team;
+  imported: readonly Agent[];
+  failed: readonly Readonly<{ name: string; error: string }>[];
+  /** Members already here in another community, left off the team. */
+  elsewhere: readonly string[];
+  /** The team could not be saved, though its members were imported. */
+  teamError?: Readonly<{ name: string }>;
+}>;
 export type NewAgent = Readonly<{
   type: string;
   name: string;
@@ -499,15 +507,18 @@ export type Agents = {
   /** Continues an unfinished hosted agent's setup. */
   finish(pubkey: string): Promise<Agent>;
   /** Identities earlier agent systems saved on this machine that are not
-   * Agents yet. */
+   * Agents yet, and old Buzz's teams with all their members. */
   portable(): Promise<PortableAgents>;
   /** Imports one as an agent of `type` in the selected community: an identity
    * from `portable` keeps its key, name and picture, and a shared agent gets a
    * new key with its name and picture. Either keeps whatever of its
-   * instructions and workspace the type adopts; its other settings stay behind.
-   * One that was on an old Buzz team joins that team's copy in this community,
-   * which its first member creates. */
-  port(input: PortInput): Promise<Ported>;
+   * instructions and workspace the type adopts; its other settings stay behind. */
+  port(input: PortInput): Promise<Agent>;
+  /** Imports an old Buzz team from `portable`, as read now, into the selected
+   * community: each member not here yet as an agent of `type`, then the team's
+   * copy there with every member here. A team imported before keeps its name,
+   * instructions and members here. */
+  portTeam(input: Readonly<{ id: string; type: string }>): Promise<TeamPort>;
   save(pubkey: string, change: AgentChange): Promise<void>;
   /** Previews the destination config and transferable settings the same
    * migration used by `retype` will produce, without changing the agent. */
@@ -1112,35 +1123,13 @@ export class AgentsService extends Service implements Agents {
     };
   }
 
-  async port(input: PortInput): Promise<Ported> {
+  async port(input: PortInput) {
     const { type } = input;
     if (input.source !== "shared") {
       const { source, pubkey } = input;
-      let joins: Readonly<{ team: OldTeam; community: string }> | undefined;
-      const agent: Ported = await this.add(
-        type,
-        async (native, destination, owner) => {
-          const ported = await native.port(
-            source,
-            pubkey,
-            destination,
-            owner,
-            type,
-          );
-          // Only what was read at import, in the community it was made in.
-          if (ported.team)
-            joins = { team: ported.team, community: destination };
-          return ported;
-        },
+      return this.add(type, (native, destination, owner) =>
+        native.port(source, pubkey, destination, owner, type),
       );
-      if (!joins) return agent;
-      try {
-        await this.joinOldTeam(joins.team, joins.community, agent.pubkey);
-        return agent;
-      } catch (error) {
-        console.warn(`Agent ${agent.name} was not added to its team`, error);
-        return { ...agent, teamError: { name: joins.team.name } };
-      }
     }
     const name = input.name.trim();
     if (!name) throw new Error("Name the agent");
@@ -1157,9 +1146,80 @@ export class AgentsService extends Service implements Agents {
     );
   }
 
-  /** Saves a new identity of `type` in the selected community with the type's
-   * default settings, or the `config` it was made with, adopting what a
-   * brought-over one carried. */
+  async portTeam({
+    id,
+    type,
+  }: Readonly<{ id: string; type: string }>): Promise<TeamPort> {
+    const native = this.native;
+    if (!native) throw new Error("Agents run only in the desktop app");
+    // Every member and the team land here, whatever is opened meanwhile.
+    const binding = this.selectedBinding();
+    const origin = this.selectedOrigin();
+    const kind = this.types().find((entry) => entry.key === type);
+    if (!kind) throw new Error("That agent type is not available");
+    if (kind.remote)
+      throw new Error("A hosted agent's key stays with its provider");
+    const moved = () => this.selectedOrigin() !== origin;
+    // As old Buzz has it now, not as the Import tab showed it.
+    const found = await native.portable();
+    if (moved()) throw new Error("Community changed");
+    const old = found.teams.find((team) => team.id === id);
+    if (!old) throw new Error("That team is no longer saved there");
+    const live = this.identities.filter((identity) => !identity.deleted);
+    const members: string[] = [];
+    const imported: Agent[] = [];
+    const failed: { name: string; error: string }[] = [];
+    const elsewhere: string[] = [];
+    for (const member of old.members) {
+      // Native lists only named identities, and the same copy as an agent.
+      const { name } = member;
+      const here = live.find((identity) => identity.pubkey === member.pubkey);
+      if (here && originOf(here.relay) === origin) {
+        members.push(member.pubkey);
+        continue;
+      }
+      // Kept to its own community's copy of the team, never moved here.
+      if (here) {
+        elsewhere.push(name);
+        continue;
+      }
+      // Checked with no wait before the import starts.
+      if (moved()) {
+        failed.push({ name, error: "Community changed" });
+        continue;
+      }
+      try {
+        const agent = await this.add(
+          type,
+          (native, destination, owner) =>
+            native.port(member.source, member.pubkey, destination, owner, type),
+          {},
+          binding,
+        );
+        imported.push(agent);
+        members.push(agent.pubkey);
+      } catch (error) {
+        failed.push({ name, error: message(error) });
+      }
+    }
+    const result = { imported, failed, elsewhere };
+    if (!members.length) return result;
+    try {
+      const team = await this.writeImportedTeam(
+        old,
+        relayOrigin(binding.origin),
+        members,
+      );
+      return { ...result, team };
+    } catch (error) {
+      console.warn(`Team ${old.name} was not saved`, error);
+      return { ...result, teamError: { name: old.name } };
+    }
+  }
+
+  /** Saves a new identity of `type` in the selected community, or `binding`'s,
+   * with the type's default settings, or the `config` it was made with,
+   * adopting what a brought-over one carried. */
   private async add(
     type: string,
     save: (
@@ -1168,10 +1228,11 @@ export class AgentsService extends Service implements Agents {
       owner: string,
     ) => Promise<Readonly<{ agent: AgentIdentity; carry?: Carry }>>,
     made: Readonly<{ config?: unknown; picture?: string | undefined }> = {},
+    given?: Binding,
   ) {
     const native = this.native;
     if (!native) throw new Error("Agents run only in the desktop app");
-    const binding = this.selectedBinding();
+    const binding = given ?? this.selectedBinding();
     const kind = this.types().find((entry) => entry.key === type);
     if (!kind) throw new Error("That agent type is not available");
     if (kind.remote)
@@ -1207,6 +1268,10 @@ export class AgentsService extends Service implements Agents {
       );
     await this.refresh();
     return this.view(shown, record);
+  }
+
+  private selectedOrigin() {
+    return originOf(this.communities.snapshot().selected ?? "");
   }
 
   /** The selected community's live binding, where agents are made. */
@@ -1476,27 +1541,34 @@ export class AgentsService extends Service implements Agents {
     return team;
   }
 
-  /** Adds an imported agent to its old Buzz team's copy in `community`, made
-   * on its first member. Its name and instructions here are never replaced. */
-  private async joinOldTeam(team: OldTeam, community: string, pubkey: string) {
+  /** Puts `members` on an old Buzz team's copy in `community`, made the first
+   * time; matched only by the ID it gets from both. Its name and instructions
+   * here are never replaced. */
+  private async writeImportedTeam(
+    team: OldTeam,
+    community: string,
+    members: readonly string[],
+  ) {
     const digest = await crypto.subtle.digest(
       "SHA-256",
       new TextEncoder().encode(`${team.id}\n${community}`),
     );
     const id = `beta-${bytesToHex(new Uint8Array(digest))}`;
     const saved = this.teamList.find((entry) => entry.id === id);
-    if (saved?.members.includes(pubkey)) return;
     const joined: Team = Object.freeze({
       id,
       name: saved?.name ?? team.name,
       instructions: saved?.instructions ?? team.instructions,
-      members: Object.freeze([...(saved?.members ?? []), pubkey]),
+      members: Object.freeze([
+        ...new Set([...(saved?.members ?? []), ...members]),
+      ]),
     });
     this.writeTeams(
       saved
         ? this.teamList.map((entry) => (entry === saved ? joined : entry))
         : [...this.teamList, joined],
     );
+    return joined;
   }
 
   async removeTeam(id: string) {

@@ -28,6 +28,7 @@ import { AttentionSummary } from "../../features/agents/AttentionPanel";
 import { AvatarEditor } from "../../features/profiles/AvatarEditor";
 import { useAgents, useChannelChoices } from "../../features/agents/react";
 import type {
+  OldTeam,
   PortableAgent,
   PortableAgents,
   PortSource,
@@ -37,6 +38,7 @@ import type {
   Agents,
   RegisteredAgentType,
   Team,
+  TeamPort,
 } from "../../features/agents/service";
 import { useRelayConnection } from "../../features/relay/react";
 import type { AgentMemories } from "../../features/agents/MemoryPanel";
@@ -63,6 +65,7 @@ import { EmptyState } from "../../shared/design-system/ui/EmptyState";
 import { Field } from "../../shared/design-system/ui/Field";
 import { FullPageSurface } from "../../shared/design-system/ui/FullPageSurface";
 import { IconButton } from "../../shared/design-system/ui/IconButton";
+import { InlineHeader } from "../../shared/design-system/ui/Header";
 import { Input } from "../../shared/design-system/ui/Input";
 import {
   MenuPopup,
@@ -854,6 +857,28 @@ const SOURCES: Record<PortSource, string> = {
   development: "Buzz 0.X dev",
 };
 const host = (relay: string) => relay.replace(/^wss:\/\//, "");
+const sentence = (text: string) => text.replace(/\.?$/, ".");
+
+/** What a team import left undone, or "" if nothing. */
+function teamPortNote(
+  name: string,
+  { team, imported, failed, elsewhere, teamError }: TeamPort,
+) {
+  if (!failed.length && !elsewhere.length && !teamError) return "";
+  const came = imported.map((agent) => agent.name).join(", ");
+  return [
+    teamError
+      ? `Couldn't save team ${name}. Add its members in Teams.`
+      : team && `Imported team ${name}${came ? ` with ${came}` : ""}.`,
+    ...failed.map((member) =>
+      sentence(`Couldn't import ${member.name}: ${member.error}`),
+    ),
+    elsewhere.length &&
+      `Kept out: ${elsewhere.join(", ")}, in another community.`,
+  ]
+    .filter(Boolean)
+    .join(" ");
+}
 
 /** Identities earlier agent systems saved on this machine, each imported
  * with its key, name and picture as an agent of the chosen type. */
@@ -890,7 +915,7 @@ function ImportAgents({
     setPending(agent.pubkey);
     setError("");
     try {
-      const { name, teamError } = await agents.port({
+      await agents.port({
         source: agent.source,
         pubkey: agent.pubkey,
         type: chosen.key,
@@ -902,11 +927,30 @@ function ImportAgents({
             agents: last.agents.filter((item) => item.pubkey !== agent.pubkey),
           },
       );
-      // Leaving would hide the one place that says the team needs a hand.
-      if (teamError)
-        setError(
-          `Imported ${name}, but couldn't add it to team ${teamError.name}. Add it in Teams.`,
-        );
+      onImported();
+    } catch (reason) {
+      setError(message(reason));
+    } finally {
+      setPending(undefined);
+    }
+  };
+  const portTeam = async (team: OldTeam) => {
+    if (!chosen || pending) return;
+    setPending(team.id);
+    setError("");
+    try {
+      const result = await agents.portTeam({ id: team.id, type: chosen.key });
+      const came = new Set(result.imported.map((agent) => agent.pubkey));
+      setFound(
+        (last) =>
+          last && {
+            ...last,
+            agents: last.agents.filter((item) => !came.has(item.pubkey)),
+          },
+      );
+      // Leaving would hide the one place that names what still needs a hand.
+      const note = teamPortNote(team.name, result);
+      if (note) setError(note);
       else onImported();
     } catch (reason) {
       setError(message(reason));
@@ -914,6 +958,7 @@ function ImportAgents({
       setPending(undefined);
     }
   };
+  const listed = new Set(found?.agents.map((agent) => agent.pubkey));
   if (!types.length)
     return (
       <p className="m-0 text-body-sm text-secondary">
@@ -963,52 +1008,95 @@ function ImportAgents({
             Looking for agents…
           </p>
         )
-      ) : found.agents.length ? (
-        <section aria-label="Agents to import" className={cardStyles.grid}>
-          {found.agents.map((agent) => (
-            <AgentCard
-              key={agent.pubkey}
-              agent={agent}
-              community={agent.relay || undefined}
-              detail={
-                <Tooltip
-                  content={[
-                    canonicalPublicKey(agent.pubkey),
-                    agent.relay && host(agent.relay),
-                  ]
-                    .filter(Boolean)
-                    .join(" · ")}
-                  delay={300}
+      ) : found.agents.length || found.teams.length ? (
+        <>
+          {found.teams.length > 0 && (
+            <section aria-label="Teams to import">
+              <InlineHeader title="Teams" />
+              <ul className={styles.portList}>
+                {found.teams.map((team) => {
+                  const here = team.members.filter(
+                    (member) => !listed.has(member.pubkey),
+                  ).length;
+                  return (
+                    <li key={team.id} className={styles.portRow}>
+                      <span className="grid min-w-0 flex-1">
+                        <span className="truncate text-body">{team.name}</span>
+                        <span className="truncate text-caption text-secondary">
+                          {[
+                            `${team.members.length} ${team.members.length === 1 ? "member" : "members"}`,
+                            here > 0 && `${here} already here`,
+                          ]
+                            .filter(Boolean)
+                            .join(" · ")}
+                        </span>
+                      </span>
+                      <Button
+                        size="compact"
+                        variant="outline"
+                        aria-label={`Import team ${team.name}`}
+                        loading={pending === team.id}
+                        disabled={!chosen || (!!pending && pending !== team.id)}
+                        onClick={() => void portTeam(team)}
+                      >
+                        Import team
+                      </Button>
+                    </li>
+                  );
+                })}
+              </ul>
+            </section>
+          )}
+          {found.agents.length > 0 && (
+            <section aria-label="Agents to import" className={cardStyles.grid}>
+              {found.agents.map((agent) => (
+                <AgentCard
+                  key={agent.pubkey}
+                  agent={agent}
+                  community={agent.relay || undefined}
+                  detail={
+                    <Tooltip
+                      content={[
+                        canonicalPublicKey(agent.pubkey),
+                        agent.relay && host(agent.relay),
+                      ]
+                        .filter(Boolean)
+                        .join(" · ")}
+                      delay={300}
+                    >
+                      <span
+                        // biome-ignore lint/a11y/noNoninteractiveTabindex: keyboard users need access to its key and community in the tooltip.
+                        tabIndex={0}
+                      >
+                        {[
+                          SOURCES[agent.source],
+                          // Its key tells it apart only from one of the same name.
+                          named.get(agent.name) !== 1 &&
+                            labels.get(agent.pubkey),
+                        ]
+                          .filter(Boolean)
+                          .join(" · ")}
+                      </span>
+                    </Tooltip>
+                  }
                 >
-                  <span
-                    // biome-ignore lint/a11y/noNoninteractiveTabindex: keyboard users need access to its key and community in the tooltip.
-                    tabIndex={0}
+                  <Button
+                    size="compact"
+                    variant="outline"
+                    aria-label={`Import ${agent.name}`}
+                    loading={pending === agent.pubkey}
+                    disabled={
+                      !chosen || (!!pending && pending !== agent.pubkey)
+                    }
+                    onClick={() => void port(agent)}
                   >
-                    {[
-                      SOURCES[agent.source],
-                      // Its key tells it apart only from one of the same name.
-                      named.get(agent.name) !== 1 && labels.get(agent.pubkey),
-                      agent.team && `Joins team ${agent.team.name}`,
-                    ]
-                      .filter(Boolean)
-                      .join(" · ")}
-                  </span>
-                </Tooltip>
-              }
-            >
-              <Button
-                size="compact"
-                variant="outline"
-                aria-label={`Import ${agent.name}`}
-                loading={pending === agent.pubkey}
-                disabled={!chosen || (!!pending && pending !== agent.pubkey)}
-                onClick={() => void port(agent)}
-              >
-                Import
-              </Button>
-            </AgentCard>
-          ))}
-        </section>
+                    Import
+                  </Button>
+                </AgentCard>
+              ))}
+            </section>
+          )}
+        </>
       ) : (
         <p className="m-0 text-body-sm text-secondary">
           No other agents found to import.

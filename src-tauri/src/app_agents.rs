@@ -3,8 +3,8 @@
 //! event, read, upload or memory write at a time, and native signs and sends it
 //! to the agent's community.
 use buzz_agent_controller::{
-    AppAgent, AppAgents, Carry, Credentials, OldStores, OldTeam, PlatformCredentials, PortSource,
-    Portable, Portables, Published, Secret, CREDENTIALS_BUSY,
+    AppAgent, AppAgents, Carry, Credentials, OldStores, PlatformCredentials, PortSource, Portables,
+    Published, Secret, CREDENTIALS_BUSY,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -255,23 +255,11 @@ impl From<AppAgent> for AppAgentSummary {
     }
 }
 
-/// A taken-over identity, the settings its old store kept for its new type,
-/// and the old Buzz team it was on as that store has it now.
+/// A taken-over identity and the settings its old store kept for its new type.
 #[derive(Serialize)]
 pub(crate) struct Ported {
     agent: AppAgentSummary,
     carry: Carry,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    team: Option<OldTeam>,
-}
-impl Ported {
-    fn new(agent: AppAgent, found: Portable) -> Self {
-        Self {
-            agent: agent.into(),
-            carry: found.carry,
-            team: found.team,
-        }
-    }
 }
 
 #[tauri::command]
@@ -357,8 +345,8 @@ pub(crate) async fn app_agent_port(
         &agent_type,
         key,
         &found.name,
-        found.picture.clone(),
-        found.about.clone(),
+        found.picture,
+        found.about,
     )?;
     let auth = identity
         .inner()
@@ -369,7 +357,10 @@ pub(crate) async fn app_agent_port(
         let mut keys = host.keys();
         let (agent, key) = agents.commit(prepared, &auth, host.credentials.as_ref())?;
         keys.insert(agent.pubkey.clone(), Arc::new(key));
-        Ok(Ported::new(agent, found))
+        Ok(Ported {
+            agent: agent.into(),
+            carry: found.carry,
+        })
     })
     .await
 }
@@ -741,63 +732,6 @@ mod tests {
         fn delete(&self, _: &str, _: &str) -> Result<(), String> {
             unreachable!()
         }
-    }
-
-    /// What the app reads back from an import: the team as the old store has it
-    /// when taken, and no `team` at all for an agent on none.
-    #[test]
-    fn a_ported_agent_carries_its_freshly_read_team() {
-        let dir = tempfile::tempdir().unwrap();
-        let agents = dir
-            .path()
-            .join(buzz_agent_controller::LegacySource::Installed.app_directory())
-            .join("agents");
-        std::fs::create_dir_all(&agents).unwrap();
-        let (member, loner) = (Secret::generate().unwrap(), Secret::generate().unwrap());
-        let record = |key: &Secret, team: Value| {
-            serde_json::json!({"pubkey": key.pubkey(), "name": "Ada", "team_id": team,
-                "private_key_nsec": key.hex().to_string()})
-        };
-        std::fs::write(
-            agents.join("managed-agents.json"),
-            serde_json::json!([record(&member, "t".into()), record(&loner, Value::Null)])
-                .to_string(),
-        )
-        .unwrap();
-        let teams = |name: &str| {
-            serde_json::json!([{"id": "t", "name": name, "instructions": " Ship it. "}]).to_string()
-        };
-        let old = OldStores {
-            harness: dir.path().join("none.json"),
-            data_dir: dir.path().into(),
-        };
-        std::fs::write(agents.join("teams.json"), teams("Listed")).unwrap();
-        old.list();
-        std::fs::write(agents.join("teams.json"), teams("Fresh")).unwrap();
-        let ported = |key: &Secret| {
-            let busy = Busy(key.hex().to_string(), AtomicU32::new(0));
-            let (found, _) = old
-                .take(PortSource::Installed, key.pubkey(), &busy)
-                .unwrap();
-            let agent = AppAgent {
-                pubkey: key.pubkey().into(),
-                relay: "wss://relay.example".into(),
-                owner: "a".repeat(64),
-                auth: "[]".into(),
-                agent_type: "p/t".into(),
-                name: "Ada".into(),
-                picture: None,
-                profile: None,
-                about: None,
-                deleted: false,
-            };
-            serde_json::to_value(Ported::new(agent, found)).unwrap()
-        };
-        assert_eq!(
-            ported(&member)["team"],
-            serde_json::json!({"id": "t", "name": "Fresh", "instructions": "Ship it."})
-        );
-        assert!(ported(&loner).get("team").is_none());
     }
 
     #[tokio::test]

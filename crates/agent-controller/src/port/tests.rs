@@ -95,7 +95,6 @@ fn lists_each_identity_once_preferring_the_harness_copy() {
                 about: None,
                 relay: "wss://relay.example".into(),
                 carry: Carry::default(),
-                team: None,
             },
             Portable {
                 source: PortSource::Installed,
@@ -105,7 +104,6 @@ fn lists_each_identity_once_preferring_the_harness_copy() {
                 about: None,
                 relay: "wss://old.example".into(),
                 carry: Carry::default(),
-                team: None,
             },
             Portable {
                 source: PortSource::Development,
@@ -115,7 +113,6 @@ fn lists_each_identity_once_preferring_the_harness_copy() {
                 about: None,
                 relay: String::new(),
                 carry: Carry::default(),
-                team: None,
             },
         ]
     );
@@ -438,55 +435,117 @@ fn old_buzz(dir: &std::path::Path, source: LegacySource) {
         std::fs::copy(fixture.join(file), agents.join(file)).unwrap();
     }
 }
-fn team_of(found: &[Portable], name: &str) -> Option<OldTeam> {
-    found
-        .iter()
-        .find(|agent| agent.name == name)
-        .unwrap()
-        .team
-        .clone()
+fn team<'a>(found: &'a Portables, id: &str) -> Option<&'a OldTeam> {
+    found.teams.iter().find(|team| team.id == id)
 }
+fn names(team: &OldTeam) -> Vec<&str> {
+    team.members.iter().map(|m| m.name.as_str()).collect()
+}
+const NIGHT_SHIFT: &str = "6f9c2d1e-4b7a-4e8f-9a3c-2d5e8f1b7c40";
 
 #[test]
-fn attaches_each_old_buzz_agents_live_team() {
+fn lists_old_buzz_teams_with_their_members_apart_from_agents() {
     let dir = tempfile::tempdir().unwrap();
     old_buzz(dir.path(), LegacySource::Installed);
     let found = stores(dir.path()).list();
     assert!(found.warnings.is_empty());
-    let night_shift = OldTeam {
-        id: "6f9c2d1e-4b7a-4e8f-9a3c-2d5e8f1b7c40".into(),
-        name: "Night Shift".into(),
-        instructions: "Ship small, verified changes.\nReport in the originating thread.".into(),
-    };
-    assert_eq!(team_of(&found.agents, "Alder"), Some(night_shift.clone()));
-    assert_eq!(team_of(&found.agents, "Birch"), Some(night_shift));
-    // Built in to old Buzz, by its flag: never brought over.
-    assert_eq!(team_of(&found.agents, "Fizz"), None);
-    // A user's own team with the built-in one's name still comes.
+    let night_shift = team(&found, NIGHT_SHIFT).unwrap();
+    assert_eq!(night_shift.name, "Night Shift");
     assert_eq!(
-        team_of(&found.agents, "Greeter").map(|team| team.name),
-        Some("Welcome Team".into())
+        night_shift.instructions,
+        "Ship small, verified changes.\nReport in the originating thread."
     );
-    // Deleted in old Buzz, or never on one.
-    assert_eq!(team_of(&found.agents, "Ghost"), None);
-    assert_eq!(team_of(&found.agents, "Loner"), None);
-    let nameless = team_of(&found.agents, "Nameless").unwrap();
+    assert_eq!(
+        night_shift.members,
+        [
+            OldMember {
+                pubkey: "1".repeat(64),
+                name: "Alder".into(),
+                source: PortSource::Installed,
+            },
+            OldMember {
+                pubkey: "2".repeat(64),
+                name: "Birch".into(),
+                source: PortSource::Installed,
+            },
+        ]
+    );
+    // A user's own team with the built-in one's name still comes.
+    let greeters = found
+        .teams
+        .iter()
+        .find(|t| t.name == "Welcome Team")
+        .unwrap();
+    assert_eq!(names(greeters), ["Greeter"]);
+    let nameless = found
+        .teams
+        .iter()
+        .find(|t| names(t) == ["Nameless"])
+        .unwrap();
     assert_eq!(
         (nameless.name.as_str(), nameless.instructions.as_str()),
         ("Team from old Buzz", "")
     );
-    // The list shows it on the card; the definition is not an agent.
-    let json = serde_json::to_value(&found).unwrap();
-    assert_eq!(json["agents"][0]["team"]["name"], "Night Shift");
-    assert!(json["agents"][4].get("team").is_none());
+    // Built in to old Buzz, by its flag, or deleted there: no row; its members
+    // are plain agents.
+    assert!(team(&found, "builtin-team:welcome").is_none());
+    assert_eq!(found.teams.len(), 3);
+    assert!(found.agents.iter().any(|agent| agent.name == "Fizz"));
     assert_eq!(found.agents.len(), 7);
+    // Agents carry no team of their own.
+    let json = serde_json::to_value(&found).unwrap();
+    assert!(json["agents"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .all(|agent| agent.get("team").is_none()));
+    assert_eq!(json["teams"][0]["members"][0]["source"], "installed");
+}
 
-    // Development's copy has the same old IDs, so the same team.
-    old_buzz(dir.path(), LegacySource::Development);
-    let (dev, teams) = stores(dir.path()).read(PortSource::Development).unwrap();
-    assert!(teams.is_ok());
-    let dev: Vec<Portable> = dev.into_iter().map(|(agent, _)| agent).collect();
-    assert_eq!(team_of(&dev, "Birch"), team_of(&found.agents, "Birch"));
+#[test]
+fn a_member_listed_by_its_harness_copy_stays_on_its_team() {
+    let dir = tempfile::tempdir().unwrap();
+    old_buzz(dir.path(), LegacySource::Installed);
+    // The harness took Birch over, without old Buzz's team link.
+    write(
+        stores(dir.path()).harness,
+        json!({"version": 1, "agents": [{"pubkey": "2".repeat(64), "name": "Birch (harness)"}]}),
+    );
+    let found = stores(dir.path()).list();
+    let birch = &team(&found, NIGHT_SHIFT).unwrap().members[1];
+    assert_eq!(
+        (birch.name.as_str(), birch.source),
+        ("Birch (harness)", PortSource::Harness)
+    );
+}
+
+#[test]
+fn installed_and_development_copies_of_a_team_merge() {
+    let dir = tempfile::tempdir().unwrap();
+    let teams = |name: &str| json!([{"id": "t", "name": name, "instructions": name}]);
+    let path = |source: LegacySource| {
+        dir.path()
+            .join("data")
+            .join(source.app_directory())
+            .join("agents/teams.json")
+    };
+    let member =
+        |n: &str, name: &str| json!([{"pubkey": n.repeat(64), "name": name, "team_id": "t"}]);
+    legacy(dir.path(), LegacySource::Installed, member("1", "Alder"));
+    legacy(dir.path(), LegacySource::Development, member("2", "Birch"));
+    write(path(LegacySource::Installed), teams("Kept"));
+    write(path(LegacySource::Development), teams("Dropped"));
+    let found = stores(dir.path()).list();
+    assert_eq!(found.teams.len(), 1);
+    assert_eq!(
+        (
+            found.teams[0].name.as_str(),
+            found.teams[0].instructions.as_str()
+        ),
+        ("Kept", "Kept")
+    );
+    assert_eq!(names(&found.teams[0]), ["Alder", "Birch"]);
+    assert_eq!(found.teams[0].members[1].source, PortSource::Development);
 }
 
 #[test]
@@ -502,7 +561,7 @@ fn unreadable_teams_warn_and_leave_every_agent_importable() {
     legacy(dir.path(), LegacySource::Installed, member.clone());
     let found = stores(dir.path()).list();
     assert!(found.warnings.is_empty());
-    assert_eq!(found.agents[0].team, None);
+    assert!(found.teams.is_empty());
     for broken in [
         json!({"teams": []}),
         json!([{"id": "t", "name": "A"}, {"id": "t", "name": "B"}]),
@@ -517,7 +576,7 @@ fn unreadable_teams_warn_and_leave_every_agent_importable() {
         let found = stores(dir.path()).list();
         assert_eq!(found.warnings.len(), 1, "{broken}");
         assert_eq!(found.agents.len(), 1);
-        assert_eq!(found.agents[0].team, None);
+        assert!(found.teams.is_empty());
     }
     // Not JSON at all.
     let dir = tempfile::tempdir().unwrap();
@@ -538,44 +597,52 @@ fn team_names_are_trimmed_bounded_and_never_blank() {
     );
 }
 
+/// Importing a team lists afresh, so what it saves is the stores as they are
+/// then, not as they were previewed.
 #[test]
-fn taking_an_agent_rereads_its_team() {
+fn each_listing_rereads_both_stores_teams() {
     let dir = tempfile::tempdir().unwrap();
-    let agent = key();
-    let teams = |name: &str, text: &str| json!([{"id": "t", "name": name, "instructions": text}]);
-    legacy(
-        dir.path(),
-        LegacySource::Installed,
-        json!([{"pubkey": agent.pubkey(), "name": "Alder", "team_id": "t",
-                "private_key_nsec": agent.hex().to_string()}]),
+    old_buzz(dir.path(), LegacySource::Installed);
+    let stores = stores(dir.path());
+    assert_eq!(
+        names(team(&stores.list(), NIGHT_SHIFT).unwrap()),
+        ["Alder", "Birch"]
     );
-    let path = dir
+    let teams = dir
         .path()
         .join("data")
         .join(LegacySource::Installed.app_directory())
         .join("agents/teams.json");
-    write(path.clone(), teams("Before", "old text"));
-    let stores = stores(dir.path());
-    assert_eq!(
-        stores.list().agents[0].team.as_ref().unwrap().name,
-        "Before"
+    write(
+        teams,
+        json!([{"id": NIGHT_SHIFT, "name": "Day Shift", "instructions": "New text."}]),
     );
-    write(path.clone(), teams("After", "new text"));
-    let (taken, _) = stores
-        .take(PortSource::Installed, agent.pubkey(), &Memory::default())
-        .unwrap();
-    assert_eq!(
-        taken.team,
-        Some(OldTeam {
-            id: "t".into(),
-            name: "After".into(),
-            instructions: "new text".into(),
-        })
+    legacy(
+        dir.path(),
+        LegacySource::Development,
+        json!([{"pubkey": "8".repeat(64), "name": "Carrow", "team_id": NIGHT_SHIFT}]),
     );
-    // Unreadable now: the agent still comes, with no team.
-    std::fs::write(&path, "{").unwrap();
-    let (taken, _) = stores
-        .take(PortSource::Installed, agent.pubkey(), &Memory::default())
+    write(
+        dir.path()
+            .join("data")
+            .join(LegacySource::Development.app_directory())
+            .join("agents/teams.json"),
+        json!([{"id": NIGHT_SHIFT, "name": "Ignored"}]),
+    );
+    let json = serde_json::to_value(stores.list()).unwrap();
+    let row = json["teams"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|team| team["id"] == NIGHT_SHIFT)
         .unwrap();
-    assert_eq!(taken.team, None);
+    assert_eq!(row["name"], "Day Shift");
+    assert_eq!(row["instructions"], "New text.");
+    let members: Vec<&Value> = row["members"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|m| &m["name"])
+        .collect();
+    assert_eq!(members, ["Alder", "Birch", "Carrow"]);
 }
