@@ -1,8 +1,8 @@
-import { expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { SESSION_CHANNEL_DESCRIPTION } from "../sessions/metadata";
 import { createWorkSessions } from "./work-sessions";
 import type { Outbox, OutgoingEvent } from "./outbox";
-import type { ChannelQueries } from "./contracts";
+import type { ChannelQueries, ChannelSummary } from "./contracts";
 import {
   keypair,
   message,
@@ -1045,8 +1045,11 @@ function setup(
     async () => true,
   );
   const refreshList = vi.fn();
+  // The store's channel by id; system channels never join the list.
+  let known: ChannelSummary | undefined;
   const channels = {
     list: () => channelList,
+    get: (id: string) => (known?.id === id ? known : undefined),
     subscribeList: (fn: () => void) => {
       listListeners.add(fn);
       return () => {
@@ -1081,6 +1084,10 @@ function setup(
     },
     setList: (next: ReturnType<ChannelQueries["list"]>) => {
       channelList = next;
+      for (const fn of listListeners) fn();
+    },
+    setKnown: (next: ChannelSummary | undefined) => {
+      known = next;
       for (const fn of listListeners) fn();
     },
   };
@@ -1264,6 +1271,52 @@ it("confirms an agent added to a listed channel from one exact roster read witho
   expect(lookupSignal(test, test.refreshRoster).aborted).toBe(true);
   expect(test.refreshList).not.toHaveBeenCalled();
   expect(test.listListeners.size).toBe(0);
+});
+describe("system channel membership", () => {
+  const id = "33333333-3333-4333-8333-333333333333";
+  const viewer = "b".repeat(64);
+  const agent = "a".repeat(64);
+  const system = (members: string[]): ChannelSummary => ({
+    id,
+    name: "For You records",
+    channelType: "system",
+    members,
+  });
+  it("admits a created system channel through the store's exact read", async () => {
+    const test = setup();
+    test.resolve.mockImplementation(async (ids) => {
+      expect(ids).toEqual([id]);
+      test.setKnown(system([viewer]));
+    });
+    await expect(
+      test.service.refresh(id, { member: viewer, system: true }, false),
+    ).resolves.toBeUndefined();
+    expect(test.resolve).toHaveBeenCalledOnce();
+    expect(test.refreshRoster).not.toHaveBeenCalled();
+    expect(test.refreshList).not.toHaveBeenCalled();
+  });
+  it("confirms an agent added to a joined system channel by re-reading its roster", async () => {
+    const test = setup();
+    test.setKnown(system([viewer]));
+    // The store's `resolve` skips a channel it already authorizes; a gate that
+    // asked it would wait for evidence that never comes.
+    test.refreshRoster.mockImplementation(async (channelId) => {
+      expect(channelId).toBe(id);
+      test.setKnown(system([agent, viewer]));
+      return true;
+    });
+    await expect(
+      test.service.refresh(id, { member: agent, system: true }, false),
+    ).resolves.toBeUndefined();
+    expect(test.resolve).not.toHaveBeenCalled();
+    expect(test.refreshRoster).toHaveBeenCalledExactlyOnceWith(id, {
+      signal: expect.any(AbortSignal),
+      consistency: "strong",
+    });
+    expect(lookupSignal(test, test.refreshRoster).aborted).toBe(true);
+    expect(test.refreshList).not.toHaveBeenCalled();
+    expect(test.listListeners.size).toBe(0);
+  });
 });
 it("confirms an addition the live roster lists while its roster read is still in flight", async () => {
   const { id, member, before, after } = listedChannel();

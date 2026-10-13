@@ -186,7 +186,8 @@ export function createWorkSessions(
    *
    * A system channel (NIP-CL) never joins the list, and the relay leaves it
    * out of the full roster read. Its evidence is the exact one-channel read
-   * alone, checked through `get`, and repeated until the gate decides. */
+   * alone (`resolve` before the store knows it, `refreshRoster` after),
+   * checked through `get`, and repeated until the gate decides. */
   async function refresh(
     id: string,
     expected: {
@@ -253,10 +254,17 @@ export function createWorkSessions(
     if (expected.system) {
       while (!settled) {
         try {
-          await channels.resolve?.([id], {
+          const options = {
             signal: AbortSignal.any([signal, exact.signal]),
-            consistency: "strong",
-          });
+            consistency: "strong" as const,
+          };
+          // As below: `resolve` skips a channel the store already authorizes,
+          // so an agent added to a system channel the viewer belongs to is
+          // confirmed by re-reading its roster.
+          const known = channels.get?.(id);
+          await (known && !known.cached
+            ? channels.refreshRoster?.(id, options)
+            : channels.resolve?.([id], options));
         } catch {
           // A failed exact read is retried until the gate times out.
         }
