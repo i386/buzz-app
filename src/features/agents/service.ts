@@ -1197,23 +1197,23 @@ export class AgentsService extends Service implements Agents {
     const elsewhere: string[] = [];
     const foreign: string[] = [];
     const listed = new Set(found.agents.map((agent) => agent.pubkey));
+    const teamId = await importedTeamId(old, relayOrigin(binding.origin));
     const labels = publicKeyLabels(old.members.map(({ pubkey }) => pubkey));
+    /** Whether an agent already here may be on the team, noting why not. */
+    const fits = (here: AgentIdentity, name: string) => {
+      if (yours(here, binding)) return true;
+      // Its keys are another account's; neither can take it from the other.
+      if (!ownedBy(here, binding)) foreign.push(name);
+      // Kept to its own community's copy of the team, never moved here.
+      else elsewhere.push(name);
+      return false;
+    };
     for (const member of old.members) {
       const name =
         member.name.trim() || (labels.get(member.pubkey) ?? member.pubkey);
       const here = live.find((identity) => identity.pubkey === member.pubkey);
-      if (here && yours(here, binding)) {
-        members.push(member.pubkey);
-        continue;
-      }
-      // Its keys are another account's; neither can take it from the other.
-      if (here && !ownedBy(here, binding)) {
-        foreign.push(name);
-        continue;
-      }
-      // Kept to its own community's copy of the team, never moved here.
       if (here) {
-        elsewhere.push(name);
+        if (fits(here, name)) members.push(member.pubkey);
         continue;
       }
       if (!listed.has(member.pubkey)) {
@@ -1239,14 +1239,23 @@ export class AgentsService extends Service implements Agents {
         failed.push({ name, error: message(error) });
       }
     }
+    // Members an earlier import saved are judged as these were; one not
+    // here now stays, as nothing shows it belongs to anyone else.
+    const judged = new Set(old.members.map(({ pubkey }) => pubkey));
+    const saved = this.teamList.find((team) => team.id === teamId);
+    const kept = (saved?.members ?? []).filter((pubkey) => {
+      const here = live.find((identity) => identity.pubkey === pubkey);
+      if (judged.has(pubkey)) return false;
+      if (!here) return true;
+      return fits(here, here.name || pubkey);
+    });
     const result = { imported, failed, elsewhere, foreign };
     if (!members.length) return result;
     try {
-      const team = await this.writeImportedTeam(
-        old,
-        relayOrigin(binding.origin),
-        members,
-      );
+      const team = this.writeImportedTeam(old, teamId, saved, [
+        ...kept,
+        ...members,
+      ]);
       return { ...result, team };
     } catch (error) {
       console.warn(`Team ${old.name} was not saved`, error);
@@ -1578,27 +1587,20 @@ export class AgentsService extends Service implements Agents {
     return team;
   }
 
-  /** Puts `members` on an old Buzz team's copy in `community`, made the first
-   * time; matched only by the ID it gets from both. Its name and instructions
-   * here are never replaced. */
-  private async writeImportedTeam(
+  /** Puts `members` on an old Buzz team's copy `id`, made from `saved` or,
+   * the first time, `team`. Its name and instructions here are never
+   * replaced. */
+  private writeImportedTeam(
     team: OldTeam,
-    community: string,
+    id: string,
+    saved: Team | undefined,
     members: readonly string[],
   ) {
-    const digest = await crypto.subtle.digest(
-      "SHA-256",
-      new TextEncoder().encode(`${team.id}\n${community}`),
-    );
-    const id = `beta-${bytesToHex(new Uint8Array(digest))}`;
-    const saved = this.teamList.find((entry) => entry.id === id);
     const joined: Team = Object.freeze({
       id,
       name: saved?.name ?? team.name,
       instructions: saved?.instructions ?? team.instructions,
-      members: Object.freeze([
-        ...new Set([...(saved?.members ?? []), ...members]),
-      ]),
+      members: Object.freeze([...new Set(members)]),
     });
     this.writeTeams(
       saved
@@ -2799,4 +2801,13 @@ export class AgentsService extends Service implements Agents {
     bounded(runner.wrote, signed.id);
     return signed;
   }
+}
+
+/** An old Buzz team's copy in `community`, the same from every import. */
+async function importedTeamId(team: OldTeam, community: string) {
+  const digest = await crypto.subtle.digest(
+    "SHA-256",
+    new TextEncoder().encode(`${team.id}\n${community}`),
+  );
+  return `beta-${bytesToHex(new Uint8Array(digest))}`;
 }

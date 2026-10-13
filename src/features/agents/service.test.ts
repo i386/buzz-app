@@ -25,6 +25,7 @@ import {
   teamPrompt,
 } from "./service";
 import { memoryStorage } from "./test-fakes";
+import { readTeams, writeTeams } from "./store";
 
 // Cleanup's channel step has its own coverage (relay-removal); here only its
 // place in the order matters.
@@ -231,21 +232,19 @@ function fakeNative(identities: AgentIdentity[] = []) {
       identities.push(identity);
       return identity;
     }),
-    portable: vi.fn(
-      async (): Promise<PortableAgents> => ({
-        agents: [
-          { source: "harness" as const, pubkey: bot, name: "Old", relay: "" },
-          {
-            source: "installed" as const,
-            pubkey: sibling,
-            name: "Older",
-            relay: "",
-          },
-        ],
-        teams: [],
-        warnings: ["Could not read one store"],
-      }),
-    ),
+    portable: vi.fn(async (): Promise<PortableAgents> => ({
+      agents: [
+        { source: "harness" as const, pubkey: bot, name: "Old", relay: "" },
+        {
+          source: "installed" as const,
+          pubkey: sibling,
+          name: "Older",
+          relay: "",
+        },
+      ],
+      teams: [],
+      warnings: ["Could not read one store"],
+    })),
     port: vi.fn(
       async (
         _: string,
@@ -887,6 +886,32 @@ it("leaves a member another account on this device has off the team, and names i
   expect(result.elsewhere).toEqual([]);
   expect(result.team).toEqual(savedShift([alder]));
   expect(portedKeys(native)).toEqual([alder]);
+});
+
+it("drops another account's agents an earlier import left on the team, keeping its edits", async () => {
+  const storage = memoryStorage();
+  const other = "f".repeat(64);
+  writeTeams(storage, [
+    { ...savedShift([birch, carrow]), name: "Renamed", instructions: "Mine." },
+  ]);
+  const { service, native } = await setup({
+    storage,
+    identities: [
+      { ...here(birch), owner: other },
+      { ...here(carrow), owner: other },
+    ],
+  });
+  listsTeam(native, nightShift([alder, birch]));
+  const result = await importTeam(service);
+  const team = {
+    ...savedShift([alder]),
+    name: "Renamed",
+    instructions: "Mine.",
+  };
+  expect(result.foreign).toEqual(["Birch", "Carrow"]);
+  expect(result.team).toEqual(team);
+  expect(service.snapshot().teams).toEqual([team]);
+  expect(readTeams(storage)).toEqual([team]);
 });
 
 it("lists a team whose members are all here, and imports it from them", async () => {
