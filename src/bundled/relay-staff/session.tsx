@@ -109,14 +109,22 @@ export function useRead<R extends StaffRequest>(
     settled: 0,
   });
   const [attempt, setAttempt] = useState(0);
-  const ran = useRef(attempt);
+  const scope = useRef<DependencyList | null>(null);
   // biome-ignore lint/correctness/useExhaustiveDependencies: `deps` describe `request`
   useEffect(() => {
-    // Anything but a reload is a new scope: an attempt kept from the old one is over.
-    const rescoped = ran.current === attempt ? 1 : 0;
-    ran.current = attempt;
+    // A new sender or deps is a new scope, even when a reload lands in the same
+    // batch: an attempt kept from the old scope is over.
+    const next = [send, ...deps];
+    const rescoped =
+      !scope.current ||
+      scope.current.length !== next.length ||
+      next.some((dep, i) => !Object.is(dep, scope.current?.[i]))
+        ? 1
+        : 0;
+    scope.current = next;
+    // A disabled read has nothing in flight and nothing to show.
     if (!request) {
-      if (rescoped) setRead((read) => ({ ...read, settled: read.settled + 1 }));
+      setRead(({ settled }) => ({ state: "loading", settled: settled + 1 }));
       return;
     }
     let current = true;

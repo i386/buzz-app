@@ -332,6 +332,24 @@ export function ActionsSection({ community }: { community: CommunityRef }) {
     );
 
   const locked = !!c.frozen || c.submitting || !canMutate;
+  // While an action is held, its fields show the held intent, not the draft.
+  const intent = c.frozen?.intent;
+  const shown = intent
+    ? {
+        action: intent.action,
+        target: intent.target,
+        member:
+          intent.action === "delete"
+            ? null
+            : {
+                pubkey: intent.target,
+                name: c.frozen?.name ?? null,
+                ...(c.frozen?.keyLabel ? { keyLabel: c.frozen.keyLabel } : {}),
+              },
+        secs: intent.action === "timeout" ? String(intent.expirationSecs) : "",
+        reason: intent.reason ?? "",
+      }
+    : draft;
   const review = () => {
     set({ checked: true });
     if (Object.keys(validate(draft, eventId)).length > 0) return;
@@ -364,7 +382,7 @@ export function ActionsSection({ community }: { community: CommunityRef }) {
       <Field label="Action" nativeLabel={false}>
         <RadioGroup<Action>
           name={`direct-action-${host}`}
-          value={c.frozen?.intent.action ?? draft.action}
+          value={shown.action}
           disabled={locked}
           onValueChange={(action) => set({ action })}
         >
@@ -373,7 +391,7 @@ export function ActionsSection({ community }: { community: CommunityRef }) {
           ))}
         </RadioGroup>
       </Field>
-      {draft.action === "delete" ? (
+      {shown.action === "delete" ? (
         <Field
           label="Event id"
           description="Hex, note1… or nevent1…"
@@ -381,7 +399,7 @@ export function ActionsSection({ community }: { community: CommunityRef }) {
         >
           <Input
             disabled={locked}
-            value={draft.target}
+            value={shown.target}
             onChange={(event) => set({ target: event.target.value })}
           />
         </Field>
@@ -389,7 +407,7 @@ export function ActionsSection({ community }: { community: CommunityRef }) {
         <MemberPicker
           communityHost={host}
           disabled={locked}
-          member={draft.member}
+          member={shown.member}
           error={problems.member}
           onChange={(picked) => set({ member: picked })}
         />
@@ -412,24 +430,24 @@ export function ActionsSection({ community }: { community: CommunityRef }) {
           {blocked}
         </p>
       )}
-      {draft.action === "timeout" && (
+      {shown.action === "timeout" && (
         <Field label="Duration (seconds)" error={problems.secs}>
           <Input
             type="number"
             disabled={locked}
-            value={draft.secs}
+            value={shown.secs}
             onChange={(event) => set({ secs: event.target.value })}
           />
         </Field>
       )}
       <Field
         label="Reason (optional)"
-        description={reasonAudience(c.frozen?.intent.action ?? draft.action)}
+        description={reasonAudience(shown.action)}
         error={problems.reason}
       >
         <Input
           disabled={locked}
-          value={draft.reason}
+          value={shown.reason}
           onChange={(event) => set({ reason: event.target.value })}
         />
       </Field>

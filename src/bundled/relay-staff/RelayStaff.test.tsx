@@ -30,7 +30,7 @@ import {
 } from "../../shared/identity/public-key";
 import { foldProfiles } from "../../features/relay/profiles";
 import { StrictMode, useState, useSyncExternalStore } from "react";
-import { createSession, SessionProvider, useWrite } from "./session";
+import { createSession, SessionProvider, useRead, useWrite } from "./session";
 import { createStaff, type Staff, type StaffTarget } from "./staff";
 import { useRetry } from "./ui";
 
@@ -3080,10 +3080,11 @@ it("a held member search Retry ends when the query changes", async () => {
   const field = await screen.findByLabelText("Member");
   fireEvent.change(field, { target: { value: "Ann" } });
   fireEvent.click(await screen.findByRole("button", { name: "Retry search" }));
+  let b: ReturnType<typeof holdNext> | null = null;
   try {
     await held.started();
     next = fail({ message: "B failed" });
-    const b = holdNext("searchMembers", () => next as StaffOutcome<unknown>);
+    b = holdNext("searchMembers", () => next as StaffOutcome<unknown>);
     fireEvent.change(field, { target: { value: "Bob" } });
     await b.started();
     expect(screen.queryByText("Old failure")).toBeNull();
@@ -3098,6 +3099,7 @@ it("a held member search Retry ends when the query changes", async () => {
     ).not.toHaveAttribute("aria-busy", "true");
   } finally {
     await held.release(fail({ message: "released" }));
+    await b?.release(fail({ message: "released" }));
   }
 });
 
@@ -3159,8 +3161,165 @@ it("a held Reports Retry ends when the status filter changes", async () => {
     await held.release(fail({ message: "Old failure" }));
     expect(screen.queryByText("Old failure")).toBeNull();
     await act(async () => filtered?.(ok([report])));
+    expect(await screen.findByRole("button", { name: /spam/ })).toBeVisible();
     expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
   } finally {
     await held.release(fail({ message: "released" }));
+    await act(async () => filtered?.(ok([])));
+  }
+});
+
+/**
+ * A read for `id` whose Retry and a scope change land in one React batch.
+ * The first read fails; every later read is held until the test releases it.
+ */
+async function batchedRetry(next: string | null) {
+  const staff = createStaff(backend, () => ({ relay, signer }));
+  staff.ensure();
+  const session = await authorizedSession(staff);
+  const held: ((outcome: StaffOutcome<unknown>) => void)[] = [];
+  routes.getReport = () =>
+    held.length === 0 && sent("getReport").length === 1
+      ? fail({ message: "Old failure" })
+      : new Promise((resolve) => {
+          held.push(resolve);
+        });
+  function Harness() {
+    const [id, setId] = useState<string | null>("a");
+    const [read, reload] = useRead(id ? { route: "getReport", id } : null, [
+      id,
+    ]);
+    const retry = useRetry(
+      read.state === "failed" ? read.failure : null,
+      read.settled,
+      reload,
+    );
+    return (
+      <>
+        {retry.failure && <p>{retry.failure.message}</p>}
+        <output aria-label="Read state">{read.state}</output>
+        <button
+          type="button"
+          aria-busy={retry.retrying}
+          onClick={() => {
+            retry.retry();
+            setId(next);
+          }}
+        >
+          Retry and switch
+        </button>
+      </>
+    );
+  }
+  render(
+    <SessionProvider value={session}>
+      <Harness />
+    </SessionProvider>,
+  );
+  await screen.findByText("Old failure");
+  fireEvent.click(screen.getByRole("button", { name: "Retry and switch" }));
+  return {
+    held,
+    release: () =>
+      act(async () => {
+        for (const resolve of held) resolve(fail({ message: "Old failure" }));
+      }),
+  };
+}
+
+it("a Retry batched with a query change ends with the old scope", async () => {
+  const { held, release } = await batchedRetry("b");
+  try {
+    // B's request is the replacement in flight; A's Retry never started.
+    await waitFor(() => expect(held).toHaveLength(1));
+    expect(sent("getReport").at(-1)).toMatchObject({ id: "b" });
+    expect(screen.queryByText("Old failure")).toBeNull();
+    expect(
+      screen.getByRole("button", { name: "Retry and switch" }),
+    ).toHaveAttribute("aria-busy", "false");
+  } finally {
+    await release();
+  }
+});
+
+it("a Retry batched with disabling the read ends with the old scope", async () => {
+  const { release } = await batchedRetry(null);
+  try {
+    await waitFor(() =>
+      expect(
+        screen.getByRole("button", { name: "Retry and switch" }),
+      ).toHaveAttribute("aria-busy", "false"),
+    );
+    expect(screen.queryByText("Old failure")).toBeNull();
+    // A disabled read no longer carries the old failure for ungated callers.
+    expect(screen.getByLabelText("Read state")).not.toHaveTextContent("failed");
+    expect(sent("getReport")).toHaveLength(1);
+  } finally {
+    await release();
+  }
+});
+
+it("a held delete or timeout keeps its own fields after the card remounts", async () => {
+  routes.getEvent = () =>
+    ok({
+      id: "e".repeat(64),
+      authorPubkey: member,
+      kind: 9,
+      content: "the message",
+      createdAt: "2026-01-01T00:00:00Z",
+      deletedAt: null,
+      channelId: null,
+    });
+  const { reopen } = mountSwitchable();
+  const del = holdNext("directAction", () => ok({ state: "pending" }));
+  await reopenActions();
+  fireEvent.click(await screen.findByRole("radio", { name: "Delete message" }));
+  fireEvent.change(screen.getByLabelText("Event id"), {
+    target: { value: "e".repeat(64) },
+  });
+  await screen.findByText("the message");
+  fireEvent.click(screen.getByRole("button", { name: "Review" }));
+  fireEvent.click(await screen.findByRole("button", { name: "Confirm" }));
+  await del.started();
+  reopen();
+  await reopenActions();
+  try {
+    expect(
+      await screen.findByRole("radio", { name: "Delete message" }),
+    ).toBeChecked();
+    expect(screen.getByLabelText("Event id")).toHaveValue("e".repeat(64));
+    expect(screen.queryByLabelText("Member")).toBeNull();
+  } finally {
+    await del.release(
+      ok({ state: "succeeded", actionId: "d", replayed: false }),
+    );
+  }
+
+  const timeout = holdNext("directAction", () => ok({ state: "pending" }));
+  await screen.findByRole("button", { name: "Review" });
+  fireEvent.click(screen.getByRole("radio", { name: "Time out member" }));
+  fireEvent.change(screen.getByLabelText("Member"), {
+    target: { value: "Bob" },
+  });
+  fireEvent.click(await screen.findByRole("option", { name: /Bob/ }));
+  await screen.findByText("Role: member");
+  fireEvent.change(screen.getByLabelText("Duration (seconds)"), {
+    target: { value: "600" },
+  });
+  fireEvent.click(screen.getByRole("button", { name: "Review" }));
+  fireEvent.click(await screen.findByRole("button", { name: "Confirm" }));
+  await timeout.started();
+  reopen();
+  await reopenActions();
+  try {
+    expect(
+      await screen.findByRole("radio", { name: "Time out member" }),
+    ).toBeChecked();
+    expect(screen.getByLabelText("Duration (seconds)")).toHaveValue(600);
+    expect(screen.queryByLabelText("Event id")).toBeNull();
+  } finally {
+    await timeout.release(
+      ok({ state: "succeeded", actionId: "t", replayed: false }),
+    );
   }
 });
