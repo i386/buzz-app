@@ -108,7 +108,7 @@ export function CommunityDepartureSettings({
       <Header
         id="leave-community-title"
         title="Leave or remove"
-        subtitle={`Choose whether to remove ${community.name} from this device or end your membership.`}
+        subtitle="Remove community from Buzz on this device or leave community completely."
       />
       <SettingsGroup>
         <PreferenceRow
