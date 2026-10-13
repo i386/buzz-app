@@ -627,6 +627,33 @@ it("a status change still sending after Back reaches the reopened feedback", asy
   expect(sent("setFeedbackStatus")).toHaveLength(1);
 });
 
+it("a failed feedback list recovers with Retry in the same view", async () => {
+  feedbackWith([]);
+  const working = routes.listFeedback;
+  routes.listFeedback = () => fail({ category: "unreachable", status: 503 });
+  mount();
+  fireEvent.click(await screen.findByRole("tab", { name: "Feedback" }));
+  const retry = await screen.findByRole("button", { name: "Retry" });
+  routes.listFeedback = working;
+  fireEvent.click(retry);
+  expect(await screen.findByRole("button", { name: /Broken/ })).toBeVisible();
+  expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
+});
+
+it("a failed community directory recovers with Retry in the same view", async () => {
+  const working = routes.listCommunities;
+  routes.listCommunities = () => fail({ category: "unreachable", status: 503 });
+  mount();
+  fireEvent.click(await screen.findByRole("tab", { name: "Communities" }));
+  const retry = await screen.findByRole("button", { name: "Retry" });
+  routes.listCommunities = working;
+  fireEvent.click(retry);
+  expect(
+    await screen.findByRole("button", { name: /team\.example\.com/ }),
+  ).toBeVisible();
+  expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
+});
+
 it("community sections are tabs with arrow keys and linked panels", async () => {
   mount();
   fireEvent.click(await screen.findByRole("tab", { name: "Communities" }));

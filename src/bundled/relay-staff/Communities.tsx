@@ -19,6 +19,7 @@ import {
   Loading,
   NotConnected,
   UNSUPPORTED_BROWSING,
+  useRetry,
   type CommunityRef,
 } from "./ui";
 
@@ -59,6 +60,12 @@ export function Communities({
           ...(cursor ? { cursor } : {}),
         }),
     [context, q, secret],
+  );
+  // A failed later page retries that page; a failed first load starts over.
+  const retry = useRetry(
+    pages.failure,
+    pages.loading,
+    pages.next ? pages.more : pages.restart,
   );
   const [pinnedRead] = useRead(
     connectedHost ? { route: "listCommunities", q: connectedHost } : null,
@@ -107,7 +114,13 @@ export function Communities({
         </p>
       )}
       {shownPinned && <ul>{row(shownPinned, true)}</ul>}
-      {pages.failure && <Failure failure={pages.failure} />}
+      {retry.failure && (
+        <Failure
+          failure={retry.failure}
+          onRetry={retry.retry}
+          retrying={retry.retrying}
+        />
+      )}
       {!secret &&
         !pages.loading &&
         !pages.failure &&

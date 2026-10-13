@@ -107,7 +107,7 @@ export function Feedback() {
       />
     );
   return (
-    <Loaded read={list}>
+    <Loaded read={list} onRetry={reload}>
       {(items) =>
         items.length === 0 ? (
           <p className="text-body-sm text-secondary">No feedback found.</p>
@@ -161,13 +161,16 @@ function FeedbackDetail({
   onChanged(): void;
 }) {
   const { context } = useSession();
-  const [detail] = useRead({ route: "getFeedback", id }, [context, id]);
+  const [detail, reloadDetail] = useRead({ route: "getFeedback", id }, [
+    context,
+    id,
+  ]);
   return (
     <div className="flex flex-col gap-4">
       <Button size="sm" variant="ghost" onClick={onBack}>
         <ArrowLeftIcon /> Back to feedback
       </Button>
-      <Loaded read={detail}>
+      <Loaded read={detail} onRetry={reloadDetail}>
         {(feedback) => (
           <FeedbackBody feedback={feedback} onChanged={onChanged} />
         )}
