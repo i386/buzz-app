@@ -182,20 +182,29 @@ impl OldStores {
             .as_array()
             .filter(|records| records.len() <= MAX_AGENTS)
             .ok_or_else(|| format!("Could not read {}", path.display()))?;
-        let teams = match source.legacy() {
-            Some(_) if records.iter().any(|record| record["team_id"].is_string()) => {
-                old_teams(&path.with_file_name("teams.json"))
-            }
+        let linked = |record: &Value| {
+            record["team_id"].is_string() || record["persona_team_dir"].is_string()
+        };
+        let mut teams = match source.legacy() {
+            Some(_) if records.iter().any(linked) => old_teams(&path.with_file_name("teams.json")),
             _ => Ok(vec![]),
         };
-        let mut teams = teams;
         let mut found = vec![];
         for record in records {
             let Some((agent, key)) = portable(source, record, records) else {
                 continue;
             };
+            // As old Buzz links them: by team ID, or by its team folder's name.
             let id = record["team_id"].as_str();
-            if let Some(team) = teams.iter_mut().flatten().find(|t| Some(&*t.id) == id) {
+            let folder = record["persona_team_dir"]
+                .as_str()
+                .and_then(|dir| std::path::Path::new(dir).file_name())
+                .and_then(|name| name.to_str());
+            for (_, team) in teams
+                .iter_mut()
+                .flatten()
+                .filter(|(dir, team)| Some(&*team.id) == id || Some(&**dir) == folder)
+            {
                 team.members.push(OldMember {
                     pubkey: agent.pubkey.clone(),
                     name: agent.name.clone(),
@@ -204,6 +213,7 @@ impl OldStores {
             }
             found.push((agent, key));
         }
+        let teams = teams.map(|teams| teams.into_iter().map(|(_, team)| team).collect());
         Ok((found, teams))
     }
 }
@@ -228,9 +238,10 @@ impl Portables {
 /// could be read.
 type Read = (Vec<(Portable, String)>, Result<Vec<OldTeam>>);
 
-/// Old Buzz's teams beside its agents, built-in ones left out. A missing file
-/// has none; any invalid team makes the file unreadable.
-fn old_teams(path: &std::path::Path) -> Result<Vec<OldTeam>> {
+/// Old Buzz's teams beside its agents, built-in ones left out, each with the
+/// folder name its agents may link it by: its source folder's, else its ID. A
+/// missing file has none; any invalid team makes the file unreadable.
+fn old_teams(path: &std::path::Path) -> Result<Vec<(String, OldTeam)>> {
     if !path.try_exists().unwrap_or(true) {
         return Ok(vec![]);
     }
@@ -258,12 +269,20 @@ fn old_teams(path: &std::path::Path) -> Result<Vec<OldTeam>> {
             return Err(unreadable());
         }
         if team["is_builtin"].as_bool() != Some(true) {
-            found.push(OldTeam {
-                id: id.into(),
-                name: team_name(team["name"].as_str().unwrap_or("")),
-                instructions: instructions.trim().into(),
-                members: vec![],
-            });
+            let dir = team["source_dir"]
+                .as_str()
+                .and_then(|dir| std::path::Path::new(dir).file_name())
+                .and_then(|name| name.to_str())
+                .unwrap_or(id);
+            found.push((
+                dir.into(),
+                OldTeam {
+                    id: id.into(),
+                    name: team_name(team["name"].as_str().unwrap_or("")),
+                    instructions: instructions.trim().into(),
+                    members: vec![],
+                },
+            ));
         }
     }
     Ok(found)

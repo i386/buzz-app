@@ -549,6 +549,52 @@ fn installed_and_development_copies_of_a_team_merge() {
 }
 
 #[test]
+fn members_linked_only_by_team_folder_stay_on_their_team() {
+    let agent = |n: &str, name: &str, link: Value| {
+        let mut record = json!({"pubkey": n.repeat(64), "name": name});
+        record
+            .as_object_mut()
+            .unwrap()
+            .extend(link.as_object().unwrap().clone());
+        record
+    };
+    let alder = agent(
+        "1",
+        "Alder",
+        json!({"persona_team_dir": "/installed/com.example.pack"}),
+    );
+    let list = |records: Value| {
+        let dir = tempfile::tempdir().unwrap();
+        legacy(dir.path(), LegacySource::Installed, records);
+        write(
+            dir.path()
+                .join("data")
+                .join(LegacySource::Installed.app_directory())
+                .join("agents/teams.json"),
+            json!([
+                {"id": "pack", "name": "Pack", "source_dir": "/teams/com.example.pack"},
+                {"id": "mixed", "name": "Mixed"},
+            ]),
+        );
+        let found = stores(dir.path()).list();
+        assert!(found.warnings.is_empty());
+        found
+    };
+    // No agent has a team ID: a folder-backed team, linked by its folder's name.
+    let found = list(json!([alder]));
+    assert_eq!(names(team(&found, "pack").unwrap()), ["Alder"]);
+    // A mixed team: one by ID, one by the folder named for its ID.
+    let found = list(json!([
+        alder,
+        agent("2", "Birch", json!({"team_id": "mixed"})),
+        agent("3", "Carrow", json!({"persona_team_dir": "/teams/mixed"})),
+        agent("4", "Dune", json!({"persona_team_dir": "/teams/elsewhere"})),
+    ]));
+    assert_eq!(names(team(&found, "pack").unwrap()), ["Alder"]);
+    assert_eq!(names(team(&found, "mixed").unwrap()), ["Birch", "Carrow"]);
+}
+
+#[test]
 fn unreadable_teams_warn_and_leave_every_agent_importable() {
     let teams_path = |dir: &std::path::Path| {
         dir.join("data")
