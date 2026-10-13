@@ -1160,6 +1160,42 @@ fn save_overwrites_in_place_keeping_permissions_and_symlinks() {
     std::fs::remove_dir_all(dir).unwrap();
 }
 
+#[cfg(unix)]
+#[test]
+fn save_through_a_dangling_symlink_fails_without_creating_its_target() {
+    let dir = std::env::temp_dir().join(format!("relay-admin-dangling-{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir(&dir).unwrap();
+    let target = dir.join("missing.png");
+    let link = dir.join("link.png");
+    std::os::unix::fs::symlink(&target, &link).unwrap();
+    assert_eq!(save_to(Some(Ok(link.clone())), b"new")["state"], "failed");
+    assert!(std::fs::symlink_metadata(&link)
+        .unwrap()
+        .file_type()
+        .is_symlink());
+    assert_eq!(std::fs::read_link(&link).unwrap(), target);
+    assert!(!target.exists(), "a failed save created the symlink target");
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[cfg(unix)]
+#[test]
+fn save_over_a_hard_link_updates_every_name() {
+    let dir = std::env::temp_dir().join(format!("relay-admin-hardlink-{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir(&dir).unwrap();
+    let file = dir.join("a.png");
+    let other = dir.join("b.png");
+    std::fs::write(&file, b"previous").unwrap();
+    std::fs::hard_link(&file, &other).unwrap();
+    assert_eq!(
+        save_to(Some(Ok(file.clone())), b"new"),
+        json!({ "state": "saved" })
+    );
+    assert_eq!(std::fs::read(&file).unwrap(), b"new");
+    assert_eq!(std::fs::read(&other).unwrap(), b"new");
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
 #[tokio::test]
 async fn bad_nested_fields_and_statuses_are_not_successes() {
     let mut cases = Vec::new();
