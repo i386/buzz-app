@@ -40,6 +40,9 @@ export function isTransientLiveError(reason: string | undefined): boolean {
  * fix count as failed. A terminal sign-in error, a denial or invalid traffic
  * is settled here and stays visible in live status instead. */
 export function liveRecoveryStatus(view: LiveRecoveryView): RecoveryStatus {
+  // A terminal connection error closed the socket: its routes stay pending
+  // but nothing is in flight. Finite roster and head reads still count.
+  const routes = view.status === "error" ? [] : view.routes;
   // "retrying" counts as failed so wake, network and focus signals skip the
   // live layer's own backoff wait too.
   if (
@@ -48,7 +51,7 @@ export function liveRecoveryStatus(view: LiveRecoveryView): RecoveryStatus {
     view.roster.state === "deferred" ||
     (view.roster.state === "error" && view.roster.transient) ||
     view.heads.some((head) => head.state === "error" && head.transient) ||
-    view.routes.some(
+    routes.some(
       (route) => route.status === "error" && isTransientLiveError(route.error),
     )
   )
@@ -59,7 +62,7 @@ export function liveRecoveryStatus(view: LiveRecoveryView): RecoveryStatus {
     view.previews === "checking" ||
     view.roster.state === "pending" ||
     view.heads.some((head) => head.state === "pending") ||
-    view.routes.some((route) => route.status === "pending")
+    routes.some((route) => route.status === "pending")
     ? "busy"
     : "settled";
 }

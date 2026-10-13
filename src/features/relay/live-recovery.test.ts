@@ -120,6 +120,21 @@ it("lets recovery own transient live failures and leaves the rest visible", () =
       error: "Relay rejected live authentication",
     }),
   ).toBe("settled");
+  // A terminal socket leaves its routes pending; nothing is in flight.
+  expect(
+    liveRecoveryStatus({
+      ...healthy,
+      status: "error",
+      routes: [
+        {
+          id: "channel:a",
+          channelId: "a",
+          status: "pending",
+          replay: "unknown",
+        },
+      ],
+    }),
+  ).toBe("settled");
   expect(liveRecoveryStatus({ ...healthy, roster: { state: "error" } })).toBe(
     "settled",
   );

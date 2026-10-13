@@ -395,15 +395,60 @@ it("shows a permanent live failure even while other reads recover", () => {
     shown: false,
   });
   const quiet = { ...recoveryIn("idle"), snapshot: () => quietState };
+  const onRecovered = vi.fn();
   mount(
     <LiveStatus
       live={live}
       channelId="a"
       partialRoster={false}
       recovery={quiet}
+      onRecovered={onRecovered}
     />,
   );
   expect(
     screen.getByRole("status", { name: "Live updates limited" }),
   ).toHaveTextContent("Relay rejected live authentication");
+  // Recovery skips a terminal failure, so the user keeps an explicit retry
+  // for after they fix the signer or access problem.
+  screen.getByRole("button", { name: "Retry live updates" }).click();
+  expect(live.retry).toHaveBeenCalledTimes(1);
+  expect(onRecovered).toHaveBeenCalledTimes(1);
+});
+
+it("keeps capacity and partial-roster notices passive", () => {
+  const capacity: Snapshot = {
+    ...base,
+    routes: [
+      {
+        id: "channel:a",
+        channelId: "a",
+        status: "limited",
+        replay: "unknown",
+        error: "Live channel capacity reached; finite reads remain available",
+      },
+    ],
+  };
+  const live = {
+    snapshot: () => capacity,
+    subscribe: () => () => {},
+    retry: vi.fn(),
+  };
+  const view = mount(
+    <LiveStatus live={live} channelId="a" partialRoster={false} />,
+  );
+  expect(
+    screen.getByRole("status", { name: "Live updates limited" }),
+  ).toBeInTheDocument();
+  expect(screen.queryByRole("button")).not.toBeInTheDocument();
+  view.rerender(
+    <LiveStatus
+      live={{ ...live, snapshot: () => base }}
+      channelId="a"
+      partialRoster
+    />,
+  );
+  expect(
+    screen.getByRole("status", { name: "Live updates limited" }),
+  ).toHaveTextContent("Some channels are missing");
+  expect(screen.queryByRole("button")).not.toBeInTheDocument();
 });

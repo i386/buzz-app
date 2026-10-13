@@ -6,6 +6,7 @@ import {
   useInlineRecovery,
 } from "../../features/relay/RecoveryNotice";
 import { liveRecoveryStatus } from "../../features/relay/live-recovery";
+import { Button } from "../../shared/design-system/ui/Button";
 import styles from "./LiveStatus.module.css";
 
 export function LiveStatus({
@@ -23,7 +24,7 @@ export function LiveStatus({
   /** The session recovery owner. A mounted status shows its notice inline
    * above the composer, in place of the floating fallback. */
   recovery?: RelaySession["recovery"];
-  /** Recovery removed the focused Retry now button; move focus on. */
+  /** A recovery or retry control that had focus went away; move focus on. */
   onRecovered?: (() => void) | undefined;
 }) {
   const { recovering: retrying, shown } = useInlineRecovery(
@@ -132,7 +133,15 @@ export function LiveStatus({
   if (!issue || (retrying && liveRecoveryStatus(snapshot) !== "settled"))
     return null;
   // What automatic recovery cannot change: capacity, a partial roster, a
-  // denial or a sign-in failure.
+  // denial or a sign-in failure. Capacity and a partial roster stay passive.
+  // A failure the user can fix (signer, access) keeps an explicit retry,
+  // because recovery and wake signals skip it.
+  const manual =
+    liveRecoveryStatus(snapshot) === "settled" &&
+    (snapshot.status === "error" ||
+      actionable.some((route) => route.status === "error") ||
+      head?.state === "error" ||
+      snapshot.roster.state === "error");
   return (
     <section
       role="status"
@@ -145,6 +154,19 @@ export function LiveStatus({
           {reason} Only currently accessible messages remain readable.
         </p>
       </div>
+      {manual && (
+        <Button
+          type="button"
+          size="sm"
+          onClick={() => {
+            live.retry();
+            // Retry removes this focused control; hand focus on explicitly.
+            onRecovered?.();
+          }}
+        >
+          Retry live updates
+        </Button>
+      )}
     </section>
   );
 }

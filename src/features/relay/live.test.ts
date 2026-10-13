@@ -8,6 +8,7 @@ import {
 } from "./live";
 import { keypair, message, roster, signed, scriptedTransport } from "./testing";
 import { createRelaySession } from "./session";
+import { liveRecoveryStatus } from "./live-recovery";
 import { createPresence } from "../presence/presence";
 type WireFilter = {
   kinds: number[];
@@ -2339,6 +2340,37 @@ it("logs authentication failure and retry reasons at Info without server payload
     timedOut?.owner.dispose();
     logger.setReporters(reporters);
     setLogLevel("info");
+  }
+});
+
+it("a rejected AUTH stays terminal for automatic recovery and reconnects only on explicit retry", async () => {
+  vi.useFakeTimers();
+  const h = setup([]);
+  try {
+    await h.first.receive(["AUTH", "challenge"]);
+    const auth = h.first.sent.find((frame) => frame[0] === "AUTH")?.[1] as {
+      id: string;
+    };
+    await h.first.receive(["OK", auth.id, false, "restricted: no"]);
+    const view = h.callbacks.state.mock.lastCall?.[0];
+    assert.exists(view);
+    expect(view).toMatchObject({
+      status: "error",
+      error: "Relay rejected live authentication",
+    });
+    // Recovery and wake signals skip it; the live layer schedules nothing.
+    expect(
+      liveRecoveryStatus({ ...view, roster: { state: "verified" }, heads: [] }),
+    ).toBe("settled");
+    await vi.advanceTimersByTimeAsync(120_000);
+    expect(h.sockets).toHaveLength(1);
+    // The conversation's Retry live updates calls this after the user fixes
+    // the signer or access problem.
+    h.owner.retry();
+    expect(h.sockets).toHaveLength(2);
+    expect(h.callbacks.state.mock.lastCall?.[0].status).toBe("connecting");
+  } finally {
+    h.owner.dispose();
   }
 });
 
