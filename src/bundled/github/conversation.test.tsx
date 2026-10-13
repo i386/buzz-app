@@ -1792,7 +1792,7 @@ it("reveals the linked comment inside a folded run in full, then moves to a late
       .find((node) => !node.closest("[aria-hidden]")),
   ).toBeVisible();
   expect(stub.scroll).toHaveBeenCalledExactlyOnceWith({
-    block: "start",
+    block: "end",
     behavior: "instant",
   });
   expect(stub.scroll.mock.contexts[0]).toBe(second);
@@ -1836,6 +1836,49 @@ it("reveals the linked comment inside a folded run in full, then moves to a late
   expect(trigger).toHaveAttribute("aria-expanded", "true");
   expect(fetch).toHaveBeenCalledTimes(2);
   outside.remove();
+});
+
+it("keeps the top of a linked comment taller than its scroller visible", async () => {
+  using stub = stubScrollIntoView();
+  vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockReturnValue({
+    height: 400,
+  } as DOMRect);
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (target: string) =>
+      response(
+        target.includes("/reviews?")
+          ? []
+          : [{ id: 20, body: "Long comment", user: { login: "reader" } }],
+      ),
+    ),
+  );
+  const scroller = document.createElement("div");
+  scroller.style.overflowY = "auto";
+  Object.defineProperty(scroller, "clientHeight", { value: 300 });
+  document.body.append(scroller);
+  try {
+    render(
+      <GitHubConversation
+        details={details}
+        url={url}
+        anchor={{ kind: "discussion", id: "20" }}
+      />,
+      { container: scroller },
+    );
+    const row = await waitFor(() => {
+      const element = anchoredRow("discussion-20");
+      if (!element) throw new Error("Not loaded yet");
+      return element;
+    });
+    await waitFor(() => expect(row).toHaveFocus());
+    expect(stub.scroll).toHaveBeenCalledExactlyOnceWith({
+      block: "start",
+      behavior: "instant",
+    });
+  } finally {
+    scroller.remove();
+  }
 });
 
 it("offers GitHub for a linked comment outside the loaded conversation and reveals it once a later page loads", async () => {

@@ -721,6 +721,16 @@ function SourceStatus({
   );
 }
 
+/** The nearest scrolling ancestor: the pane root today, whatever the host supplies later. */
+function scrollerOf(element: HTMLElement) {
+  for (let node = element.parentElement; node; node = node.parentElement)
+    if (
+      ["auto", "scroll", "overlay"].includes(getComputedStyle(node).overflowY)
+    )
+      return node;
+  return null;
+}
+
 /** One reveal per linked comment: scroll to and focus its row once it mounts. */
 function useAnchorReveal(
   conversation: RefObject<HTMLElement | null>,
@@ -736,7 +746,17 @@ function useAnchorReveal(
       ].find((element) => element.dataset.eventKey === key);
       if (!row) return; // A folded run mounts its rows after opening; observe the mount.
       observer.disconnect();
-      row.scrollIntoView({ block: "start", behavior: "instant" });
+      // The row lands at the scroller's bottom with the conversation leading to
+      // it above; native alignment clamps near the end, so it never overscrolls.
+      // A row taller than the scroller keeps its top visible instead.
+      const scroller = scrollerOf(row);
+      const fits =
+        !scroller ||
+        row.getBoundingClientRect().height <= scroller.clientHeight;
+      row.scrollIntoView({
+        block: fits ? "end" : "start",
+        behavior: "instant",
+      });
       row.focus({ preventScroll: true });
     };
     const schedule = () => {

@@ -469,7 +469,11 @@ html[data-keyboard-navigation] .conversationMessage:focus-visible {
   min-width: 0;
 }
 /* The linked comment keeps GitHub's anchored wash while its link is current.
-   The wash extends into the timeline's gaps without changing the row's box. */
+   The wash extends into the timeline's gaps without changing the row's box;
+   the scroll margin keeps it and the focus ring clear of the scroller edge. */
+.conversationMessage[data-anchored] {
+  scroll-margin-block: var(--space-3);
+}
 .conversationMessage[data-anchored] > .messageContent {
   isolation: isolate;
 }
