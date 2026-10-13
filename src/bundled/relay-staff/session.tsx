@@ -89,7 +89,10 @@ export type Read<T> =
   | { state: "ok"; value: T }
   | { state: "failed"; failure: StaffFailure };
 
-/** A read plus how many outcomes it has settled, so Retry can tell when its attempt ended. */
+/**
+ * A read plus `settled`, which moves when an outcome lands or the read's scope
+ * changes (new deps, or disabled). Retry state kept for an attempt ends then.
+ */
 export type Tracked<T> = Read<T> & { settled: number };
 
 /**
@@ -106,11 +109,21 @@ export function useRead<R extends StaffRequest>(
     settled: 0,
   });
   const [attempt, setAttempt] = useState(0);
+  const ran = useRef(attempt);
   // biome-ignore lint/correctness/useExhaustiveDependencies: `deps` describe `request`
   useEffect(() => {
-    if (!request) return;
+    // Anything but a reload is a new scope: an attempt kept from the old one is over.
+    const rescoped = ran.current === attempt ? 1 : 0;
+    ran.current = attempt;
+    if (!request) {
+      if (rescoped) setRead((read) => ({ ...read, settled: read.settled + 1 }));
+      return;
+    }
     let current = true;
-    setRead(({ settled }) => ({ state: "loading", settled }));
+    setRead(({ settled }) => ({
+      state: "loading",
+      settled: settled + rescoped,
+    }));
     void send(request).then((outcome) => {
       if (!current) return;
       setRead(({ settled }) =>
@@ -240,10 +253,11 @@ export function usePages<R extends Paged>(
   // biome-ignore lint/correctness/useExhaustiveDependencies: `deps` describe `page`
   useEffect(() => {
     const at = ++generation.current;
+    // A new scope (or a disabled one) ends any attempt kept from the old one.
     setPages(({ settled }) => ({
       ...empty,
       loading: !!pageRef.current,
-      settled,
+      settled: settled + 1,
     }));
     void load(undefined, at);
     return () => {

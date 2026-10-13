@@ -3047,3 +3047,120 @@ it("a fresh form after a successful action shows no field errors until Review", 
     expect(memberField).toHaveAttribute("aria-invalid", "true"),
   );
 });
+
+/** Fails `route` once, then holds the Retry until `release`; later calls use `then`. */
+function failThenHold(route: StaffRequest["route"], then: Handler) {
+  let calls = 0;
+  let release: ((outcome: StaffOutcome<unknown>) => void) | null = null;
+  routes[route] = (request) => {
+    calls += 1;
+    if (calls === 1) return fail({ message: "Old failure" });
+    if (calls === 2)
+      return new Promise((resolve) => {
+        release = resolve;
+      });
+    return then(request);
+  };
+  return {
+    started: () => waitFor(() => expect(release).toBeTypeOf("function")),
+    release: (outcome: StaffOutcome<unknown>) =>
+      act(async () => release?.(outcome)),
+  };
+}
+
+it("a held member search Retry ends when the query changes", async () => {
+  const results = routes.searchMembers as Handler;
+  let next: StaffOutcome<unknown> | null = null;
+  const held = failThenHold(
+    "searchMembers",
+    (request) => next ?? results(request),
+  );
+  mount();
+  await reopenActions();
+  const field = await screen.findByLabelText("Member");
+  fireEvent.change(field, { target: { value: "Ann" } });
+  fireEvent.click(await screen.findByRole("button", { name: "Retry search" }));
+  try {
+    await held.started();
+    next = fail({ message: "B failed" });
+    const b = holdNext("searchMembers", () => next as StaffOutcome<unknown>);
+    fireEvent.change(field, { target: { value: "Bob" } });
+    await b.started();
+    expect(screen.queryByText("Old failure")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Retry search" })).toBeNull();
+    await held.release(fail({ message: "Old failure" }));
+    expect(screen.queryByText("Old failure")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Retry search" })).toBeNull();
+    await b.release(fail({ message: "B failed" }));
+    expect(await screen.findByText("B failed")).toBeVisible();
+    expect(
+      screen.getByRole("button", { name: "Retry search" }),
+    ).not.toHaveAttribute("aria-busy", "true");
+  } finally {
+    await held.release(fail({ message: "released" }));
+  }
+});
+
+it("a held directory Retry ends when a secret key disables the search", async () => {
+  const held = failThenHold("listCommunities", () =>
+    ok({ items: [], nextCursor: null }),
+  );
+  const directory = routes.listCommunities as Handler;
+  routes.listCommunities = (request) =>
+    (request as { q?: string }).q
+      ? ok({ items: [], nextCursor: null })
+      : directory(request);
+  mount();
+  fireEvent.click(await screen.findByRole("tab", { name: "Communities" }));
+  // The pinned lookup and the directory share the route; fail only the directory.
+  const retries = await screen.findAllByRole("button", { name: "Retry" });
+  fireEvent.click(retries[retries.length - 1] as HTMLElement);
+  try {
+    await held.started();
+    fireEvent.change(screen.getByLabelText("Search communities"), {
+      target: { value: `nsec1${"q".repeat(58)}` },
+    });
+    expect(
+      await screen.findByText("That's a secret key. Never paste it here."),
+    ).toBeVisible();
+    expect(screen.queryByText("Old failure")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
+    await held.release(fail({ message: "Old failure" }));
+    expect(screen.queryByText("Old failure")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
+  } finally {
+    await held.release(fail({ message: "released" }));
+  }
+});
+
+it("a held Reports Retry ends when the status filter changes", async () => {
+  const held = failThenHold("listReports", () => ok([]));
+  let filtered: ((outcome: StaffOutcome<unknown>) => void) | null = null;
+  mount();
+  await screen.findByText("Old failure");
+  fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+  try {
+    await held.started();
+    routes.listReports = () =>
+      new Promise((resolve) => {
+        filtered = resolve;
+      });
+    fireEvent.click(screen.getByRole("combobox", { name: "Status" }));
+    // The Select commits a choice on pointer release, not on a bare click.
+    const option = await screen.findByRole("option", { name: "resolved" });
+    fireEvent.pointerDown(option);
+    fireEvent.mouseDown(option);
+    fireEvent.pointerUp(option);
+    fireEvent.mouseUp(option);
+    fireEvent.click(option);
+    await waitFor(() => expect(filtered).toBeTypeOf("function"));
+    expect(screen.queryByText("Old failure")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
+    await held.release(fail({ message: "Old failure" }));
+    expect(screen.queryByText("Old failure")).toBeNull();
+    await act(async () => filtered?.(ok([report])));
+    expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
+  } finally {
+    await held.release(fail({ message: "released" }));
+  }
+});
