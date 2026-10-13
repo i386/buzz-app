@@ -5,11 +5,12 @@ import {
   useMemo,
   useSyncExternalStore,
 } from "react";
-import { npubEncode } from "nostr-tools/nip19";
 import type { Profile } from "../../features/relay/contracts";
 import type { ProfileQueries } from "../../features/relay/profile-directory";
+import { selectProfiles } from "../../features/relay/profile-selection";
 import { IdentityRow } from "../../shared/identity/IdentityRow";
 import {
+  canonicalPublicKey,
   formatPublicKey,
   publicKeyLabels,
 } from "../../shared/identity/public-key";
@@ -45,12 +46,18 @@ export function usePeople(
   pubkeys: readonly (string | null | undefined)[],
 ): People {
   const profiles = useContext(ProfilesContext);
-  const snapshot = useSyncExternalStore(
-    profiles?.subscribe ?? noop,
-    profiles?.snapshot ?? (() => NONE),
-  );
   const ids = [...new Set(pubkeys.filter((key): key is string => !!key))];
   const wanted = ids.join(",");
+  // Only this screen's profiles: unrelated profile updates don't re-render it.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: keyed by the joined ids
+  const selection = useMemo(
+    () => (profiles ? selectProfiles(profiles, ids) : null),
+    [profiles, wanted],
+  );
+  const snapshot = useSyncExternalStore(
+    selection?.subscribe ?? noop,
+    selection?.snapshot ?? (() => NONE),
+  );
   // biome-ignore lint/correctness/useExhaustiveDependencies: keyed by the joined ids
   useEffect(() => {
     if (profiles && ids.length)
@@ -101,13 +108,7 @@ function usePerson(pubkey: string) {
   return scoped ?? own;
 }
 
-const fullKey = (pubkey: string) => {
-  try {
-    return npubEncode(pubkey);
-  } catch {
-    return pubkey;
-  }
-};
+const fullKey = (pubkey: string) => canonicalPublicKey(pubkey) ?? pubkey;
 
 /** Inline name for text that sits inside another control; full npub on hover. */
 export function PersonName({

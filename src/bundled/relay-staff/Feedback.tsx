@@ -10,6 +10,8 @@ import { createPortal } from "react-dom";
 import { MediaViewer } from "../../features/messages/MediaAttachment";
 import viewer from "../../features/messages/Messages.module.css";
 import { Button } from "../../shared/design-system/ui/Button";
+import { Field } from "../../shared/design-system/ui/Field";
+import { Radio, RadioGroup } from "../../shared/design-system/ui/RadioGroup";
 import { useToastNotification } from "../../shared/design-system/ui/Toast";
 import { ArrowLeftIcon } from "../../shared/design-system/icons";
 import type {
@@ -17,8 +19,9 @@ import type {
   FeedbackDto,
   FeedbackStatus,
   StaffFailure,
+  StaffRequest,
 } from "../../features/relay-staff/contract";
-import { describe, useRead, useSession } from "./session";
+import { describe, useRead, useSession, useWrite } from "./session";
 import {
   CommunityBadge,
   Failure,
@@ -32,9 +35,19 @@ import {
 
 const MAX_ATTACHMENTS = 5;
 const MAX_ATTACHMENT_BYTES = 50 * 1024 * 1024;
+/** Mirrors native `ATTACHMENT_CAP`: anything larger can't be previewed or saved. */
+export const MAX_ATTACHMENT_SIZE = 10 * 1024 * 1024;
+/** The raster types the relay serves; never SVG, like other media. */
+const PREVIEW_TYPES = new Set([
+  "image/png",
+  "image/jpeg",
+  "image/gif",
+  "image/webp",
+]);
 const STATUSES: FeedbackStatus[] = ["new", "reviewed", "archived"];
 
 type Attachment = Omit<AttachmentRef, "feedbackId">;
+type StatusRequest = Extract<StaffRequest, { route: "setFeedbackStatus" }>;
 
 /** `imeta` tags with a lowercase SHA-256 (`x`), a type (`m`) and a positive size. */
 export function parseAttachments(tags: unknown): Attachment[] {
@@ -55,12 +68,19 @@ export function parseAttachments(tags: unknown): Attachment[] {
   });
 }
 
-/** At most five attachments and 50 MiB in total, in order. */
+/** The normalized type when it can be previewed, else null. */
+export function previewType(mime: string) {
+  const type = mime.split(";", 1)[0]?.trim().toLowerCase() ?? "";
+  return PREVIEW_TYPES.has(type) ? type : null;
+}
+
+/** At most five attachments of at most 10 MiB each and 50 MiB in total, in order. */
 export function attachmentBudget(attachments: Attachment[]) {
   const shown: Attachment[] = [];
   let bytes = 0;
   for (const attachment of attachments) {
     if (shown.length >= MAX_ATTACHMENTS) break;
+    if (attachment.size > MAX_ATTACHMENT_SIZE) continue;
     if (bytes + attachment.size > MAX_ATTACHMENT_BYTES) break;
     shown.push(attachment);
     bytes += attachment.size;
@@ -163,24 +183,24 @@ function FeedbackBody({
   feedback: FeedbackDto;
   onChanged(): void;
 }) {
-  const { canMutate, request } = useSession();
+  const { canMutate } = useSession();
   const notify = useToastNotification();
   const [status, setStatus] = useState(feedback.status);
-  const [busy, setBusy] = useState(false);
+  // In the store, so a change still sending after Back reaches the reopened detail.
+  const write = useWrite<StatusRequest>(
+    `feedback ${feedback.id}`,
+    (outcome) => {
+      if (!outcome.ok) return notify(describe(outcome.failure), "error");
+      setStatus(outcome.value.status);
+      notify(`Feedback marked ${outcome.value.status}`, "success");
+      onChanged();
+    },
+  );
+  const shownStatus = write.busy ? (write.frozen?.status ?? status) : status;
   const { shown, hidden } = attachmentBudget(parseAttachments(feedback.tags));
-  const change = async (next: FeedbackStatus) => {
-    if (next === status) return;
-    setBusy(true);
-    const outcome = await request({
-      route: "setFeedbackStatus",
-      id: feedback.id,
-      status: next,
-    });
-    setBusy(false);
-    if (!outcome.ok) return notify(describe(outcome.failure), "error");
-    setStatus(outcome.value.status);
-    notify(`Feedback marked ${outcome.value.status}`, "success");
-    onChanged();
+  const change = (next: FeedbackStatus) => {
+    if (next === status || write.busy) return;
+    write.run({ route: "setFeedbackStatus", id: feedback.id, status: next });
   };
   return (
     <>
@@ -205,27 +225,27 @@ function FeedbackBody({
         </p>
         <NamesSource />
       </div>
-      <div className="flex flex-col gap-1.5">
-        <span className="text-caption font-medium text-secondary">Status</span>
-        {canMutate ? (
-          <div className="flex gap-1.5">
+      {canMutate ? (
+        <Field label="Status">
+          <RadioGroup<FeedbackStatus>
+            name={`feedback-status-${feedback.id}`}
+            value={shownStatus}
+            disabled={write.busy}
+            onValueChange={change}
+          >
             {STATUSES.map((option) => (
-              <Button
-                key={option}
-                size="sm"
-                aria-pressed={status === option}
-                variant={status === option ? "prominent" : "outline"}
-                disabled={busy}
-                onClick={() => void change(option)}
-              >
-                {option}
-              </Button>
+              <Radio key={option} value={option} label={option} />
             ))}
-          </div>
-        ) : (
+          </RadioGroup>
+        </Field>
+      ) : (
+        <div className="flex flex-col gap-1.5">
+          <span className="text-caption font-medium text-secondary">
+            Status
+          </span>
           <span className="text-body-sm">{status}</span>
-        )}
-      </div>
+        </div>
+      )}
       {shown.length > 0 && (
         <div className="flex flex-col gap-3">
           <h4 className="text-body-sm font-medium">Attachments</h4>
@@ -247,11 +267,11 @@ function FeedbackBody({
   );
 }
 
-/** Images preview inline; every attachment can be saved. */
+/** PNG, JPEG, GIF and WebP preview inline; every attachment can be saved. */
 function AttachmentView({ attachment }: { attachment: AttachmentRef }) {
   const session = useSession();
   const notify = useToastNotification();
-  const image = attachment.mime.startsWith("image/");
+  const image = previewType(attachment.mime);
   const [preview, setPreview] = useState<
     { url: string } | { failure: StaffFailure } | null
   >(null);
@@ -267,7 +287,7 @@ function AttachmentView({ attachment }: { attachment: AttachmentRef }) {
       if (!current) return;
       if (!outcome.ok) return setPreview({ failure: outcome.failure });
       url = URL.createObjectURL(
-        new Blob([outcome.value as BlobPart], { type: attachment.mime }),
+        new Blob([outcome.value as BlobPart], { type: image }),
       );
       setPreview({ url });
     });

@@ -20,6 +20,7 @@ import type {
 } from "../../features/relay-staff/contract";
 import { ToastProvider } from "../../shared/design-system/ui/Toast";
 import { cards } from "./index";
+import { SEARCH_DEBOUNCE_MS } from "./Communities";
 import { ProfilesContext } from "./people";
 import type { ProfileQueries } from "../../features/relay/profile-directory";
 import {
@@ -537,7 +538,7 @@ it("changes feedback status and previews and saves attachments", async () => {
     "src",
     "blob:x",
   );
-  fireEvent.click(screen.getByRole("button", { name: "reviewed" }));
+  fireEvent.click(screen.getByRole("radio", { name: "reviewed" }));
   await waitFor(() =>
     expect(sent("setFeedbackStatus")).toEqual([
       { route: "setFeedbackStatus", id: "f1", status: "reviewed" },
@@ -547,6 +548,123 @@ it("changes feedback status and previews and saves attachments", async () => {
   await waitFor(() => expect(saved).toEqual([sha]));
   cleanup();
   expect(revoke).toHaveBeenCalledWith("blob:x");
+});
+
+function feedbackWith(tags: string[][]) {
+  routes.listFeedback = () =>
+    ok([
+      {
+        id: "f1",
+        communityId: "c1",
+        communityHost: "team.example.com",
+        submitterPubkey: member,
+        bodySummary: "Broken",
+        status: "new",
+        receivedAt: "2026-10-08T00:00:00Z",
+      },
+    ]);
+  routes.getFeedback = () =>
+    ok({
+      id: "f1",
+      communityId: "c1",
+      communityHost: "team.example.com",
+      eventId: "e".repeat(64),
+      submitterPubkey: member,
+      body: "Broken",
+      status: "new",
+      tags,
+      eventCreatedAt: "2026-10-08T00:00:00Z",
+      receivedAt: "2026-10-08T00:00:00Z",
+    });
+}
+
+it("only raster images preview, and an attachment over 10 MiB is not shown", async () => {
+  vi.stubGlobal(
+    "URL",
+    Object.assign(URL, {
+      createObjectURL: () => "blob:x",
+      revokeObjectURL() {},
+    }),
+  );
+  feedbackWith([
+    ["imeta", `x ${"1".repeat(64)}`, "m image/png", "size 3"],
+    ["imeta", `x ${"2".repeat(64)}`, "m image/png", `size ${20 * 1024 * 1024}`],
+    ["imeta", `x ${"3".repeat(64)}`, "m image/svg+xml", "size 3"],
+  ]);
+  mount();
+  fireEvent.click(await screen.findByRole("tab", { name: "Feedback" }));
+  fireEvent.click(await screen.findByRole("button", { name: /Broken/ }));
+  await screen.findByAltText("Feedback attachment");
+  // The SVG is listed for saving, after the skipped 20 MiB file, with no preview.
+  expect(screen.getByText(/image\/svg\+xml/)).toBeVisible();
+  expect(screen.getAllByAltText("Feedback attachment")).toHaveLength(1);
+  expect(screen.getAllByRole("button", { name: "Save" })).toHaveLength(2);
+  expect(screen.getByText(/1 attachment not shown/)).toBeVisible();
+});
+
+it("a status change still sending after Back reaches the reopened feedback", async () => {
+  feedbackWith([]);
+  const late = holdNext("setFeedbackStatus", () => ok({ status: "archived" }));
+  mount();
+  fireEvent.click(await screen.findByRole("tab", { name: "Feedback" }));
+  fireEvent.click(await screen.findByRole("button", { name: /Broken/ }));
+  fireEvent.click(await screen.findByRole("radio", { name: "reviewed" }));
+  await late.started();
+  fireEvent.click(screen.getByRole("button", { name: /Back to feedback/ }));
+  fireEvent.click(await screen.findByRole("button", { name: /Broken/ }));
+  const reviewed = await screen.findByRole("radio", { name: "reviewed" });
+  expect(reviewed).toBeChecked();
+  for (const radio of screen.getAllByRole("radio"))
+    expect(radio).toHaveAttribute("aria-disabled", "true");
+  await late.release(ok({ status: "reviewed" }));
+  await waitFor(() =>
+    expect(screen.getByRole("radio", { name: "new" })).not.toHaveAttribute(
+      "aria-disabled",
+      "true",
+    ),
+  );
+  expect(screen.getByRole("radio", { name: "reviewed" })).toBeChecked();
+  expect(sent("setFeedbackStatus")).toHaveLength(1);
+});
+
+it("community sections are tabs with arrow keys and linked panels", async () => {
+  mount();
+  fireEvent.click(await screen.findByRole("tab", { name: "Communities" }));
+  fireEvent.click(
+    await screen.findByRole("button", { name: /team\.example\.com/ }),
+  );
+  const sections = screen.getByRole("tablist", { name: "Community sections" });
+  const reports = within(sections).getByRole("tab", { name: "Reports" });
+  expect(reports).toHaveAttribute("aria-selected", "true");
+  const panel = screen.getByRole("tabpanel");
+  expect(panel).toHaveAttribute("aria-labelledby", reports.id);
+  reports.focus();
+  fireEvent.keyDown(reports, { key: "ArrowRight" });
+  const restrictions = within(sections).getByRole("tab", {
+    name: "Restrictions",
+  });
+  await waitFor(() => expect(restrictions).toHaveFocus());
+});
+
+it("directory search waits for typing to pause before sending", async () => {
+  mount();
+  fireEvent.click(await screen.findByRole("tab", { name: "Communities" }));
+  await screen.findByRole("button", { name: /team\.example\.com/ });
+  const search = screen.getByLabelText("Search communities");
+  vi.useFakeTimers();
+  try {
+    const before = sent("listCommunities").length;
+    for (const value of ["t", "te", "tea"])
+      fireEvent.change(search, { target: { value } });
+    await act(() => vi.advanceTimersByTimeAsync(SEARCH_DEBOUNCE_MS - 1));
+    expect(sent("listCommunities")).toHaveLength(before);
+    await act(() => vi.advanceTimersByTimeAsync(1));
+    expect(sent("listCommunities").slice(before)).toEqual([
+      { route: "listCommunities", q: "tea" },
+    ]);
+  } finally {
+    vi.useRealTimers();
+  }
 });
 
 it("config-backed staff can't be removed, and removing yourself re-probes", async () => {

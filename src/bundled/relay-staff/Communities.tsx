@@ -1,6 +1,7 @@
-import { useDeferredValue, useState } from "react";
+import { useEffect, useState } from "react";
 import { Button } from "../../shared/design-system/ui/Button";
 import { SearchField } from "../../shared/design-system/ui/SearchField";
+import { Tabs } from "../../shared/design-system/ui/Tabs";
 import { ArrowLeftIcon } from "../../shared/design-system/icons";
 import {
   unsupported,
@@ -21,6 +22,18 @@ import {
   type CommunityRef,
 } from "./ui";
 
+/** Each search is a signed request: wait for typing to pause. */
+export const SEARCH_DEBOUNCE_MS = 250;
+
+function useDebounced<T>(value: T, ms: number) {
+  const [settled, setSettled] = useState(value);
+  useEffect(() => {
+    const timer = setTimeout(() => setSettled(value), ms);
+    return () => clearTimeout(timer);
+  }, [value, ms]);
+  return settled;
+}
+
 /**
  * The relay's community directory, searched by host prefix, with the
  * connected community pinned by exact host whatever page is loaded.
@@ -34,7 +47,7 @@ export function Communities({
 }) {
   const { context } = useSession();
   const [query, setQuery] = useState("");
-  const q = useDeferredValue(query.trim().toLowerCase());
+  const q = useDebounced(query.trim().toLowerCase(), SEARCH_DEBOUNCE_MS);
   // A pasted secret key never leaves the device, in a search or a cursor.
   const secret = containsSecretKey(query) || containsSecretKey(q);
   const pages = usePages(
@@ -115,8 +128,13 @@ export function Communities({
   );
 }
 
-const SECTIONS = ["reports", "restrictions", "members", "actions"] as const;
-type Section = (typeof SECTIONS)[number];
+const SECTIONS = [
+  { value: "reports", label: "Reports" },
+  { value: "restrictions", label: "Restrictions" },
+  { value: "members", label: "Members" },
+  { value: "actions", label: "Actions" },
+] as const;
+type Section = (typeof SECTIONS)[number]["value"];
 
 /** One community's Reports, Restrictions, Members and Actions, by its host. */
 export function CommunityPage({
@@ -136,35 +154,27 @@ export function CommunityPage({
         <CommunityBadge id={community.id} host={community.host} />
         <NotConnected host={community.host} />
       </div>
-      <div
-        className="flex flex-wrap gap-1.5"
-        role="tablist"
-        aria-label="Community sections"
-      >
-        {SECTIONS.map((s) => (
-          <Button
-            key={s}
-            size="sm"
-            role="tab"
-            aria-selected={s === section}
-            variant={s === section ? "prominent" : "outline"}
-            onClick={() => setSection(s)}
-          >
-            {s.charAt(0).toUpperCase() + s.slice(1)}
-          </Button>
-        ))}
-      </div>
-      {section === "reports" && <Reports communityId={community.id} />}
-      {section === "restrictions" && (
-        <Restrictions communityHost={community.host} />
-      )}
-      {section === "members" && (
-        <MembersSection
-          communityHost={community.host}
-          onAct={() => setSection("actions")}
-        />
-      )}
-      {section === "actions" && <ActionsSection community={community} />}
+      <Tabs
+        label="Community sections"
+        variant="panel"
+        value={section}
+        onValueChange={setSection}
+        items={[...SECTIONS]}
+        renderPanel={(value) =>
+          value === "reports" ? (
+            <Reports communityId={community.id} />
+          ) : value === "restrictions" ? (
+            <Restrictions communityHost={community.host} />
+          ) : value === "members" ? (
+            <MembersSection
+              communityHost={community.host}
+              onAct={() => setSection("actions")}
+            />
+          ) : (
+            <ActionsSection community={community} />
+          )
+        }
+      />
     </div>
   );
 }
