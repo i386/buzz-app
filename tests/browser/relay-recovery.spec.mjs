@@ -48,7 +48,7 @@ test("relay reads recover automatically after the network returns", async ({
   await expect(
     page.getByRole("dialog", { name: "Reconnecting to relay…", exact: true }),
   ).toHaveCount(0);
-  // What was already loaded stays readable.
+  // Loaded messages and channels stay on screen.
   await expect(page.getByText("primary alpha message 0")).toBeVisible();
   await expect(
     page.getByRole("button", { name: "Beta", exact: true }),

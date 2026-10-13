@@ -1,7 +1,6 @@
 import { useSyncExternalStore } from "react";
 import type { RelaySession } from "../../features/relay/session";
 import {
-  RECOVERY_DESCRIPTION,
   RECOVERY_TITLE,
   RetryNowButton,
   useInlineRecovery,
@@ -103,10 +102,6 @@ export function LiveStatus({
       >
         <div className={styles.message}>
           <p className="text-label-sm text-warning">{RECOVERY_TITLE}</p>
-          <p className="text-body-sm text-subtle">
-            {issue ? `${reason} ` : ""}
-            {RECOVERY_DESCRIPTION}
-          </p>
         </div>
         <RetryNowButton recovery={recovery} />
       </section>

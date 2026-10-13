@@ -17,8 +17,7 @@ test("clean pending setup stays in diagnostics and never flashes a warning durin
       for (const status of document.querySelectorAll(
         '[role="status"][aria-label="Reconnecting to relay…"], [role="status"][aria-label="Live updates limited"]',
       )) {
-        if (status.textContent.includes("readable."))
-          window.__bannerSeen.push(status.textContent);
+        window.__bannerSeen.push(status.textContent);
       }
     });
     window.__bannerObserver.observe(document.body, {
@@ -208,9 +207,9 @@ for (const target of ["alpha", "profiles"]) {
   });
 }
 
-// Browser layout: a long, unbroken relay reason must scroll inside the inline
-// recovery notice, leaving the composer and keyboard Retry now reachable at
-// enlarged text size.
+// Browser layout: a long, unbroken relay reason stays out of the inline
+// recovery notice, which sits above the composer with keyboard Retry now
+// reachable at enlarged text size.
 test("long recovery stays bounded above the composer at enlarged text size", async ({
   page,
   app,
@@ -249,9 +248,7 @@ test("long recovery stays bounded above the composer at enlarged text size", asy
       );
     })
     .toBe(true);
-  await expect
-    .poll(() => warning.evaluate((el) => el.scrollHeight > el.clientHeight))
-    .toBe(true);
+  await expect(warning).toHaveText(/^Reconnecting to relay…Retry now$/);
   await form
     .getByRole("button", { name: "Send message", exact: true })
     .click({ trial: true });
@@ -259,9 +256,6 @@ test("long recovery stays bounded above the composer at enlarged text size", asy
   await page.keyboard.press("Shift+Tab");
   await expect(retryNow(page)).toBeFocused();
   await expect(retryNow(page)).toBeInViewport();
-  await expect
-    .poll(() => warning.evaluate((el) => el.scrollTop))
-    .toBeGreaterThan(0);
   await page.screenshot({
     path: testInfo.outputPath("recovery-long-enlarged.png"),
   });

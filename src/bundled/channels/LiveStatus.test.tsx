@@ -99,7 +99,7 @@ it.each<Partial<Snapshot>>([
   { roster: { state: "deferred" } },
 ])("retains recovery for degraded coverage or failures: %j", async (patch) => {
   expect(await render(patch, false, false, "shown")).toContain(
-    "Buzz keeps retrying automatically",
+    "Reconnecting to relay…",
   );
 });
 it.each(["channel", "global"])(
@@ -171,7 +171,7 @@ it.each<Partial<Snapshot>>([
       false,
       "shown",
     );
-    expect(html).toContain("Buzz keeps retrying automatically");
+    expect(html).toContain("Reconnecting to relay…");
     expect(html).not.toContain("retry in 4s");
   },
 );
@@ -192,6 +192,24 @@ it("a recovering global cannot hide a selected channel failure", async () => {
       false,
       false,
       "shown",
+    ),
+  ).toContain("Reconnecting to relay…");
+  // The notice is only a title and Retry now; Diagnostics keeps the reason.
+  expect(
+    await render(
+      {
+        routes: [
+          { ...channel, status: "error", error: "Selected stream stopped" },
+          {
+            id: "profiles",
+            status: "pending",
+            replay: "unknown",
+            error: quota,
+          },
+        ],
+      },
+      false,
+      true,
     ),
   ).toContain("Selected stream stopped");
 });
@@ -220,8 +238,8 @@ it.each(["error", "deferred"] as const)(
   "offers roster recovery when partial discovery is %s",
   async (state) => {
     const notice = await render({ roster: { state } }, true, false, "shown");
-    expect(notice).toContain("Channel list needs refreshing.");
-    expect(notice).toContain("Buzz keeps retrying automatically");
+    expect(notice).not.toContain("Channel list needs refreshing.");
+    expect(notice).toContain("Reconnecting to relay…");
   },
 );
 it.each<Partial<Snapshot>>([{ error: "Socket refused" }])(
@@ -233,7 +251,7 @@ it.each<Partial<Snapshot>>([{ error: "Socket refused" }])(
       false,
       "shown",
     );
-    expect(notice).toContain("Buzz keeps retrying automatically");
+    expect(notice).toContain("Reconnecting to relay…");
     expect(notice).not.toContain("Some channels are missing");
   },
 );
@@ -324,5 +342,6 @@ it("stays quiet before the first automatic retry, then shows one inline notice w
   screen.getByRole("button", { name: "Retry now" }).click();
   expect(shown.retryNow).toHaveBeenCalledTimes(1);
   expect(live.retry).not.toHaveBeenCalled();
-  expect(notice).toHaveTextContent("Live updates are unavailable.");
+  // Only the title and the button: no explanatory copy.
+  expect(notice).toHaveTextContent(/^Reconnecting to relay…Retry now$/);
 });

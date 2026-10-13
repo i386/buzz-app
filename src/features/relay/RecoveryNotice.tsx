@@ -61,8 +61,6 @@ export function useInlineRecovery(recovery: RelayRecovery | undefined) {
 }
 
 export const RECOVERY_TITLE = "Reconnecting to relay…";
-export const RECOVERY_DESCRIPTION =
-  "Buzz keeps retrying automatically. What is already loaded stays readable.";
 
 export function RetryNowButton({ recovery }: { recovery: RelayRecovery }) {
   return (
@@ -94,11 +92,7 @@ export function RecoveryNotice({
   );
   if (!recovery || !shown || inline > 0) return null;
   return (
-    <ToastNotice
-      title={RECOVERY_TITLE}
-      description={RECOVERY_DESCRIPTION}
-      tone="warning"
-    >
+    <ToastNotice title={RECOVERY_TITLE} tone="warning">
       <RetryNowButton recovery={recovery} />
     </ToastNotice>
   );
