@@ -113,7 +113,7 @@ export function CommunityDepartureSettings({
       <SettingsGroup>
         <PreferenceRow
           title="Remove from this device"
-          subtitle="Remove this community’s connection, saved drafts, and reading positions from this device without changing your membership. You can add it again later. This does not erase all Buzz data."
+          subtitle="Removes community connection and data from Buzz on this device only. Your membership won't change."
           trailing={
             <Button
               ref={removeButton}
@@ -127,7 +127,7 @@ export function CommunityDepartureSettings({
         />
         <PreferenceRow
           title="Leave community"
-          subtitle="End your membership, then remove the community’s connection, saved drafts, and reading positions from this device. Rejoining may require a new invite."
+          subtitle="Ends your membership and removes community from this device. Rejoining may require a new invite."
           trailing={
             <Button
               ref={leaveButton}
@@ -150,8 +150,8 @@ export function CommunityDepartureSettings({
           }
           description={
             intent === "leave"
-              ? `This sends a leave request to the community’s relay, then removes ${community.name} from this device along with its saved drafts and reading positions. Rejoining may need a new invite.`
-              : `This device will remove ${community.name}’s connection, saved drafts, and reading positions without changing your membership. You can add it again later. This does not erase all Buzz data.`
+              ? "This will send a leave request to the community’s relay and remove it from this device. You may need a new invite to rejoin."
+              : "The community connection and any saved drafts or data will be removed from Buzz on this device."
           }
           pending={pending}
           finalFocus={intent === "leave" ? leaveButton : removeButton}

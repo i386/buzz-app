@@ -159,7 +159,9 @@ test("Leave community offers local removal without contacting the relay", async 
   const dialog = page.getByRole("alertdialog", {
     name: "Remove Primary from this device?",
   });
-  await expect(dialog).toContainText("without changing your membership");
+  await expect(dialog).toContainText(
+    "The community connection and any saved drafts or data will be removed from Buzz on this device.",
+  );
   const leaveRequests = [];
   page.on("request", (request) => {
     if (new URL(request.url()).pathname.endsWith("/leave"))

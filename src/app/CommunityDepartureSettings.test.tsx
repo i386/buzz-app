@@ -64,7 +64,9 @@ it("removes the community from this device without contacting the relay", async 
   const dialog = screen.getByRole("alertdialog", {
     name: "Remove Acme from this device?",
   });
-  expect(dialog).toHaveTextContent("without changing your membership");
+  expect(dialog).toHaveTextContent(
+    "The community connection and any saved drafts or data will be removed from Buzz on this device.",
+  );
   await user.click(
     within(dialog).getByRole("button", { name: "Remove from this device" }),
   );
