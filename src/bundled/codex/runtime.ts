@@ -756,7 +756,11 @@ export class CodexRuntime {
       throw new Error("Buzz is not connected to this community");
     const { session } = snapshot;
     const listing = await this.memoryReads.read(
-      session,
+      {
+        connection: session,
+        memoryListing: (stop) =>
+          session.agentMemories.read(request.agent.pubkey, stop),
+      },
       request.agent.pubkey,
       signal,
     );

@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { schnorr } from "@noble/curves/secp256k1.js";
 import { bytesToHex } from "nostr-tools/utils";
 import { afterEach, expect, it, vi } from "vitest";
+import { ownerReads } from "../../features/agents/reads";
 import type { Agent, Delivery } from "../../features/agents/service";
 import type { Host } from "../../features/host/service";
 import type { EventData, RelayEvent } from "../../features/relay/events";
@@ -95,7 +96,11 @@ function setup(
     getItem: (key: string) => data.get(key) ?? null,
     setItem: (key: string, value: string) => void data.set(key, value),
   } as Storage;
-  const runtime = new ClaudeRuntime(host, () => relay, storage);
+  const runtime = new ClaudeRuntime(
+    host,
+    (pubkey) => ownerReads(relay, pubkey),
+    storage,
+  );
   const published: { kind: number; content: string; tags: string[][] }[] = [];
   const publish = vi.fn(async (template: (typeof published)[number]) => {
     published.push(template);

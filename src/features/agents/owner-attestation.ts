@@ -1,6 +1,9 @@
 import { schnorr } from "@noble/curves/secp256k1.js";
 import { hexToBytes } from "nostr-tools/utils";
-import type { EventData } from "../relay/events";
+import type { ProfileQueries } from "../relay/profile-directory";
+import { hasEventProof, type EventData } from "../relay/events";
+import { workflowMentionOwner } from "../relay/workflow-attribution";
+import type { AgentReads } from "./reads";
 
 const KEY = /^[0-9a-f]{64}$/;
 const SIG = /^[0-9a-f]{128}$/;
@@ -83,4 +86,62 @@ function satisfied(
       ? event.created_at < value
       : event.created_at > value;
   });
+}
+
+/** How a mention from a relay workflow is checked: the community's workflow
+ * key, and its creators' profiles. */
+export type WorkflowCheck = {
+  authority: string | undefined;
+  agent: string;
+  profiles?: Pick<ProfileQueries, "ensure" | "event"> | undefined;
+};
+
+/** The workflow check of an agent's community reads, if they can be read. */
+export function workflowOf(
+  reads: AgentReads | undefined,
+  agent: string,
+): WorkflowCheck {
+  return {
+    agent,
+    authority: reads?.workflowAuthority(),
+    profiles: reads && {
+      ensure: async (ids) => {
+        await reads.profiles(ids);
+      },
+      event: (pubkey) => reads.profile(pubkey),
+    },
+  };
+}
+
+/** Owner prompts, attested siblings, and verified relay workflow mentions
+ * delegated by the owner or a profile-verified sibling to this particular agent. */
+export async function fromOwner(
+  event: EventData,
+  owner: string,
+  workflow?: WorkflowCheck,
+) {
+  if (event.pubkey === owner || (await attestedOwner(event)) === owner)
+    return true;
+  const creator =
+    workflow && workflowMentionOwner(event, workflow.authority, workflow.agent);
+  if (!creator) return false;
+  if (creator === owner) return true;
+  const profiles = workflow?.profiles;
+  if (!profiles?.event) return false;
+  try {
+    await profiles.ensure([creator]);
+    const profile = profiles.event(creator);
+    return (
+      !!profile &&
+      hasEventProof(profile) &&
+      profile.kind === 0 &&
+      profile.pubkey === creator &&
+      (await attestedOwner(profile)) === owner &&
+      profiles.event(creator) === profile
+    );
+  } catch {
+    // Missing or failed profile reads are not ownership verdicts; a later
+    // mention can retry through the session's existing profile directory.
+    return false;
+  }
 }

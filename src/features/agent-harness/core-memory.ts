@@ -1,31 +1,30 @@
 // An agent's memory as the harness plugins read it and show it to their
-// agents. It is encrypted to the owner, so it is read back through the
-// owner's session; no agent key is needed.
-import type { MemoryListing } from "../agents/memory";
-import type { RelaySession } from "../relay/session";
+// agents, through the reads of the agent's community.
+import type { AgentReads, MemoryListing } from "../agents/reads";
 
 /** How long a shared read may take; each caller can stop waiting sooner. */
 const READ_TIMEOUT_MS = 10_000;
 
-/** One owner-view read per session and agent at a time, which concurrent
- * turns and tool calls share. */
+/** One read per connection and agent at a time, which concurrent turns and
+ * tool calls share. A new connection, even to the same community, may read as
+ * someone else, so it shares nothing with an old one. */
 export class MemoryReads {
-  private reads = new WeakMap<
-    RelaySession,
-    Map<string, Promise<MemoryListing>>
-  >();
+  private reads = new WeakMap<object, Map<string, Promise<MemoryListing>>>();
 
-  async read(session: RelaySession, agent: string, signal: AbortSignal) {
+  async read(
+    source: Pick<AgentReads, "connection" | "memoryListing">,
+    agent: string,
+    signal: AbortSignal,
+  ) {
     signal.throwIfAborted();
-    let reads = this.reads.get(session);
+    let reads = this.reads.get(source.connection);
     if (!reads) {
       reads = new Map();
-      this.reads.set(session, reads);
+      this.reads.set(source.connection, reads);
     }
     let read = reads.get(agent);
     if (!read) {
-      const started = session.agentMemories.read(
-        agent,
+      const started = source.memoryListing(
         AbortSignal.timeout(READ_TIMEOUT_MS),
       );
       const shared = reads;
@@ -41,8 +40,8 @@ export class MemoryReads {
 
   /** After a memory write, a read that may have started before it is not
    * shared with later callers. */
-  forget(session: RelaySession, agent: string) {
-    this.reads.get(session)?.delete(agent);
+  forget(connection: object, agent: string) {
+    this.reads.get(connection)?.delete(agent);
   }
 }
 

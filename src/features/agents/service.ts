@@ -1,7 +1,5 @@
 import { createLocalAgentActivity } from "./local-activity";
 import { AgentRunners } from "./runner";
-import { workflowMentionOwner } from "../relay/workflow-attribution";
-import type { ProfileQueries } from "../relay/profile-directory";
 // Agents: agents that are plugins from the start. A plugin registers an agent
 // type (its summary line, peek view, settings tabs and `run`); each agent made
 // from it has its own native-held key, an `agent-attention/v1` configuration the
@@ -25,7 +23,6 @@ import {
   type Contribution,
 } from "../../plugins/contributions";
 import type { LocalAgentsSnapshot } from "./local";
-import { attestedOwner } from "./owner-attestation";
 import {
   deleteAgentRecord,
   publishAgentRecord,
@@ -40,12 +37,7 @@ import {
   type NipOaAuthorization,
 } from "../host/service";
 import { avatarSource } from "../../shared/avatar-source";
-import {
-  hasEventProof,
-  newer,
-  type EventData,
-  type RelayEvent,
-} from "../relay/events";
+import { newer, type EventData, type RelayEvent } from "../relay/events";
 import { relayPartition } from "../relay/partition";
 import type { RelayData } from "../relay/service";
 import type { RelaySession } from "../relay/session";
@@ -570,42 +562,7 @@ export function teamPrompt(
     })
     .join("\n\n");
 }
-/** Owner prompts, attested siblings, and verified relay workflow mentions
- * delegated by the owner or a profile-verified sibling to this particular agent. */
-export async function fromOwner(
-  event: EventData,
-  owner: string,
-  workflow?: {
-    authority: string | undefined;
-    agent: string;
-    profiles?: Pick<ProfileQueries, "ensure" | "event"> | undefined;
-  },
-) {
-  if (event.pubkey === owner || (await attestedOwner(event)) === owner)
-    return true;
-  const creator =
-    workflow && workflowMentionOwner(event, workflow.authority, workflow.agent);
-  if (!creator) return false;
-  if (creator === owner) return true;
-  const profiles = workflow?.profiles;
-  if (!profiles?.event) return false;
-  try {
-    await profiles.ensure([creator]);
-    const profile = profiles.event(creator);
-    return (
-      !!profile &&
-      hasEventProof(profile) &&
-      profile.kind === 0 &&
-      profile.pubkey === creator &&
-      (await attestedOwner(profile)) === owner &&
-      profiles.event(creator) === profile
-    );
-  } catch {
-    // Missing or failed profile reads are not ownership verdicts; a later
-    // mention can retry through the session's existing profile directory.
-    return false;
-  }
-}
+export { fromOwner } from "./owner-attestation";
 
 /** What Agents needs of the communities: the viewer, the selected one, and
  * a connection to any joined one without selecting it. */
