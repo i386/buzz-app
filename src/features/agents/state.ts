@@ -77,7 +77,7 @@ export async function loadAgentStorage(
     try {
       if (storage.getItem(key) === null) {
         storage.setItem(key, value);
-        await (storage as FileBacked).saved();
+        await storage.saved(key);
       }
       local.removeItem(key);
     } catch (error) {
@@ -90,24 +90,41 @@ export async function loadAgentStorage(
 }
 
 type FileBacked = Storage & {
-  /** Settles when every write so far is saved; rejects if the last failed. */
-  saved(): Promise<void>;
+  /** Settles once `key`'s value, or without a key every value, is saved;
+   * rejects while the last write of one failed. */
+  saved(key?: string): Promise<void>;
 };
 
-/** A Storage held in memory and saved through `save`, one key at a time. */
+/** A Storage held in memory and saved through `save`, one key at a time. A
+ * failed write puts back the key's saved value, so the copy never holds what
+ * is not saved and the same value can be set again. */
 export function fileBacked(
   items: Map<string, string>,
   save: Native["set"],
 ): FileBacked {
+  /** What each key's file holds, as far as this program saved it. */
+  const durable = new Map(items);
+  /** Each key's last write, until it is saved. */
+  const pending = new Map<string, Promise<void>>();
   let queue: Promise<void> = Promise.resolve();
   const write = (key: string, value: string | null) => {
     const next = queue.then(() => save(key, value));
-    queue = next.catch((error) => {
-      console.error(`Agent state ${key} was not saved`, error);
-    });
-    return next;
+    pending.set(key, next);
+    queue = next.then(
+      () => {
+        if (value === null) durable.delete(key);
+        else durable.set(key, value);
+        if (pending.get(key) === next) pending.delete(key);
+      },
+      (error) => {
+        console.error(`Agent state ${key} was not saved`, error);
+        if (pending.get(key) !== next) return;
+        const kept = durable.get(key);
+        if (kept === undefined) items.delete(key);
+        else items.set(key, kept);
+      },
+    );
   };
-  let last: Promise<void> = Promise.resolve();
   return {
     get length() {
       return items.size;
@@ -116,15 +133,21 @@ export function fileBacked(
     getItem: (key) => items.get(key) ?? null,
     setItem(key, value) {
       items.set(key, String(value));
-      last = write(key, String(value));
+      write(key, String(value));
     },
     removeItem(key) {
       if (!items.delete(key)) return;
-      last = write(key, null);
+      write(key, null);
     },
     clear() {
       for (const key of [...items.keys()]) this.removeItem(key);
     },
-    saved: () => last,
+    async saved(key) {
+      // Writes settle in order, so after the queue each pending one is done.
+      await queue;
+      const failed =
+        key === undefined ? [...pending.values()] : [pending.get(key)];
+      await Promise.all(failed);
+    },
   };
 }

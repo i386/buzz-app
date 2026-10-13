@@ -82,3 +82,22 @@ it("saves each write in order, and a failed write does not stop later ones", asy
   expect(storage.getItem("a")).toBe("2");
   expect(storage.length).toBe(1);
 });
+
+it("puts back a key whose write failed, so it is not taken as saved and can be set again", async () => {
+  const native = files({ a: "old" });
+  const storage = fileBacked(new Map([["a", "old"]]), native.set);
+  native.set.mockRejectedValueOnce(new Error("disk full"));
+  const error = vi.spyOn(console, "error").mockImplementation(() => {});
+  storage.setItem("a", "new");
+  storage.setItem("b", "kept");
+  await expect(storage.saved("a")).rejects.toThrow("disk full");
+  await expect(storage.saved()).rejects.toThrow("disk full");
+  await expect(storage.saved("b")).resolves.toBeUndefined();
+  error.mockRestore();
+  expect(storage.getItem("a")).toBe("old");
+  // The same value again is a new write, not a no-op.
+  storage.setItem("a", "new");
+  await storage.saved();
+  expect(native.saved.get("a")).toBe("new");
+  expect(storage.getItem("a")).toBe("new");
+});

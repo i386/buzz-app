@@ -144,6 +144,34 @@ function readRecord(
   };
 }
 
+type Saving = { saved?: (key?: string) => Promise<void> };
+
+/** Settles once `key`'s value in `storage`, or without a key every value it
+ * holds, is saved: agent storage files (state.ts) save after they are set,
+ * other storage as it is set. */
+export function persisted(storage: Storage, key?: string): Promise<void> {
+  const { saved } = storage as Saving;
+  return typeof saved === "function"
+    ? saved.call(storage, key)
+    : Promise.resolve();
+}
+
+/** Runs `then` once these keys' values are saved: at once for storage that
+ * saves as it is set, else later, and not at all if one failed. A move that
+ * removes its source this way never leaves no saved copy. */
+export function afterSaved(
+  storage: Storage,
+  keys: readonly string[],
+  then: () => void,
+  failed: (error: unknown) => void,
+) {
+  if (typeof (storage as Saving).saved !== "function") return then();
+  void Promise.all(keys.map((key) => persisted(storage, key))).then(
+    then,
+    failed,
+  );
+}
+
 /** Moves records from the old value that held every agent into one key per
  * agent, then removes it. Only that move writes many records at once: after
  * it, each save writes only its own agent's key, so a program that runs
@@ -154,7 +182,14 @@ export function splitLegacyRecords(
 ) {
   if (storage.getItem(STORAGE_KEY) === null) return;
   for (const record of Object.values(records)) writeRecord(storage, record);
-  storage.removeItem(STORAGE_KEY);
+  // The shared value goes only once every record is saved: until then it is
+  // the only saved copy, and a record of an agent's own wins when both are.
+  afterSaved(
+    storage,
+    Object.keys(records).map(recordKey),
+    () => storage.removeItem(STORAGE_KEY),
+    (error) => console.error("Agent records were not split", error),
+  );
 }
 
 /** Removes an agent's record. */

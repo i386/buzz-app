@@ -1,6 +1,6 @@
 // TEMPORARY agents rename: remove this module and its startup call after
 // 2026-10-18, once the development users have upgraded. No runtime aliases.
-import { STORAGE_KEY, TEAMS_KEY } from "./store";
+import { afterSaved, STORAGE_KEY, TEAMS_KEY } from "./store";
 
 export function migrateAgentStorage(storage: Storage) {
   for (const [oldKey, key] of [
@@ -22,9 +22,22 @@ export function migrateAgentStorage(storage: Storage) {
     }
     try {
       if (current === null) storage.setItem(key, old);
-      storage.removeItem(oldKey);
     } catch (error) {
       console.error(`Cannot migrate ${oldKey}`, error);
+      continue;
     }
+    // The source goes once the copy is saved; until then it is the only one.
+    afterSaved(
+      storage,
+      [key],
+      () => {
+        try {
+          storage.removeItem(oldKey);
+        } catch (error) {
+          console.error(`Cannot migrate ${oldKey}`, error);
+        }
+      },
+      (error) => console.error(`Cannot migrate ${oldKey}`, error),
+    );
   }
 }

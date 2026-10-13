@@ -69,8 +69,11 @@ import {
   type PortSource,
 } from "./native";
 import {
+  persisted,
   readRecords,
+  recordKey,
   readTeams,
+  TEAMS_KEY,
   readUnfinished,
   setAttention,
   removeRecord,
@@ -726,7 +729,12 @@ export class AgentsService extends Service implements Agents {
         if (!identity) throw new Error("No such agent on this device");
         return this.recordOf(identity);
       },
-      write: (record) => this.write(record),
+      // A failed save logs; the run's memory keeps it from running again.
+      write: (record) => {
+        void this.write(record).catch((error) =>
+          console.warn(`Agent ${record.pubkey} state was not saved`, error),
+        );
+      },
       team: (pubkey) =>
         teamPrompt(
           this.teamList,
@@ -1041,7 +1049,7 @@ export class AgentsService extends Service implements Agents {
         record = { ...record, config: made.config };
       if (carry && kind.adopt)
         record = { ...record, config: kind.adopt(carry, record.config) };
-      this.write(record);
+      await this.write(record);
     } catch (error) {
       // The agent exists either way; unsaved settings start from the defaults.
       console.warn(`Agent ${identity.name} settings were not saved`, error);
@@ -1117,7 +1125,7 @@ export class AgentsService extends Service implements Agents {
       change.attention ||
       change.attentionEnabled !== undefined
     )
-      this.write(record);
+      await this.write(record);
     const picture =
       change.picture === undefined ? undefined : change.picture || null;
     const renamed = name !== undefined && name !== identity.name;
@@ -1208,6 +1216,7 @@ export class AgentsService extends Service implements Agents {
         };
         // Only this agent's key: others may be another program's to change.
         writeRecord(this.storage, nextRecord);
+        await persisted(this.storage, recordKey(pubkey));
         // Publish the in-memory pair only after its config is durable.
         this.records = { ...this.records, [pubkey]: nextRecord };
         this.identities = this.identities.map((saved) =>
@@ -1304,7 +1313,7 @@ export class AgentsService extends Service implements Agents {
       instructions,
       members: Object.freeze([...new Set(members)]),
     });
-    this.writeTeams(
+    await this.writeTeams(
       id
         ? this.teamList.map((saved) => (saved.id === id ? team : saved))
         : [...this.teamList, team],
@@ -1313,15 +1322,17 @@ export class AgentsService extends Service implements Agents {
   }
 
   async removeTeam(id: string) {
-    this.writeTeams(this.teamList.filter((team) => team.id !== id));
+    await this.writeTeams(this.teamList.filter((team) => team.id !== id));
   }
 
-  /** Saves the teams; memory changes only once storage has taken them. */
+  /** Saves the teams; memory changes once storage has taken them, and the
+   * promise settles once they are saved. */
   private writeTeams(teams: readonly Team[]) {
     writeTeams(this.storage, teams);
     this.teamList = Object.freeze(teams);
     this.state = Object.freeze({ ...this.state, teams: this.teamList });
     this.notify();
+    return persisted(this.storage, TEAMS_KEY);
   }
 
   /** Saves the unfinished setups; memory changes only once storage has them. */
@@ -1530,12 +1541,15 @@ export class AgentsService extends Service implements Agents {
     return agent;
   }
 
-  /** Saves one record; memory changes only once storage has taken it. */
+  /** Saves one record; memory changes once storage has taken it, and the
+   * promise settles once it is saved. A failed save keeps memory as it is:
+   * an agent's timers must not run again because their progress was lost. */
   private write(record: AgentRecord) {
     // Only this agent's key: others may be another program's to change.
     writeRecord(this.storage, record);
     this.records = { ...this.records, [record.pubkey]: record };
     this.update();
+    return persisted(this.storage, recordKey(record.pubkey));
   }
   private live(pubkey: string) {
     return this.identities.find(
@@ -1682,12 +1696,12 @@ export class AgentsService extends Service implements Agents {
           team.members.some((pubkey) => !live.has(pubkey)),
         )
       )
-        this.writeTeams(
+        void this.writeTeams(
           this.teamList.map((team) => ({
             ...team,
             members: team.members.filter((pubkey) => live.has(pubkey)),
           })),
-        );
+        ).catch((error) => console.warn("Agent teams were not saved", error));
     } catch (error) {
       if (turn !== this.listed) return;
       this.state = Object.freeze({

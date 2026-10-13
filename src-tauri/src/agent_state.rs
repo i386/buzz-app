@@ -13,7 +13,8 @@ use std::path::{Path, PathBuf};
 
 /// The largest value kept, as an upper bound on what `localStorage` held.
 const VALUE_LIMIT: usize = 4 * 1024 * 1024;
-const KEY_LIMIT: usize = 200;
+/// The longest file name macOS, Linux and Windows all allow, in bytes.
+const NAME_LIMIT: usize = 255;
 const TEMPORARY: &str = ".tmp";
 
 pub(crate) struct AgentState {
@@ -53,7 +54,8 @@ impl AgentState {
 
     /// Saves `value` under `key`, or removes the key when `value` is `None`.
     pub(crate) fn set(&self, key: &str, value: Option<&str>) -> Result<(), String> {
-        if key.is_empty() || key.len() > KEY_LIMIT {
+        // The limit is on the file name, after `encode` lengthens the key.
+        if key.is_empty() || encode(key).len() > NAME_LIMIT {
             return Err("Invalid agent state key".into());
         }
         let dir = self.dir()?;
@@ -176,6 +178,23 @@ mod tests {
         state.set("missing", None).unwrap();
         assert_eq!(state.load().unwrap().keys().collect::<Vec<_>>(), ["two"]);
         assert!(state.set("", Some("x")).is_err());
-        assert!(state.set(&"k".repeat(KEY_LIMIT + 1), Some("x")).is_err());
+        assert!(state.set(&"k".repeat(NAME_LIMIT + 1), Some("x")).is_err());
+        assert!(state.set(&":".repeat(86), Some("x")).is_err());
+        state.set(&"k".repeat(NAME_LIMIT), Some("x")).unwrap();
+    }
+
+    #[test]
+    fn saves_codex_session_keys_of_long_community_hosts() {
+        let root = tempfile::tempdir().unwrap();
+        let state = AgentState::new(Ok(root.path().join("state")));
+        // 202 bytes, as Codex names it for a community on a 47-character host.
+        let key = format!(
+            "buzz.codex.sessions.v4:https://agents.production.engineering.example.com:{}:{}",
+            "a".repeat(64),
+            "b".repeat(64),
+        );
+        assert_eq!(key.len(), 202);
+        state.set(&key, Some("{}")).unwrap();
+        assert_eq!(state.load().unwrap()[&key], "{}");
     }
 }

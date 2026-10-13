@@ -1,4 +1,5 @@
-import { expect, it } from "vitest";
+import { expect, it, vi } from "vitest";
+import { fileBacked } from "./state";
 import {
   STORAGE_KEY,
   TEAMS_KEY,
@@ -265,4 +266,36 @@ it("round-trips teams and skips any that is not one", () => {
   expect(readTeams(storage)).toEqual([team]);
   storage.setItem(TEAMS_KEY, "{");
   expect(readTeams(storage)).toEqual([]);
+});
+
+it("keeps the old shared value until every record from it is saved", async () => {
+  const shared = JSON.stringify({ version: 1, agents: { [pubkey]: record } });
+  const disk = new Map([[STORAGE_KEY, shared]]);
+  const save = vi.fn(async (key: string, value: string | null) => {
+    if (key === recordKey(pubkey)) throw new Error("disk full");
+    if (value === null) disk.delete(key);
+    else disk.set(key, value);
+  });
+  const storage = fileBacked(new Map(disk), save);
+  const error = vi.spyOn(console, "error").mockImplementation(() => {});
+  splitLegacyRecords(storage, readRecords(storage));
+  await storage.saved().catch(() => {});
+  await new Promise((resolve) => setTimeout(resolve));
+  error.mockRestore();
+  expect(save).not.toHaveBeenCalledWith(STORAGE_KEY, null);
+  // The next start still has the agent.
+  const restarted = fileBacked(new Map(disk), save);
+  expect(readRecords(restarted)[pubkey]?.config).toEqual(record.config);
+  // Once its record saves, the split finishes.
+  save.mockImplementation(async (key, value) => {
+    if (value === null) disk.delete(key);
+    else disk.set(key, value);
+  });
+  splitLegacyRecords(restarted, readRecords(restarted));
+  await restarted.saved();
+  await new Promise((resolve) => setTimeout(resolve));
+  expect(disk.has(STORAGE_KEY)).toBe(false);
+  expect(readRecords(fileBacked(new Map(disk), save))[pubkey]?.config).toEqual(
+    record.config,
+  );
 });

@@ -1,4 +1,5 @@
 import { afterEach, expect, it, vi } from "vitest";
+import { fileBacked } from "../../features/agents/state";
 import { fakeSpawn, flush } from "./claude-testing";
 import type { ToolServer } from "./claude";
 import {
@@ -510,6 +511,31 @@ it("reads an agent's sessions from the shared value until it saves its own", () 
   localSessions(storage, "two").set("c/other", { id: "s3", seen: 1, at: 3 });
   expect(data.has("buzz.claude-code.sessions.v1")).toBe(false);
   expect(localSessions(storage, "two").get("c/root")?.id).toBe("s2");
+});
+
+it("keeps an agent in the shared sessions value until its own is saved", async () => {
+  const name = "buzz.claude-code.sessions.v1";
+  const shared = JSON.stringify({
+    one: { "c/root": { id: "s1", seen: 3, at: 1 } },
+  });
+  const disk = new Map([[name, shared]]);
+  const save = vi.fn(async (key: string, value: string | null) => {
+    if (key !== name) throw new Error("disk full");
+    if (value === null) disk.delete(key);
+    else disk.set(key, value);
+  });
+  const storage = fileBacked(new Map(disk), save);
+  const error = vi.spyOn(console, "error").mockImplementation(() => {});
+  const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+  localSessions(storage, "one").set("c/other", { id: "s2", seen: 1, at: 2 });
+  await storage.saved().catch(() => {});
+  await new Promise((resolve) => setTimeout(resolve));
+  error.mockRestore();
+  warn.mockRestore();
+  expect(disk.get(name)).toBe(shared);
+  // The next start still resumes the saved session.
+  const restarted = fileBacked(new Map(disk), save);
+  expect(localSessions(restarted, "one").get("c/root")?.id).toBe("s1");
 });
 
 it("shares a temporary metadata lookup, releases its process, and refreshes after settings change", async () => {

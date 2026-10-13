@@ -15,6 +15,7 @@ import {
   type ToolServer,
   type TurnPick,
 } from "./claude";
+import { afterSaved } from "../../features/agents/store";
 
 /** A conversation's process stops after this long without a message. */
 export const IDLE_MS = 15 * 60_000;
@@ -512,16 +513,30 @@ export function localSessions(
       .slice(0, SAVED_LIMIT);
     try {
       storage.setItem(key, JSON.stringify(Object.fromEntries(kept)));
-      const legacy = object(storage.getItem(name));
-      if (agent in legacy) {
-        delete legacy[agent];
-        if (Object.keys(legacy).length)
-          storage.setItem(name, JSON.stringify(legacy));
-        else storage.removeItem(name);
-      }
     } catch (error) {
       console.warn("Claude sessions were not saved", error);
+      return;
     }
+    // The old shared value drops this agent once its own key is saved: until
+    // then it holds the only saved copy.
+    if (!(agent in object(storage.getItem(name)))) return;
+    afterSaved(
+      storage,
+      [key],
+      () => {
+        const legacy = object(storage.getItem(name));
+        if (!(agent in legacy)) return;
+        delete legacy[agent];
+        try {
+          if (Object.keys(legacy).length)
+            storage.setItem(name, JSON.stringify(legacy));
+          else storage.removeItem(name);
+        } catch (error) {
+          console.warn("Claude sessions were not saved", error);
+        }
+      },
+      (error) => console.warn("Claude sessions were not saved", error),
+    );
   };
   return {
     list: () =>
