@@ -2,7 +2,7 @@
 // profile panel): the type's own tabs, then the app's Attention tab, which every
 // agent here shares because the app is what wakes it. Hosted agents' tabs are
 // their type's alone; an agent on another device has none here.
-import type { ReactNode } from "react";
+import { useSyncExternalStore, type ReactNode } from "react";
 import type { ChannelChoice } from "./attention";
 import { AttentionPanel } from "./AttentionPanel";
 import type { Agent, Agents, RegisteredAgentType } from "./service";
@@ -45,13 +45,34 @@ export function agentSections({
       value: "agent:attention",
       label: "Attention",
       render: () => (
-        <AttentionPanel
-          agent={agent}
-          save={(change) => agents.save(agent.pubkey, change)}
-          channels={channels}
-          classifier={agents.classifier()}
-        />
+        <AttentionSection agents={agents} agent={agent} channels={channels} />
       ),
     },
   ];
+}
+
+/** Follows classifier availability itself: a host that rerenders only when
+ * this agent changes would otherwise show a stale classifier warning. */
+function AttentionSection({
+  agents,
+  agent,
+  channels,
+}: {
+  agents: Pick<Agents, "subscribe" | "classifier" | "save">;
+  agent: Agent;
+  channels: readonly ChannelChoice[];
+}) {
+  const classifier = useSyncExternalStore(
+    agents.subscribe,
+    () => agents.classifier(),
+    () => agents.classifier(),
+  );
+  return (
+    <AttentionPanel
+      agent={agent}
+      save={(change) => agents.save(agent.pubkey, change)}
+      channels={channels}
+      classifier={classifier}
+    />
+  );
 }
