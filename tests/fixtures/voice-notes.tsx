@@ -97,10 +97,14 @@ const owner = createRelaySession(
         if (signal.aborted) abort();
       });
       if (report.failUpload) throw new Error("Fixture upload failed");
+      const voice = file.type === "audio/wav";
       const result: UploadedAttachment = {
-        ...attachment,
-        name: file.name.replace(/\.wav$/, ".mp4"),
-        url: `https://fixture.test/media/${report.uploads.toString(16).padStart(64, "0")}.mp4`,
+        // Only recorded WAVs model the relay's voice transcode. Generic files
+        // retain their MIME type rather than spuriously mounting video previews.
+        ...(voice ? attachment : {}),
+        type: voice ? attachment.type : file.type,
+        name: voice ? file.name.replace(/\.wav$/, ".mp4") : file.name,
+        url: `https://fixture.test/media/${report.uploads.toString(16).padStart(64, "0")}.${voice ? "mp4" : "txt"}`,
         sha256: report.uploads.toString(16).padStart(64, "0"),
         size: file.size,
       };

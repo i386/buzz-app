@@ -10,6 +10,7 @@ test.beforeAll(async () => {
     configFile: false,
     envDir: false,
     plugins: [react()],
+    optimizeDeps: { entries: ["tests/fixtures/voice-notes.html"] },
     server: { host: "127.0.0.1", port: 0 },
   });
   await server.listen();
@@ -390,6 +391,11 @@ test("rejected voice messages retry through the outbox without reuploading", {
 test("rejects a full attachment draft before opening the microphone", async ({
   page,
 }) => {
+  const mediaRequests = [];
+  page.on("request", (request) => {
+    if (new URL(request.url()).pathname === "/api/relay/media")
+      mediaRequests.push(request.url());
+  });
   await page.locator('input[type="file"]').setInputFiles(
     Array.from({ length: 10 }, (_, index) => ({
       name: `file-${index}.txt`,
@@ -397,11 +403,14 @@ test("rejects a full attachment draft before opening the microphone", async ({
       buffer: Buffer.from("test"),
     })),
   );
-  // The attachment rows grow as the draft settles, moving the toolbar under a
-  // pointer aimed at its earlier position. Click once every file is Ready.
+  // The attachment rows grow as the draft settles. Establish ten completed
+  // uploads before checking that text files never initiated media previews.
+  const attachments = page.getByRole("region", { name: "Attachments" });
   await expect(
-    page.getByRole("status").filter({ hasText: /· Ready$/ }),
+    attachments.getByRole("status").filter({ hasText: /· Ready$/ }),
   ).toHaveCount(10);
+  await expect(attachments.locator("video")).toHaveCount(0);
+  expect(mediaRequests).toEqual([]);
   await page
     .getByRole("button", { name: "Record voice note", exact: true })
     .click();
