@@ -356,7 +356,7 @@ export function createTabs({
           />
           <SwitchPreferenceRow
             label="Claude auto memory"
-            description="Let Claude write its own auto memory in addition to Buzz memory. Claude still reads CLAUDE.md when this is off."
+            description="Let Claude write its own auto memory in addition to Buzz memory."
             checked={draftAutoMemory}
             onCheckedChange={setDraftAutoMemory}
           />

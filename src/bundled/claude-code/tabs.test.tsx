@@ -482,7 +482,7 @@ it("saves a provider model default explicitly and leaves blank agent config inhe
   });
   expect(autoMemory).toBeChecked();
   expect(autoMemory).toHaveAccessibleDescription(
-    "Let Claude write its own auto memory in addition to Buzz memory. Claude still reads CLAUDE.md when this is off.",
+    "Let Claude write its own auto memory in addition to Buzz memory.",
   );
   expect(defaultModel).toHaveTextContent("Claude default (Opus 5.5)");
   await user.click(defaultModel);
