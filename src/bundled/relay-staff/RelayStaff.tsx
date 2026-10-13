@@ -8,15 +8,17 @@ import {
   ShieldIcon,
   WarningCircleIcon,
 } from "../../shared/design-system/icons";
-import { Console } from "./Console";
+import { Console, SCREENS, type Screen } from "./Console";
 import { createSession, describe, SessionProvider } from "./session";
 import type { Access, Staff } from "./staff";
 
 export function RelayStaff({
   staff,
+  screen,
   active,
 }: {
   staff: Staff;
+  screen: Screen;
   active(): boolean;
 }) {
   useSyncExternalStore(staff.subscribe, () => staff.visible());
@@ -35,16 +37,16 @@ export function RelayStaff({
     return (
       <EmptyState
         icon={<ShieldIcon />}
-        title="Relay staff"
-        description="The relay staff console needs the Buzz desktop app."
+        title={SCREENS[screen].title}
+        description="Relay admin needs the Buzz desktop app."
       />
     );
   if (!context) return null;
   return (
     <div className="flex flex-col gap-4">
       <Header
-        title="Relay staff"
-        subtitle={`Triage reports, review feedback and manage staff on ${new URL(context.origin).host}.`}
+        title={SCREENS[screen].title}
+        subtitle={`${SCREENS[screen].subtitle} ${new URL(context.origin).host}.`}
         actions={
           <Button
             size="sm"
@@ -57,7 +59,12 @@ export function RelayStaff({
       />
       <AccessStatus access={access} signer={context.signer} />
       {access?.state === "authorized" && (
-        <Authorized key={contextKey} staff={staff} access={access} />
+        <Authorized
+          key={contextKey}
+          staff={staff}
+          screen={screen}
+          access={access}
+        />
       )}
     </div>
   );
@@ -65,9 +72,11 @@ export function RelayStaff({
 
 function Authorized({
   staff,
+  screen,
   access,
 }: {
   staff: Staff;
+  screen: Screen;
   access: Extract<Access, { state: "authorized" }>;
 }) {
   const context = staff.context();
@@ -79,7 +88,7 @@ function Authorized({
   if (!session) return null;
   return (
     <SessionProvider value={session}>
-      <Console />
+      <Console screen={screen} />
     </SessionProvider>
   );
 }

@@ -19,7 +19,7 @@ import type {
   StaffRequest,
 } from "../../features/relay-staff/contract";
 import { ToastProvider } from "../../shared/design-system/ui/Toast";
-import { RelayStaff } from "./RelayStaff";
+import { cards } from "./index";
 import { ProfilesContext } from "./people";
 import type { ProfileQueries } from "../../features/relay/profile-directory";
 import {
@@ -27,9 +27,9 @@ import {
   publicKeyLabels,
 } from "../../shared/identity/public-key";
 import { foldProfiles } from "../../features/relay/profiles";
-import { StrictMode } from "react";
+import { StrictMode, useState, useSyncExternalStore } from "react";
 import { createSession, SessionProvider, useWrite } from "./session";
-import { createStaff, type StaffTarget } from "./staff";
+import { createStaff, type Staff, type StaffTarget } from "./staff";
 
 const signer = "a".repeat(64);
 const member = "b".repeat(64);
@@ -98,12 +98,43 @@ const backend: RelayStaffBackend = {
   },
 };
 
+/** Settings, reduced to the plugin's visible entries and the open one. */
+function Entries({ staff }: { staff: Staff }) {
+  const [entries] = useState(() => cards(staff, (node) => node));
+  useSyncExternalStore(staff.subscribe, () =>
+    entries.map((entry) => entry.visibility?.snapshot()).join(),
+  );
+  const shown = entries.filter(
+    (entry) => entry.visibility?.snapshot() === true,
+  );
+  const [open, setOpen] = useState("reports");
+  const entry = shown.find((e) => e.id === open) ?? shown[0];
+  return (
+    <>
+      <div role="tablist" aria-label="Settings">
+        {shown.map((e) => (
+          <button
+            key={e.id}
+            type="button"
+            role="tab"
+            aria-selected={e === entry}
+            onClick={() => setOpen(e.id)}
+          >
+            {e.title}
+          </button>
+        ))}
+      </div>
+      {entry && <entry.component key={entry.id} active={() => true} />}
+    </>
+  );
+}
+
 function mount() {
   const staff = createStaff(backend, () => ({ relay, signer }));
   staff.ensure();
   const view = (
     <ToastProvider>
-      <RelayStaff staff={staff} active={() => true} />
+      <Entries staff={staff} />
     </ToastProvider>
   );
   return { staff, ...render(view), view };
@@ -171,7 +202,7 @@ it("remembers the role for the same identity and admin host", async () => {
   cleanup();
   render(
     <ToastProvider>
-      <RelayStaff staff={staff} active={() => true} />
+      <Entries staff={staff} />
     </ToastProvider>,
   );
   await screen.findByText(/Connected as moderator/);
@@ -187,18 +218,14 @@ it("re-probes after an authorization loss", async () => {
 it("shows Operators only to operators and lists reports deployment-wide", async () => {
   mount();
   await screen.findByRole("tab", { name: "Reports" });
-  expect(
-    screen.queryByRole("tab", { name: "Operators" }),
-  ).not.toBeInTheDocument();
+  expect(screen.queryByRole("tab", { name: "Staff" })).not.toBeInTheDocument();
   await waitFor(() =>
     expect(sent("listReports")[0]).toMatchObject({ query: { scope: "all" } }),
   );
   cleanup();
   routes.probe = () => probe({ role: "operator", canStaff: true });
   mount();
-  expect(
-    await screen.findByRole("tab", { name: "Operators" }),
-  ).toBeInTheDocument();
+  expect(await screen.findByRole("tab", { name: "Staff" })).toBeInTheDocument();
 });
 
 it("auth-disabled relays are read-only", async () => {
@@ -236,7 +263,7 @@ it("never sends a pasted secret key as a search", async () => {
   expect(sent("listCommunities")).toHaveLength(before);
 });
 
-it("an unresolved direct action keeps its request id across leaving the page", async () => {
+it("an unresolved direct action keeps its request id after moving to another entry and back", async () => {
   let first = true;
   routes.directAction = () => {
     if (first) {
@@ -249,10 +276,11 @@ it("an unresolved direct action keeps its request id across leaving the page", a
   await openCommunityActions();
   fireEvent.click(await screen.findByRole("button", { name: "Confirm" }));
   await screen.findByRole("button", { name: "Retry" });
-  // Leave the community page and come back: the reviewed action survives.
-  // The console's own Reports tab comes before the community's Reports section.
+  // Move to the Reports entry and back: the held action survives.
   fireEvent.click(
-    screen.getAllByRole("tab", { name: "Reports" })[0] as HTMLElement,
+    within(screen.getByRole("tablist", { name: "Settings" })).getByRole("tab", {
+      name: "Reports",
+    }),
   );
   fireEvent.click(screen.getByRole("tab", { name: "Communities" }));
   fireEvent.click(
@@ -523,7 +551,7 @@ it("config-backed staff can't be removed, and removing yourself re-probes", asyn
     ]);
   routes.deleteOperator = () => ok({ deleted: signer });
   mount();
-  fireEvent.click(await screen.findByRole("tab", { name: "Operators" }));
+  fireEvent.click(await screen.findByRole("tab", { name: "Staff" }));
   await waitFor(() =>
     expect(screen.getAllByRole("button", { name: "Remove" })).toHaveLength(2),
   );
@@ -554,7 +582,7 @@ function mountSwitchable(local: RelayStaffBackend = backend) {
   staff.ensure();
   const card = () => (
     <ToastProvider>
-      <RelayStaff staff={staff} active={() => true} />
+      <Entries staff={staff} />
     </ToastProvider>
   );
   const view = render(card());
@@ -767,7 +795,7 @@ it("operators on a read-only relay can't add, change or remove staff", async () 
       },
     ]);
   mount();
-  fireEvent.click(await screen.findByRole("tab", { name: "Operators" }));
+  fireEvent.click(await screen.findByRole("tab", { name: "Staff" }));
   await screen.findByText("moderator");
   expect(screen.queryByText("Add staff")).toBeNull();
   expect(screen.queryByRole("button", { name: "Remove" })).toBeNull();
@@ -890,7 +918,7 @@ it("a late read for an earlier community is dropped", async () => {
   );
   fireEvent.click(screen.getByRole("tab", { name: "Restrictions" }));
   await late.started();
-  fireEvent.click(screen.getByRole("button", { name: "Back to communities" }));
+  fireEvent.click(screen.getByRole("button", { name: "Back" }));
   fireEvent.click(
     await screen.findByRole("button", { name: /two\.example\.com/ }),
   );
@@ -1064,7 +1092,7 @@ it("an identity switch publishes a context change", async () => {
   staff.ensure();
   render(
     <ToastProvider>
-      <RelayStaff staff={staff} active={() => true} />
+      <Entries staff={staff} />
     </ToastProvider>,
   );
   await screen.findByText(/Connected as moderator/);
@@ -1093,7 +1121,7 @@ it("the same admin origin does not keep the old discovery relay", async () => {
   staff.ensure();
   const view = (
     <ToastProvider>
-      <RelayStaff staff={staff} active={() => true} />
+      <Entries staff={staff} />
     </ToastProvider>
   );
   const { rerender } = render(view);
@@ -1106,7 +1134,7 @@ it("the same admin origin does not keep the old discovery relay", async () => {
   // Give the component an explicit parent rerender too, as Settings may do.
   rerender(
     <ToastProvider>
-      <RelayStaff staff={staff} active={() => true} />
+      <Entries staff={staff} />
     </ToastProvider>,
   );
   fireEvent.click(await screen.findByRole("tab", { name: "Communities" }));
@@ -1193,14 +1221,14 @@ it("an operator rejection after reopening reaches the active view", async () => 
       release = resolve;
     });
   const { reopen } = mountSwitchable();
-  fireEvent.click(await screen.findByRole("tab", { name: "Operators" }));
+  fireEvent.click(await screen.findByRole("tab", { name: "Staff" }));
   fireEvent.change(await screen.findByLabelText("Public key"), {
     target: { value: member },
   });
   fireEvent.click(screen.getByRole("button", { name: "Add" }));
   await waitFor(() => expect(release).toBeTypeOf("function"));
   reopen();
-  fireEvent.click(await screen.findByRole("tab", { name: "Operators" }));
+  fireEvent.click(await screen.findByRole("tab", { name: "Staff" }));
   await screen.findByText("No staff configured.");
   await act(async () => release(fail({ message: "Operator change refused" })));
   await screen.findByText("Operator change refused");
@@ -1247,7 +1275,7 @@ it("operator changes without a request id start fresh each time", async () => {
   routes.listOperators = () => ok([]);
   routes.putOperator = () => fail({ message: "Operator change refused" });
   mount();
-  fireEvent.click(await screen.findByRole("tab", { name: "Operators" }));
+  fireEvent.click(await screen.findByRole("tab", { name: "Staff" }));
   fireEvent.change(await screen.findByLabelText("Public key"), {
     target: { value: member },
   });
@@ -1293,7 +1321,7 @@ it("an operator result finished while closed is delivered once on next mount", a
   routes.listOperators = () => ok([]);
   const late = holdNext("putOperator", () => fail({}));
   const { reopen } = mountSwitchable();
-  fireEvent.click(await screen.findByRole("tab", { name: "Operators" }));
+  fireEvent.click(await screen.findByRole("tab", { name: "Staff" }));
   fireEvent.change(await screen.findByLabelText("Public key"), {
     target: { value: member },
   });
@@ -1302,10 +1330,10 @@ it("an operator result finished while closed is delivered once on next mount", a
   cleanup();
   await late.release(fail({ message: "Finished while closed" }));
   reopen();
-  fireEvent.click(await screen.findByRole("tab", { name: "Operators" }));
+  fireEvent.click(await screen.findByRole("tab", { name: "Staff" }));
   expect(await screen.findByText("Finished while closed")).toBeVisible();
   reopen();
-  fireEvent.click(await screen.findByRole("tab", { name: "Operators" }));
+  fireEvent.click(await screen.findByRole("tab", { name: "Staff" }));
   await screen.findByText("No staff configured.");
   expect(screen.queryByText("Finished while closed")).toBeNull();
 });
@@ -1315,19 +1343,19 @@ it("only the original context claims a finished operator attempt", async () => {
   routes.listOperators = () => ok([]);
   const late = holdNext("putOperator", () => fail({}));
   const { select } = mountSwitchable();
-  fireEvent.click(await screen.findByRole("tab", { name: "Operators" }));
+  fireEvent.click(await screen.findByRole("tab", { name: "Staff" }));
   fireEvent.change(await screen.findByLabelText("Public key"), {
     target: { value: member },
   });
   fireEvent.click(screen.getByRole("button", { name: "Add" }));
   await late.started();
   await select({ signer: member });
-  fireEvent.click(await screen.findByRole("tab", { name: "Operators" }));
+  fireEvent.click(await screen.findByRole("tab", { name: "Staff" }));
   await screen.findByText("No staff configured.");
   await late.release(fail({ message: "Original context only" }));
   expect(screen.queryByText("Original context only")).toBeNull();
   await select({ signer });
-  fireEvent.click(await screen.findByRole("tab", { name: "Operators" }));
+  fireEvent.click(await screen.findByRole("tab", { name: "Staff" }));
   expect(await screen.findByText("Original context only")).toBeVisible();
 });
 
@@ -1557,7 +1585,7 @@ it("people show their profile name with the short key, never the raw key", async
   render(
     <ToastProvider>
       <ProfilesContext.Provider value={profiles}>
-        <RelayStaff staff={staff} active={() => true} />
+        <Entries staff={staff} />
       </ProfilesContext.Provider>
     </ToastProvider>,
   );
@@ -1662,7 +1690,7 @@ function mountWithProfiles(
   return render(
     <ToastProvider>
       <ProfilesContext.Provider value={profiles}>
-        <RelayStaff staff={staff} active={() => true} />
+        <Entries staff={staff} />
       </ProfilesContext.Provider>
     </ToastProvider>,
   );
@@ -1754,7 +1782,7 @@ it("operator and restriction dialogs repeat the row's distinct label", async () 
       })),
     );
   mountWithProfiles(twins);
-  fireEvent.click(await screen.findByRole("tab", { name: "Operators" }));
+  fireEvent.click(await screen.findByRole("tab", { name: "Staff" }));
   expect(
     await screen.findByLabelText(`Role for Bob (${longA})`),
   ).toBeInTheDocument();
@@ -1934,4 +1962,68 @@ it("feedback list fetches every unknown submitter in one batch", async () => {
   const batch = ensured.filter((ids) => keys.some((k) => ids.includes(k)));
   expect(batch).toHaveLength(1);
   expect(new Set(batch[0])).toEqual(new Set(keys));
+});
+
+it("operators get four entries, moderators three, and relays without an admin host none", async () => {
+  const titles = async (staff: Staff) => {
+    await waitFor(() => expect(staff.visible()).toBe(true));
+    const context = staff.context();
+    if (context) await staff.probe(context);
+    return cards(staff, (node) => node)
+      .filter((card) => card.visibility?.snapshot() === true)
+      .map((card) => card.title);
+  };
+  routes.probe = () => probe({ role: "operator", canStaff: true });
+  const operator = createStaff(backend, () => ({ relay, signer }));
+  operator.ensure();
+  expect(await titles(operator)).toEqual([
+    "Reports",
+    "Feedback",
+    "Communities",
+    "Staff",
+  ]);
+  for (const card of cards(operator, (node) => node))
+    expect(card.group).toBe("Relay admin");
+
+  routes.probe = () => probe();
+  const moderator = createStaff(backend, () => ({ relay, signer }));
+  moderator.ensure();
+  expect(await titles(moderator)).toEqual([
+    "Reports",
+    "Feedback",
+    "Communities",
+  ]);
+
+  const none = createStaff({ ...backend, discover: async () => null }, () => ({
+    relay,
+    signer,
+  }));
+  none.ensure();
+  await waitFor(() => expect(none.visible()).toBe(false));
+  expect(
+    cards(none, (node) => node).filter(
+      (card) => card.visibility?.snapshot() === true,
+    ),
+  ).toEqual([]);
+});
+
+it("a report's community badge opens that community in the same entry, and Back returns", async () => {
+  routes.listReports = () => ok([report]);
+  mount();
+  fireEvent.click(
+    await screen.findByRole("button", { name: /team\.example\.com/ }),
+  );
+  expect(
+    await screen.findByRole("tab", { name: "Restrictions" }),
+  ).toBeInTheDocument();
+  expect(
+    within(screen.getByRole("tablist", { name: "Settings" })).getByRole("tab", {
+      name: "Reports",
+    }),
+  ).toHaveAttribute("aria-selected", "true");
+  fireEvent.click(screen.getByRole("button", { name: "Back" }));
+  expect(await screen.findByRole("button", { name: /spam/ })).toBeVisible();
+  expect(
+    screen.queryByRole("tab", { name: "Restrictions" }),
+  ).not.toBeInTheDocument();
 });

@@ -130,12 +130,7 @@ export function CommunityPage({
   return (
     <div className="flex flex-col gap-3">
       <div className="flex flex-wrap items-center gap-2 rounded-md border px-3 py-2">
-        <Button
-          size="sm"
-          variant="ghost"
-          aria-label="Back to communities"
-          onClick={onBack}
-        >
+        <Button size="sm" variant="ghost" aria-label="Back" onClick={onBack}>
           <ArrowLeftIcon />
         </Button>
         <CommunityBadge id={community.id} host={community.host} />

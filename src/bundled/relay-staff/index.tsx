@@ -1,12 +1,17 @@
+import type { ReactNode } from "react";
 import { communityDestination } from "../../features/communities/destination";
 import { nativeRelayStaff } from "../../features/relay-staff/native";
+import type { SettingsCard } from "../../features/settings/service";
 import type { PluginModule } from "../../plugins/api";
-import { ShieldIcon } from "../../shared/design-system/icons";
 import { useRelayConnection } from "../../features/relay/react";
 import type { RelayData } from "../../features/relay/service";
+import { SCREENS, type Screen } from "./Console";
 import { ProfilesContext } from "./people";
 import { RelayStaff } from "./RelayStaff";
-import { createStaff } from "./staff";
+import { createStaff, type Staff } from "./staff";
+
+/** The Settings group for every relay-wide staff entry. */
+export const GROUP = "Relay admin";
 
 export const inject = ["relay", "settingsCards", "communityReader"];
 export const apply: PluginModule["apply"] = (ctx) => {
@@ -21,23 +26,34 @@ export const apply: PluginModule["apply"] = (ctx) => {
     }
   });
   ctx.effect(() => reader.subscribe(staff.refresh));
-  ctx.settingsCards.register({
-    id: "console",
-    title: "Relay staff",
-    icon: ShieldIcon,
-    section: "administration",
+  for (const card of cards(staff, (node) => (
+    <WithProfiles relay={ctx.relay}>{node}</WithProfiles>
+  )))
+    ctx.settingsCards.register(card);
+};
+
+/**
+ * One Settings entry per screen, all sharing `staff`, so a held write and its
+ * request id outlive moving between entries. Staff is for operators only.
+ */
+export function cards(
+  staff: Staff,
+  wrap: (node: ReactNode) => ReactNode,
+): SettingsCard[] {
+  return (Object.keys(SCREENS) as Screen[]).map((screen) => ({
+    id: screen,
+    title: SCREENS[screen].title,
+    icon: SCREENS[screen].icon,
+    group: GROUP,
     visibility: {
-      snapshot: staff.visible,
+      snapshot: screen === "staff" ? staff.operatorVisible : staff.visible,
       subscribe: staff.subscribe,
       ensure: staff.ensure,
     },
-    component: ({ active }) => (
-      <WithProfiles relay={ctx.relay}>
-        <RelayStaff staff={staff} active={active} />
-      </WithProfiles>
-    ),
-  });
-};
+    component: ({ active }) =>
+      wrap(<RelayStaff staff={staff} screen={screen} active={active} />),
+  }));
+}
 
 /** Names come from the connected community's profiles; reconnecting replaces them. */
 function WithProfiles({
@@ -45,7 +61,7 @@ function WithProfiles({
   children,
 }: {
   relay: RelayData;
-  children: React.ReactNode;
+  children: ReactNode;
 }) {
   const { session } = useRelayConnection(relay);
   return (

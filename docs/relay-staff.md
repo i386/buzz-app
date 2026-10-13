@@ -1,9 +1,12 @@
-# Relay staff console
+# Relay admin
 
 `buzz.relay-staff` is an enabled-by-default bundled Settings plugin. Settings →
-Plugins can disable it. It contributes the `console` card to the selected
-community's administration section through `ctx.settingsCards.register`, and
-reads the selected community and viewer from `communityReader`.
+Plugins can disable it. Through `ctx.settingsCards.register` it contributes
+four entries to a "Relay admin" Settings group: `reports`, `feedback`,
+`communities` and `staff`. They act on the selected community's relay, which
+each entry's header names, and read the selected community and viewer from
+`communityReader`. All four share one store, so a held write and its request
+id survive moving between entries.
 
 The plugin owns the UI only. Every admin request goes through the native admin
 client in `src-tauri/src/relay_admin/` (contract in
@@ -14,13 +17,15 @@ connection" section of [identity.md](identity.md) for the address rules.
 
 ## Visibility and access
 
-1. The card appears only when the selected relay's NIP-11 advertises an
-   `admin_api` host. Discovery is unsigned.
-2. Opening the card sends the first signed request, `probe`. Its result is
-   remembered per (identity, admin host): reopening the card does not probe
-   again. The card follows the selected community's relay and the signed-in
+1. Reports, Feedback and Communities appear only when the selected relay's
+   NIP-11 advertises an `admin_api` host. Discovery is unsigned. Staff also
+   needs a remembered `operator` role, so it appears once an open entry's
+   probe has run.
+2. Opening an entry sends the first signed request, `probe`. Its result is
+   remembered per (identity, admin host): opening another entry does not probe
+   again. The entries follow the selected community's relay and the signed-in
    identity; changing either one, including an identity switch on the same
-   relay, replaces the console and probes for the new identity unless its role
+   relay, replaces the open screen and probes for the new identity unless its role
    is already remembered.
 3. A 401 or 403, from the relay or a gateway in front of it, on any signed request the console sends (reads, writes,
    attachment previews and Save) re-probes in the background. An unchanged
@@ -34,6 +39,9 @@ connection" section of [identity.md](identity.md) for the address rules.
 6. Browser and dev-broker builds show that the console needs the desktop app.
 
 ## Screens
+
+A community badge on a report or feedback item opens that community's page
+inside the current entry; Back returns to the list.
 
 - **Reports**: the whole deployment's queue (`scope=all`), grouped by community,
   with a status filter. A report offers only the actions its target allows
@@ -50,7 +58,7 @@ connection" section of [identity.md](identity.md) for the address rules.
   community pinned and cursor paging. Each community page has Reports,
   Restrictions (lift a ban, clear a timeout), Members and Actions (ban, timeout,
   delete a message after an event preview).
-- **Operators** (operators only): add, change and remove staff. Staff set in
+- **Staff** (operators only): add, change and remove staff. Staff set in
   relay configuration can't be changed here, and a read-only relay shows the
   list without any controls. Changing your own entry re-probes.
 

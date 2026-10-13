@@ -78,17 +78,30 @@ export function createStaff(
     return now && `${key(now)} ${now.relay}`;
   };
 
+  /** Settings visibility: shown only when the relay advertises an admin host. */
+  const visible = (): boolean | "pending" | "error" => {
+    const origin = discovery?.origin;
+    if (!origin || origin === "pending") return origin ? "pending" : false;
+    return origin === "error" ? "error" : true;
+  };
+
   return {
     backend,
     subscribe(listener: () => void) {
       listeners.add(listener);
       return () => listeners.delete(listener);
     },
-    /** Settings visibility: shown only when the relay advertises an admin host. */
-    visible(): boolean | "pending" | "error" {
-      const origin = discovery?.origin;
-      if (!origin || origin === "pending") return origin ? "pending" : false;
-      return origin === "error" ? "error" : true;
+    visible,
+    /**
+     * The Staff entry: operators only. The role comes from the signed probe
+     * an open entry sends, so Staff stays hidden until one has run.
+     */
+    operatorVisible(): boolean | "pending" | "error" {
+      const shown = visible();
+      if (shown !== true) return shown;
+      const now = context();
+      const known = now && access.get(key(now));
+      return known?.state === "authorized" && known.probe.role === "operator";
     },
     ensure() {
       retained++;
