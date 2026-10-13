@@ -1337,9 +1337,30 @@ it("rejects a save that agent storage could not write, and saves it on retry", a
   ).rejects.toThrow("disk full");
   error.mockRestore();
   expect(disk.get(`buzz.agent.v1:${bot}`)).not.toContain("unsaved");
+  // The agent shows what is saved, so a settings form's draft differs from it
+  // again and its Save is enabled.
+  expect(service.find(bot)?.config).toEqual({ reply: "ok" });
   failing = false;
   await service.save(bot, { config: { reply: "unsaved" } });
   expect(disk.get(`buzz.agent.v1:${bot}`)).toContain("unsaved");
+  expect(service.find(bot)?.config).toEqual({ reply: "unsaved" });
+});
+
+it("shows the saved teams after a team save agent storage could not write", async () => {
+  let failing = false;
+  const storage = fileBacked(new Map(), async () => {
+    if (failing) throw new Error("disk full");
+  });
+  const { service } = await setup({ storage });
+  await service.create({ type: "example/echo", name: "Echo" });
+  await service.saveTeam({ name: "Crew", instructions: "", members: [bot] });
+  failing = true;
+  const error = vi.spyOn(console, "error").mockImplementation(() => {});
+  await expect(
+    service.saveTeam({ name: "Solo", instructions: "", members: [bot] }),
+  ).rejects.toThrow("disk full");
+  error.mockRestore();
+  expect(service.snapshot().teams.map((team) => team.name)).toEqual(["Crew"]);
 });
 
 it("saves nothing when native create fails", async () => {
@@ -2993,6 +3014,40 @@ it("lets a run read and write its attention with expected-state tokens", async (
       { expected: shown.expected_state },
     ),
   ).rejects.toThrow(/^conflict:/);
+});
+
+it("fails an agent's attention write that agent storage could not save, and keeps the saved value", async () => {
+  let failing = false;
+  const storage = fileBacked(new Map(), async () => {
+    if (failing) throw new Error("disk full");
+  });
+  const { service, run, emit } = await setup({ storage });
+  await service.create({ type: "example/echo", name: "Echo" });
+  await service.save(bot, { attentionEnabled: true });
+  const { attention } = await handleOf(run, emit);
+  const shown = await attention.show("interest/default");
+  failing = true;
+  const error = vi.spyOn(console, "error").mockImplementation(() => {});
+  await expect(
+    attention.write(
+      "interest/default",
+      { type: "interest", instructions: "Unsaved." },
+      { expected: shown.expected_state },
+    ),
+  ).rejects.toThrow("disk full");
+  error.mockRestore();
+  expect(await attention.show("interest/default")).toEqual(shown);
+  expect(service.find(bot)?.attention["interest/default"]?.value).toEqual({
+    type: "interest",
+    instructions: "Be brief.",
+  });
+  failing = false;
+  const written = await attention.write(
+    "interest/default",
+    { type: "interest", instructions: "Saved." },
+    { expected: shown.expected_state },
+  );
+  expect(written.object).toMatchObject({ instructions: "Saved." });
 });
 
 it("keeps attention off across a reload", async () => {

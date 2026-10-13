@@ -166,8 +166,11 @@ export type RunnerHost = {
   saved(pubkey: string): AgentRecord | undefined;
   /** Its record as its attention handle reads it; throws once it is gone. */
   record(pubkey: string): AgentRecord;
-  /** Saves one record; throws when storage refuses it. */
-  write(record: AgentRecord): void;
+  /** Saves one record; rejects when it was not saved. */
+  write(record: AgentRecord): Promise<void>;
+  /** Saves timers' progress. It stays in memory even if the save later fails,
+   * so a timer does not run again at once; throws when storage refuses it. */
+  progress(record: AgentRecord): void;
   /** The team sections of its prompt; empty without a team. */
   team(pubkey: string): string;
   /** Whether watch classifiers can run here. */
@@ -469,7 +472,7 @@ export class AgentRunners {
     if (next && ran) timers = { ...timers, [next.slug]: ran };
     if (timers !== prior)
       try {
-        this.host.write({ ...record, timers });
+        this.host.progress({ ...record, timers });
       } catch (error) {
         // Unsaved, it would run again at once; it waits for storage instead.
         console.warn(`Agent ${agent.name} timer state was not saved`, error);
@@ -775,7 +778,7 @@ export class AgentRunners {
               `${slug} is changing; show it again`,
             );
           }
-          this.host.write(after);
+          await this.host.write(after);
           return show(after, slug, seconds());
         }
       },

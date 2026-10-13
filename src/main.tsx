@@ -18,7 +18,8 @@ if (!container) {
 }
 
 // Agent storage is read before any service, since its reads are synchronous.
-void loadAgentStorage().then(() => {
+// It settles, with localStorage at worst, so the window always starts.
+void loadAgentStorage().finally(() => {
   const services = createServices();
   const root = createRoot(container);
   function HostApp() {

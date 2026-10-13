@@ -6,16 +6,32 @@
 //! One file per key, each replaced whole through a rename, so a crash leaves
 //! the last complete copy, and two programs that write different keys never
 //! overwrite each other. The `hosts/` locks decide which program runs an agent.
+//!
+//! A file's name is its key, encoded. A key whose encoded name is too long for
+//! the file system gets a fixed-length name instead, `~` and the SHA-256 of the
+//! key, and its file holds `{"key": …, "value": …}` so `load` can recover it.
 use std::collections::HashMap;
 use std::fs;
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
+
+use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 
 /// The largest value kept, as an upper bound on what `localStorage` held.
 const VALUE_LIMIT: usize = 4 * 1024 * 1024;
 /// The longest file name macOS, Linux and Windows all allow, in bytes.
 const NAME_LIMIT: usize = 255;
 const TEMPORARY: &str = ".tmp";
+/// Starts the name of a file that holds its key. `encode` never writes `~`.
+const HASHED: char = '~';
+
+/// The contents of a file whose name is a hash of its key.
+#[derive(Serialize, Deserialize)]
+struct Hashed<'a> {
+    key: std::borrow::Cow<'a, str>,
+    value: std::borrow::Cow<'a, str>,
+}
 
 pub(crate) struct AgentState {
     dir: Result<PathBuf, String>,
@@ -42,11 +58,26 @@ impl AgentState {
         let mut items = HashMap::new();
         for entry in entries.flatten() {
             let name = entry.file_name();
-            let Some(key) = name.to_str().and_then(decode) else {
+            let Some(name) = name.to_str() else { continue };
+            let key = decode(name);
+            if key.is_none() && !name.starts_with(HASHED) {
+                continue;
+            }
+            let Ok(text) = fs::read_to_string(entry.path()) else {
                 continue;
             };
-            if let Ok(value) = fs::read_to_string(entry.path()) {
-                items.insert(key, value);
+            match key {
+                Some(key) => {
+                    items.insert(key, text);
+                }
+                None => {
+                    // Skip a file whose key does not give its name.
+                    if let Ok(saved) = serde_json::from_str::<Hashed>(&text) {
+                        if file_name(&saved.key) == name {
+                            items.insert(saved.key.into_owned(), saved.value.into_owned());
+                        }
+                    }
+                }
             }
         }
         Ok(items)
@@ -54,12 +85,12 @@ impl AgentState {
 
     /// Saves `value` under `key`, or removes the key when `value` is `None`.
     pub(crate) fn set(&self, key: &str, value: Option<&str>) -> Result<(), String> {
-        // The limit is on the file name, after `encode` lengthens the key.
-        if key.is_empty() || encode(key).len() > NAME_LIMIT {
+        if key.is_empty() {
             return Err("Invalid agent state key".into());
         }
         let dir = self.dir()?;
-        let path = dir.join(encode(key));
+        let name = file_name(key);
+        let path = dir.join(&name);
         let Some(value) = value else {
             return match fs::remove_file(&path) {
                 Err(error) if error.kind() != ErrorKind::NotFound => {
@@ -71,18 +102,39 @@ impl AgentState {
         if value.len() > VALUE_LIMIT {
             return Err("Agent state is too large".into());
         }
+        let hashed;
+        let contents = if name.starts_with(HASHED) {
+            hashed = serde_json::to_string(&Hashed {
+                key: key.into(),
+                value: value.into(),
+            })
+            .map_err(|_| "Could not save agent state")?;
+            hashed.as_str()
+        } else {
+            value
+        };
         let saved = (|| {
             fs::create_dir_all(dir)?;
             let mut file = tempfile::Builder::new()
                 .suffix(TEMPORARY)
                 .tempfile_in(dir)?;
-            std::io::Write::write_all(&mut file, value.as_bytes())?;
+            std::io::Write::write_all(&mut file, contents.as_bytes())?;
             file.as_file().sync_all()?;
             file.persist(&path).map_err(|error| error.error)?;
             Ok::<_, std::io::Error>(())
         })();
         saved.map_err(|_| "Could not save agent state".into())
     }
+}
+
+/// The file `key` is saved in: its encoded name, or `~` and the key's SHA-256
+/// when that name is too long.
+pub(crate) fn file_name(key: &str) -> String {
+    let name = encode(key);
+    if name.len() <= NAME_LIMIT {
+        return name;
+    }
+    format!("{HASHED}{:x}", Sha256::digest(key.as_bytes()))
 }
 
 /// A file name for `key`: bytes other than `A-Z a-z 0-9 . _ -` become `%XX`.
@@ -178,9 +230,47 @@ mod tests {
         state.set("missing", None).unwrap();
         assert_eq!(state.load().unwrap().keys().collect::<Vec<_>>(), ["two"]);
         assert!(state.set("", Some("x")).is_err());
-        assert!(state.set(&"k".repeat(NAME_LIMIT + 1), Some("x")).is_err());
-        assert!(state.set(&":".repeat(86), Some("x")).is_err());
         state.set(&"k".repeat(NAME_LIMIT), Some("x")).unwrap();
+        assert!(root
+            .path()
+            .join("state")
+            .join("k".repeat(NAME_LIMIT))
+            .exists());
+    }
+
+    #[test]
+    fn saves_keys_whose_names_are_too_long_under_a_hash() {
+        let root = tempfile::tempdir().unwrap();
+        let dir = root.path().join("state");
+        let state = AgentState::new(Ok(dir.clone()));
+        // 251 bytes, as Codex names it for a community on a 95-character host;
+        // `encode` makes it 263.
+        let key = format!(
+            "buzz.codex.sessions.v4:https://agents.production.us-west-2.buzz-workspace.platform.engineering.internal.tools.example.com:{}:{}",
+            "a".repeat(64),
+            "b".repeat(64),
+        );
+        assert_eq!(key.len(), 251);
+        assert!(encode(&key).len() > NAME_LIMIT);
+        for key in [key.as_str(), &":".repeat(86), &"k".repeat(NAME_LIMIT + 1)] {
+            state.set(key, Some("{\"a\":1}")).unwrap();
+            let name = file_name(key);
+            assert!(name.starts_with(HASHED) && name.len() == 65, "{name}");
+            assert!(dir.join(&name).exists());
+            assert_eq!(state.load().unwrap()[key], "{\"a\":1}");
+            state.set(key, Some("2")).unwrap();
+            assert_eq!(state.load().unwrap()[key], "2");
+            state.set(key, None).unwrap();
+            assert!(!state.load().unwrap().contains_key(key));
+        }
+        // A hashed file whose key does not give its name is not loaded.
+        fs::write(
+            dir.join(format!("{HASHED}{}", "0".repeat(64))),
+            r#"{"key":"other","value":"x"}"#,
+        )
+        .unwrap();
+        fs::write(dir.join(format!("{HASHED}bad")), "not json").unwrap();
+        assert!(state.load().unwrap().is_empty());
     }
 
     #[test]

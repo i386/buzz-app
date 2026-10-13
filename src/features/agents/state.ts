@@ -48,45 +48,60 @@ const native: Native = {
 };
 
 /** Reads agent storage before the app starts. It moves agent state the app
- * kept in localStorage into it: each key it does not have yet. If agent storage
- * cannot be read, the app keeps using localStorage. */
+ * kept in localStorage into it. Agent keys are in localStorage only before
+ * the first move, or when an earlier start could not use agent storage, so
+ * they are the newer copy and replace what agent storage has. They leave
+ * localStorage only once every one is saved; if agent storage cannot be read,
+ * a copy fails, or this takes longer than `timeoutMs`, the app uses
+ * localStorage until the next start. */
 export async function loadAgentStorage(
   local: Storage = globalThis.localStorage,
   files: Native | undefined = isTauri() ? native : undefined,
+  timeoutMs = 15_000,
 ): Promise<Storage> {
   if (!files) return local;
-  let items: Record<string, string>;
+  let late = false;
+  const move = async () => {
+    const storage = fileBacked(
+      new Map(Object.entries(await files.load())),
+      files.set,
+    );
+    const moved: string[] = [];
+    for (let index = 0; index < local.length; index++) {
+      const key = local.key(index);
+      if (key && isAgentKey(key)) moved.push(key);
+    }
+    for (const key of moved) {
+      const value = local.getItem(key);
+      if (value !== null && storage.getItem(key) !== value) {
+        storage.setItem(key, value);
+      }
+    }
+    await storage.saved();
+    // Too late: the app already started with localStorage, which keeps them.
+    if (late) throw new Error("Agent storage took too long");
+    for (const key of moved) local.removeItem(key);
+    loaded = storage;
+    return storage;
+  };
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => {
+      late = true;
+      reject(new Error("Agent storage took too long"));
+    }, timeoutMs);
+  });
   try {
-    items = await files.load();
+    return await Promise.race([move(), timeout]);
   } catch (error) {
     console.error(
-      "Agent storage could not be read; using this window's",
+      "Agent storage could not be used; using this window's",
       error,
     );
     return local;
+  } finally {
+    clearTimeout(timer);
   }
-  const storage = fileBacked(new Map(Object.entries(items)), files.set);
-  const moved: string[] = [];
-  for (let index = 0; index < local.length; index++) {
-    const key = local.key(index);
-    if (key && isAgentKey(key)) moved.push(key);
-  }
-  for (const key of moved) {
-    const value = local.getItem(key);
-    if (value === null) continue;
-    try {
-      if (storage.getItem(key) === null) {
-        storage.setItem(key, value);
-        await storage.saved(key);
-      }
-      local.removeItem(key);
-    } catch (error) {
-      // Kept in localStorage, so the next start tries again.
-      console.error(`Agent state ${key} could not be moved`, error);
-    }
-  }
-  loaded = storage;
-  return storage;
 }
 
 type FileBacked = Storage & {

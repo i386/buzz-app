@@ -70,6 +70,7 @@ import {
 } from "./native";
 import {
   persisted,
+  readOne,
   readRecords,
   recordKey,
   readTeams,
@@ -729,9 +730,10 @@ export class AgentsService extends Service implements Agents {
         if (!identity) throw new Error("No such agent on this device");
         return this.recordOf(identity);
       },
-      // A failed save logs; the run's memory keeps it from running again.
-      write: (record) => {
-        void this.write(record).catch((error) =>
+      write: (record) => this.write(record),
+      // A failed save logs; memory keeps it, so the timer does not run again.
+      progress: (record) => {
+        void this.write(record, true).catch((error) =>
           console.warn(`Agent ${record.pubkey} state was not saved`, error),
         );
       },
@@ -1326,13 +1328,21 @@ export class AgentsService extends Service implements Agents {
   }
 
   /** Saves the teams; memory changes once storage has taken them, and the
-   * promise settles once they are saved. */
+   * promise settles once they are saved. When the save fails, memory goes
+   * back to the teams storage still has. */
   private writeTeams(teams: readonly Team[]) {
     writeTeams(this.storage, teams);
+    const shown = this.showTeams(teams);
+    return persisted(this.storage, TEAMS_KEY).catch((error) => {
+      if (this.teamList === shown) this.showTeams(readTeams(this.storage));
+      throw error;
+    });
+  }
+  private showTeams(teams: readonly Team[]) {
     this.teamList = Object.freeze(teams);
     this.state = Object.freeze({ ...this.state, teams: this.teamList });
     this.notify();
-    return persisted(this.storage, TEAMS_KEY);
+    return this.teamList;
   }
 
   /** Saves the unfinished setups; memory changes only once storage has them. */
@@ -1542,14 +1552,26 @@ export class AgentsService extends Service implements Agents {
   }
 
   /** Saves one record; memory changes once storage has taken it, and the
-   * promise settles once it is saved. A failed save keeps memory as it is:
-   * an agent's timers must not run again because their progress was lost. */
-  private write(record: AgentRecord) {
+   * promise settles once it is saved. When the save fails, memory goes back
+   * to what storage still has, so the owner and the agent see the change was
+   * not made, unless `keep`: timer progress stays, so a timer whose progress
+   * was lost does not run again at once. */
+  private write(record: AgentRecord, keep = false) {
+    const { pubkey } = record;
     // Only this agent's key: others may be another program's to change.
     writeRecord(this.storage, record);
-    this.records = { ...this.records, [record.pubkey]: record };
+    this.records = { ...this.records, [pubkey]: record };
     this.update();
-    return persisted(this.storage, recordKey(record.pubkey));
+    return persisted(this.storage, recordKey(pubkey)).catch((error) => {
+      // Unless a later write replaced it, which settles on its own.
+      if (!keep && this.records[pubkey] === record) {
+        const { [pubkey]: _, ...others } = this.records;
+        const saved = readOne(this.storage, pubkey);
+        this.records = saved ? { ...others, [pubkey]: saved } : others;
+        this.update();
+      }
+      throw error;
+    });
   }
   private live(pubkey: string) {
     return this.identities.find(
