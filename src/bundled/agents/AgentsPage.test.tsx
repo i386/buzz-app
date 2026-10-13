@@ -964,12 +964,24 @@ it("lists old teams apart from agents, and imports one as a team", async () => {
 
 it("keeps a team whose members are all here importable with no agents to list", async () => {
   const user = userEvent.setup();
-  const { agents } = setup([]);
+  const bea = { ...agent("Bea", 2), pubkey: "b".repeat(64) };
+  const cy = { ...agent("Cy", 3), pubkey: "c".repeat(64) };
+  const { agents } = setup([bea, cy]);
   agents.portable.mockResolvedValueOnce({
     agents: [],
     teams: [nightShift],
     warnings: [],
   });
+  agents.portTeam.mockImplementationOnce(async () => ({
+    team: await agents.saveTeam({
+      name: "Night Shift",
+      instructions: "Ship small.",
+      members: [bea.pubkey, cy.pubkey],
+    }),
+    imported: [],
+    failed: [],
+    elsewhere: [],
+  }));
   await user.click(screen.getByRole("tab", { name: "Import" }));
   await user.click(
     await screen.findByRole("button", { name: "Import team Night Shift" }),
@@ -982,6 +994,8 @@ it("keeps a team whose members are all here importable with no agents to list", 
     "aria-selected",
     "true",
   );
+  await user.click(screen.getByRole("button", { name: "Teams" }));
+  expect(screen.getByText("Night Shift")).toBeInTheDocument();
 });
 
 it("stays on Import and names each part of a team import that did not come", async () => {
@@ -992,19 +1006,21 @@ it("stays on Import and names each part of a team import that did not come", asy
     teams: [nightShift],
     warnings: [],
   });
-  const team = { id: "t", name: "Night Shift", instructions: "", members: [] };
+  // Renamed in old Buzz since it was listed: messages name what was saved.
+  const team = { id: "t", name: "Late Shift", instructions: "", members: [] };
+  const bea = { ...agent("Bea", 2), pubkey: "b".repeat(64) };
   agents.portTeam
     .mockResolvedValueOnce({
       team,
-      imported: [{ ...agent("Bea", 2), pubkey: "b".repeat(64) }],
+      imported: [bea],
       failed: [{ name: "Cy", error: "Keychain access was denied" }],
       elsewhere: [],
     })
     .mockResolvedValueOnce({
-      imported: [],
+      imported: [bea],
       failed: [],
       elsewhere: ["Cy"],
-      teamError: { name: "Night Shift" },
+      teamError: { name: "Late Shift" },
     })
     .mockResolvedValueOnce({
       team,
@@ -1019,7 +1035,7 @@ it("stays on Import and names each part of a team import that did not come", asy
   await user.click(importTeam);
   onImport();
   expect(screen.getByRole("alert")).toHaveTextContent(
-    "Imported team Night Shift with Bea. Couldn't import Cy: Keychain access was denied.",
+    "Imported team Late Shift with Bea. Couldn't import Cy: Keychain access was denied.",
   );
   // Bea came, so it is no longer offered on its own.
   expect(
@@ -1028,12 +1044,12 @@ it("stays on Import and names each part of a team import that did not come", asy
   await user.click(importTeam);
   onImport();
   expect(screen.getByRole("alert")).toHaveTextContent(
-    "Couldn't save team Night Shift. Add its members in Teams. Kept out: Cy, in another community.",
+    "Couldn't save team Late Shift. Imported Bea; add them in Teams. Kept out: Cy, in another community.",
   );
   await user.click(importTeam);
   onImport();
   expect(screen.getByRole("alert")).toHaveTextContent(
-    "Imported team Night Shift. Kept out: Cy, in another community.",
+    "Imported team Late Shift. Kept out: Cy, in another community.",
   );
 });
 

@@ -138,6 +138,16 @@ function fakeRelay(origin = "https://relay.example.test") {
         : { status: "disconnected", generation: 2, session };
       for (const listener of changes) listener();
     },
+    /** Restores the connection signed in as `next`, in a new session. */
+    signIn(next: string) {
+      snapshot = {
+        ...connected_,
+        viewer: next,
+        scope: `${origin}:${next}`,
+        session: { ...session } as RelaySession,
+      };
+      for (const listener of changes) listener();
+    },
     /** Fails the connection, as a first connect that timed out does. */
     fail() {
       snapshot = { status: "error", generation: 4, session, error: "down" };
@@ -241,13 +251,13 @@ function fakeNative(identities: AgentIdentity[] = []) {
         _: string,
         pubkey: string,
         destination: string,
-        __: string,
+        owner: string,
         type: string,
       ) => {
         const identity = {
           pubkey,
           relay: destination.replace(/^https:/, "wss:"),
-          owner: viewer,
+          owner,
           type,
           name: "Older",
           deleted: false,
@@ -395,6 +405,7 @@ async function setup({
     run,
     emit: fake.emit,
     connect: fake.connect,
+    signIn: fake.signIn,
     fail: fake.fail,
     relay: fake.relay,
     reconnecting: fake.reconnecting,
@@ -670,9 +681,12 @@ it("recreates a deleted imported team when it is imported again", async () => {
   listsTeam(native, nightShift([alder]));
   await importTeam(service);
   await service.removeTeam(betaTeam("old-night-shift"));
-  listsTeam(native, nightShift([alder, birch]));
+  const text = { name: "Late Shift", instructions: "Ship smaller." };
+  listsTeam(native, nightShift([alder, birch], text));
   await importTeam(service);
-  expect(service.snapshot().teams).toEqual([savedShift([alder, birch])]);
+  expect(service.snapshot().teams).toEqual([
+    { ...savedShift([alder, birch]), ...text },
+  ]);
 });
 
 it("saves the team as old Buzz has it at import, not as the list showed it", async () => {
@@ -686,6 +700,107 @@ it("saves the team as old Buzz has it at import, not as the list showed it", asy
   const result = await importTeam(service);
   expect(result.team).toEqual(savedShift([alder, birch, carrow]));
   expect(portedKeys(native)).toEqual([alder, birch, carrow]);
+});
+
+it("imports members one at a time, in order, then saves the team once", async () => {
+  const storage = memoryStorage();
+  const { service, native } = await setup({ storage });
+  listsTeam(native, nightShift([alder, birch, carrow]));
+  const steps: string[] = [];
+  const port = native.port.getMockImplementation() as NonNullable<
+    ReturnType<typeof native.port.getMockImplementation>
+  >;
+  native.port.mockImplementation(async (...args) => {
+    steps.push(`start ${NAMES[args[1]]}`);
+    const done = await port(...args);
+    steps.push(`end ${NAMES[args[1]]}`);
+    return done;
+  });
+  const setItem = storage.setItem.bind(storage);
+  storage.setItem = (key, value) => {
+    if (key === "buzz.agents.teams.v1") steps.push("team");
+    setItem(key, value);
+  };
+  await importTeam(service);
+  expect(steps).toEqual([
+    "start Alder",
+    "end Alder",
+    "start Birch",
+    "end Birch",
+    "start Carrow",
+    "end Carrow",
+    "team",
+  ]);
+});
+
+it("names a member old Buzz no longer lists, and never imports it", async () => {
+  const { service, native } = await setup();
+  listsTeam(native, nightShift([alder, birch]));
+  const found = await native.portable();
+  native.portable.mockResolvedValue({
+    ...found,
+    agents: found.agents.filter((agent) => agent.pubkey !== birch),
+  });
+  const result = await importTeam(service);
+  expect(result.failed).toEqual([
+    { name: "Birch", error: "No longer available in old Buzz" },
+  ]);
+  expect(portedKeys(native)).toEqual([alder]);
+  expect(result.team).toEqual(savedShift([alder]));
+});
+
+it("names a member with no name by its short npub", async () => {
+  const { service, native } = await setup();
+  const team = nightShift([birch]);
+  listsTeam(native, {
+    ...team,
+    members: team.members.map((member) => ({ ...member, name: "  " })),
+  });
+  native.port.mockRejectedValue(new Error("Keychain access was denied"));
+  const npub = npubEncode(birch);
+  const result = await importTeam(service);
+  expect(result.failed).toEqual([
+    {
+      name: `${npub.slice(0, 11)}…${npub.slice(-6)}`,
+      error: "Keychain access was denied",
+    },
+  ]);
+});
+
+it("imports every member into the community and owner the import started with", async () => {
+  const { service, native, signIn } = await setup();
+  listsTeam(native, nightShift([alder, birch]));
+  const listed = native.portable.getMockImplementation() as NonNullable<
+    ReturnType<typeof native.portable.getMockImplementation>
+  >;
+  const other = "e".repeat(64);
+  native.portable.mockImplementationOnce(async () => {
+    // Same community, so the import carries on; a new owner signed in.
+    signIn(other);
+    return listed();
+  });
+  const result = await importTeam(service);
+  for (const pubkey of [alder, birch])
+    expect(native.port).toHaveBeenCalledWith(
+      "installed",
+      pubkey,
+      "https://relay.example.test",
+      viewer,
+      "example/echo",
+    );
+  const stored = (await native.list()).map(({ pubkey, relay, owner }) => ({
+    pubkey,
+    relay,
+    owner,
+  }));
+  expect(stored).toEqual(
+    [alder, birch].map((pubkey) => ({
+      pubkey,
+      relay: "wss://relay.example.test",
+      owner: viewer,
+    })),
+  );
+  expect(result.team).toEqual(savedShift([alder, birch]));
 });
 
 it("imports nothing when the community changes while old Buzz is read", async () => {
