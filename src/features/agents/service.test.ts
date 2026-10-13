@@ -20,6 +20,7 @@ import {
   teamPrompt,
 } from "./service";
 import type { ClassifierNative } from "./classifier";
+import { CATCH_UP_KEY } from "./catch-up";
 import { memoryStorage } from "./test-fakes";
 
 // Cleanup's channel step has its own coverage (relay-removal); here only its
@@ -2228,11 +2229,20 @@ it("catches a kind 9 watch up on what it missed, a page at a time, and not again
     const start = nowSeconds();
     const storage = memoryStorage();
     const first = await setup({ storage, identities: [echo] });
+    vi.setSystemTime(start * 1000);
+    // Only this watch: the type's default one reads the channel too.
+    await first.service.save(bot, {
+      attentionEnabled: true,
+      attention: { ...chat, "watch/channel": null },
+    });
+    await settle();
+    // Missed while the socket was down.
+    vi.setSystemTime((start + 200) * 1000);
     for (let i = 0; i < 20; i++)
-      first.history.push(said(`m${i}`, start - 100 + i));
-    await first.service.save(bot, { attentionEnabled: true, attention: chat });
+      first.history.push(said(`m${i}`, start + 100 + i));
+    first.recover();
     await vi.waitFor(() => expect(first.run).toHaveBeenCalledTimes(20));
-    // The empty page waits for the queue to have room for a whole page.
+    // Then an empty page finishes the window.
     await vi.waitFor(
       () => expect(catchUpReads(first.session)).toHaveLength(3),
       {
@@ -2247,27 +2257,33 @@ it("catches a kind 9 watch up on what it missed, a page at a time, and not again
         .map((i) => `m${i}`),
     );
     expect(catchUpReads(first.session)).toEqual([
-      { kinds: [9], "#h": [channel], since: 1, until: start, limit: 16 },
+      {
+        kinds: [9],
+        "#h": [channel],
+        since: start + 1,
+        until: start + 200,
+        limit: 16,
+      },
       expect.objectContaining({
-        until: start - 96,
+        until: start + 104,
         before_id: expect.any(String),
       }),
-      expect.objectContaining({ until: start - 100 }),
+      expect.objectContaining({ until: start + 100 }),
     ]);
     first.connect(false);
     // Started again a minute later, it reads only what came after.
-    vi.setSystemTime((start + 60) * 1000);
+    vi.setSystemTime((start + 260) * 1000);
     const second = await setup({
       storage,
       identities: [echo],
-      history: [...first.history, said("late", start + 30)],
+      history: [...first.history, said("late", start + 230)],
     });
     await vi.waitFor(() => expect(second.run).toHaveBeenCalledTimes(1));
     await settle();
     expect(heard(second.run)).toEqual(["late"]);
     expect(catchUpReads(second.session)[0]).toMatchObject({
-      since: start + 1,
-      until: start + 60,
+      since: start + 201,
+      until: start + 260,
     });
   } finally {
     vi.useRealTimers();
@@ -2275,114 +2291,248 @@ it("catches a kind 9 watch up on what it missed, a page at a time, and not again
 });
 
 it("takes the next page's cursor from the relay's events, not a local one older than them", async () => {
-  const { service, run, session, history } = await setup({
-    identities: [echo],
-  });
-  const now = nowSeconds();
-  for (let i = 0; i < 20; i++) history.push(said(`m${i}`, now - 100 + i));
-  const read = vi.mocked(session.read);
-  const original = read.getMockImplementation() as NonNullable<
-    ReturnType<typeof read.getMockImplementation>
-  >;
-  let first = true;
-  read.mockImplementation(async (filters, options) => {
-    const events = await original(filters, options);
-    if (!filters[0]?.kinds?.includes(9) || !first) return events;
-    first = false;
-    // The owner's message not yet sent, from before the relay's oldest.
-    return [...events, { ...said("unsent", now - 200) }];
-  });
-  await service.save(bot, { attentionEnabled: true, attention: chat });
-  await vi.waitFor(() => expect(run).toHaveBeenCalledTimes(20), {
-    timeout: 3_000,
-  });
-  expect(new Set(heard(run))).toEqual(
-    new Set(Array.from({ length: 20 }, (_, i) => `m${i}`)),
-  );
+  vi.useFakeTimers({ toFake: ["Date"] });
+  try {
+    const { service, run, session, history, recover } = await setup({
+      identities: [echo],
+    });
+    const now = nowSeconds();
+    await service.save(bot, { attentionEnabled: true, attention: chat });
+    await settle();
+    // Missed while the socket was down.
+    vi.setSystemTime((now + 200) * 1000);
+    for (let i = 0; i < 20; i++) history.push(said(`m${i}`, now + 100 + i));
+    const read = vi.mocked(session.read);
+    const original = read.getMockImplementation() as NonNullable<
+      ReturnType<typeof read.getMockImplementation>
+    >;
+    let first = true;
+    read.mockImplementation(async (filters, options) => {
+      const events = await original(filters, options);
+      if (!filters[0]?.kinds?.includes(9) || !first) return events;
+      first = false;
+      // The owner's message not yet sent, from before the relay's oldest.
+      return [...events, { ...said("unsent", now + 50) }];
+    });
+    recover();
+    await vi.waitFor(() => expect(run).toHaveBeenCalledTimes(20), {
+      timeout: 3_000,
+    });
+    expect(new Set(heard(run))).toEqual(
+      new Set(Array.from({ length: 20 }, (_, i) => `m${i}`)),
+    );
+  } finally {
+    vi.useRealTimers();
+  }
 });
 
 it("hears a whole page when live events fill the queue while the page is read", async () => {
-  const { service, run, session, history, emit } = await setup({
-    identities: [echo],
-  });
-  const now = nowSeconds();
-  for (let i = 0; i < 16; i++) history.push(said(`m${i}`, now - 100 + i));
-  let unblock!: () => void;
-  const blocked = new Promise<void>((resolve) => {
-    unblock = resolve;
-  });
-  run.mockImplementation(() => blocked);
-  const read = vi.mocked(session.read);
-  const original = read.getMockImplementation() as NonNullable<
-    ReturnType<typeof read.getMockImplementation>
-  >;
-  let first = true;
-  read.mockImplementation(async (filters, options) => {
-    if (filters[0]?.kinds?.includes(9) && first) {
-      first = false;
-      // Live traffic arrives while the page is on its way.
-      emit({
-        events: Array.from({ length: 20 }, (_, i) =>
-          event(`live${i}x`, { created_at: now }),
-        ),
-      });
-    }
-    return original(filters, options);
-  });
-  await service.save(bot, {
-    attentionEnabled: true,
-    attention: { ...chat, "watch/channel": null },
-  });
-  await vi.waitFor(() => expect(run).toHaveBeenCalled());
-  await settle();
-  unblock();
-  await vi.waitFor(() => expect(run).toHaveBeenCalledTimes(36), {
-    timeout: 5_000,
-  });
-  expect(heard(run).filter((content) => content.startsWith("m"))).toHaveLength(
-    16,
-  );
+  vi.useFakeTimers({ toFake: ["Date"] });
+  try {
+    const { service, run, session, history, emit, recover } = await setup({
+      identities: [echo],
+    });
+    const now = nowSeconds();
+    await service.save(bot, {
+      attentionEnabled: true,
+      attention: { ...chat, "watch/channel": null },
+    });
+    await settle();
+    vi.setSystemTime((now + 200) * 1000);
+    for (let i = 0; i < 16; i++) history.push(said(`m${i}`, now + 100 + i));
+    let unblock!: () => void;
+    const blocked = new Promise<void>((resolve) => {
+      unblock = resolve;
+    });
+    run.mockImplementation(() => blocked);
+    const read = vi.mocked(session.read);
+    const original = read.getMockImplementation() as NonNullable<
+      ReturnType<typeof read.getMockImplementation>
+    >;
+    let first = true;
+    read.mockImplementation(async (filters, options) => {
+      if (filters[0]?.kinds?.includes(9) && first) {
+        first = false;
+        // Live traffic arrives while the page is on its way.
+        emit({
+          events: Array.from({ length: 20 }, (_, i) =>
+            event(`live${i}x`, { created_at: now + 200 }),
+          ),
+        });
+      }
+      return original(filters, options);
+    });
+    recover();
+    await vi.waitFor(() => expect(run).toHaveBeenCalled());
+    await settle();
+    unblock();
+    await vi.waitFor(() => expect(run).toHaveBeenCalledTimes(36), {
+      timeout: 5_000,
+    });
+    expect(
+      heard(run).filter((content) => content.startsWith("m")),
+    ).toHaveLength(16);
+  } finally {
+    vi.useRealTimers();
+  }
 });
 
 it("starts catch-up again when its watch is edited while a page is being read", async () => {
-  const { service, run, session, history } = await setup({
-    identities: [echo],
-  });
-  const now = nowSeconds();
-  history.push(said("before", now - 10), said("deploy", now - 5));
-  const read = vi.mocked(session.read);
-  const original = read.getMockImplementation() as NonNullable<
-    ReturnType<typeof read.getMockImplementation>
-  >;
-  let release!: () => void;
-  const held = new Promise<void>((resolve) => {
-    release = resolve;
-  });
-  let first = true;
-  read.mockImplementation(async (filters, options) => {
-    if (filters[0]?.kinds?.includes(9) && first) {
-      first = false;
-      await held;
-    }
-    return original(filters, options);
-  });
-  // Only this watch: the type's default one would wake for "deploy" too.
-  await service.save(bot, {
-    attentionEnabled: true,
-    attention: { ...chat, "watch/channel": null },
-  });
-  await vi.waitFor(() => expect(catchUpReads(session)).toHaveLength(1));
-  await service.save(bot, {
-    attention: {
-      "watch/chat": { ...chat["watch/chat"], filter: 'content == "deploy"' },
-    },
-  });
-  await vi.waitFor(() => expect(run).toHaveBeenCalledTimes(1));
-  // The page read for the old watch wakes nothing when it comes back.
-  release();
-  await settle();
-  await settle();
-  expect(heard(run)).toEqual(["deploy"]);
+  vi.useFakeTimers({ toFake: ["Date"] });
+  try {
+    const { service, run, session, history, recover } = await setup({
+      identities: [echo],
+    });
+    const now = nowSeconds();
+    // Only this watch: the type's default one would wake for "deploy" too.
+    await service.save(bot, {
+      attentionEnabled: true,
+      attention: { ...chat, "watch/channel": null },
+    });
+    await settle();
+    vi.setSystemTime((now + 60) * 1000);
+    history.push(said("before", now + 10), said("deploy", now + 20));
+    const read = vi.mocked(session.read);
+    const original = read.getMockImplementation() as NonNullable<
+      ReturnType<typeof read.getMockImplementation>
+    >;
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let first = true;
+    read.mockImplementation(async (filters, options) => {
+      if (filters[0]?.kinds?.includes(9) && first) {
+        first = false;
+        await held;
+      }
+      return original(filters, options);
+    });
+    recover();
+    await vi.waitFor(() => expect(catchUpReads(session)).toHaveLength(1));
+    await service.save(bot, {
+      attention: {
+        "watch/chat": { ...chat["watch/chat"], filter: 'content == "deploy"' },
+      },
+    });
+    await vi.waitFor(() => expect(run).toHaveBeenCalledTimes(1));
+    // The page read for the old watch wakes nothing when it comes back.
+    release();
+    await settle();
+    await settle();
+    expect(heard(run)).toEqual(["deploy"]);
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+it("wakes nothing for what came before a watch was first caught up, as after an upgrade", async () => {
+  vi.useFakeTimers({ toFake: ["Date"] });
+  try {
+    const start = nowSeconds();
+    const storage = memoryStorage();
+    const first = await setup({ storage, identities: [echo] });
+    vi.setSystemTime(start * 1000);
+    await first.service.save(bot, {
+      attentionEnabled: true,
+      attention: { ...chat, "watch/channel": null },
+    });
+    await settle();
+    first.connect(false);
+    // As a build from before catch-up leaves it: the watch, and no progress.
+    storage.removeItem(CATCH_UP_KEY);
+    vi.setSystemTime((start + 60) * 1000);
+    const second = await setup({
+      storage,
+      identities: [echo],
+      history: [said("before", start - 600), said("offline", start + 30)],
+    });
+    await settle();
+    await settle();
+    expect(second.run).not.toHaveBeenCalled();
+    expect(catchUpReads(second.session)).toEqual([]);
+    // From then on, it catches up on what it misses.
+    vi.setSystemTime((start + 120) * 1000);
+    second.history.push(said("missed", start + 90));
+    second.recover();
+    await vi.waitFor(() => expect(second.run).toHaveBeenCalledTimes(1));
+    await settle();
+    expect(heard(second.run)).toEqual(["missed"]);
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+it("hears a page every matching watch wakes for, though its jobs fill the queue more than once", async () => {
+  vi.useFakeTimers({ toFake: ["Date"] });
+  try {
+    const { service, run, history, recover } = await setup({
+      identities: [echo],
+    });
+    const now = nowSeconds();
+    vi.setSystemTime(now * 1000);
+    const watch = chat["watch/chat"];
+    await service.save(bot, {
+      attentionEnabled: true,
+      attention: {
+        "watch/channel": null,
+        "watch/chat": watch,
+        "watch/chat2": watch,
+        "watch/chat3": watch,
+      },
+    });
+    await settle();
+    vi.setSystemTime((now + 60) * 1000);
+    // One page: 16 events, and three jobs for each of them.
+    for (let i = 0; i < 16; i++) history.push(said(`m${i}`, now + 10 + i));
+    recover();
+    await vi.waitFor(() => expect(run).toHaveBeenCalledTimes(48), {
+      timeout: 5_000,
+    });
+    await settle();
+    const wakes = run.mock.calls.map(([input]) => {
+      const { trigger } = input as {
+        trigger: { slug: string; event: RelayEvent };
+      };
+      return `${trigger.slug} ${trigger.event.content}`;
+    });
+    expect(new Set(wakes).size).toBe(48);
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+it("waits for a confirmed roster before catching up past what the roster hold keeps", async () => {
+  vi.useFakeTimers({ now: 1_000_000_000 });
+  try {
+    const { service, run, history, recover, confirm, session } = await setup({
+      identities: [echo],
+    });
+    const now = nowSeconds();
+    // Every channel: "saved" has only a roster loaded from disk.
+    const watch = { ...chat["watch/chat"], channels: "all" as const };
+    await service.save(bot, {
+      attentionEnabled: true,
+      attention: { "watch/channel": null, "watch/chat": watch },
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    vi.setSystemTime((now + 400) * 1000);
+    // More missed messages than the roster hold keeps.
+    const missed = Array.from({ length: 300 }, (_, i) => `m${i}`);
+    for (const [i, content] of missed.entries())
+      history.push(eventDto(message(author, "saved", content, now + 1 + i)));
+    recover();
+    await vi.advanceTimersByTimeAsync(5_000);
+    // Waiting on the roster, it reads no further than its first page.
+    expect(run).not.toHaveBeenCalled();
+    expect(catchUpReads(session)).toHaveLength(1);
+    confirm("saved", [viewer, bot]);
+    await vi.advanceTimersByTimeAsync(10 * 60_000);
+    expect(new Set(heard(run))).toEqual(new Set(missed));
+    expect(run).toHaveBeenCalledTimes(300);
+  } finally {
+    vi.useRealTimers();
+  }
 });
 
 it("answers a mention catch-up reads from while it listened, not one from before", async () => {

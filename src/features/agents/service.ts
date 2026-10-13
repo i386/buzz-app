@@ -118,7 +118,6 @@ import {
 // STOPGAP(agent-local-typing): delete with local-typing.ts.
 import { typeLocally } from "./local-typing";
 import {
-  CATCH_UP_PAGE,
   afterPage,
   nextPage,
   readCheckpoints,
@@ -2082,6 +2081,19 @@ export class AgentsService extends Service implements Agents {
       admitted + runner.classifying + jobs <= RATE_LIMIT
     );
   }
+  /** Whether the agent has room for every job `triggers` make. One that
+   * makes more jobs than an idle agent takes goes when it is idle, and loses
+   * the excess as live delivery would. */
+  private takes(runner: Runner, triggers: readonly Trigger[]) {
+    return this.fits(
+      runner,
+      Math.min(triggers.length, QUEUE_LIMIT),
+      Math.min(
+        triggers.filter((t) => t.type === "watch" && t.watch.classifier).length,
+        CLASSIFY_LIMIT,
+      ),
+    );
+  }
   /** Delivers backlogged events, oldest first, while the agent has room for
    * every job each makes; the rest wait for a later tick. Each is matched
    * against the agent's attention as it is when it is delivered. */
@@ -2094,38 +2106,25 @@ export class AgentsService extends Service implements Agents {
       if (
         triggers === "held"
           ? runner.held.size >= HELD_LIMIT
-          : // One that makes more jobs than an idle agent takes goes when
-            // it is idle, and loses the excess as live delivery would.
-            !this.fits(
-              runner,
-              Math.min(triggers.length, QUEUE_LIMIT),
-              Math.min(
-                triggers.filter((t) => t.type === "watch" && t.watch.classifier)
-                  .length,
-                CLASSIFY_LIMIT,
-              ),
-            )
+          : !this.takes(runner, triggers)
       )
         return;
       runner.backlog.shift();
-      this.deliver(runner, agent, event, channelId, false, triggers);
+      this.deliver(runner, agent, event, channelId, triggers);
     }
   }
-  /** Gives the agent `event` once, however many times it arrives. With
-   * `watchesOnly`, only its watches hear it: a mention from before the app
-   * listened is not answered late. */
+  /** Gives the agent `event` once, however many times it arrives. */
   private hear(
     runner: Runner,
     agent: Agent,
     event: RelayEvent,
     channelId: string | undefined,
-    watchesOnly = false,
   ) {
     const channel = event.tags.find((tag) => tag[0] === "h")?.[1];
     if (this.hasSeen(runner, event.id, channel)) return;
     this.markSeen(runner, event.id, channel);
     if (this.isOwn(runner, agent, event)) return;
-    this.deliver(runner, agent, event, channelId, watchesOnly);
+    this.deliver(runner, agent, event, channelId);
   }
   /** Keeps each agent's catch-up going: on start, and after each connect, its
    * kind 9 watches read the events they missed from their saved checkpoints,
@@ -2151,7 +2150,12 @@ export class AgentsService extends Service implements Agents {
           this.quiet.add(stream.key);
           if ((this.checkpoints[stream.key]?.through ?? 0) < now)
             move(stream.key, { through: now });
-        } else if (this.quiet.delete(stream.key))
+        } else if (
+          this.quiet.delete(stream.key) ||
+          !this.checkpoints[stream.key]
+        )
+          // A stream new to catch-up, as every one is on an upgrade, starts
+          // now: an earlier `since` does not replay older events.
           move(stream.key, { through: now });
         else reading.push(stream);
       }
@@ -2189,8 +2193,7 @@ export class AgentsService extends Service implements Agents {
     if (changed) this.saveCheckpoints();
   }
   /** Reads each stream's missed events, newest page first, through `upper`,
-   * saving its checkpoint after each page. A page is heard only once the
-   * agent's queue has room for all of it, so catch-up drops none of it. */
+   * saving its checkpoint after each page once all of it is heard. */
   private async readMissed(
     runner: Runner,
     pass: Pass,
@@ -2206,35 +2209,22 @@ export class AgentsService extends Service implements Agents {
         for (;;) {
           const page = nextPage(stream, this.checkpoints[stream.key], upper);
           if (!page) break;
-          await this.room(runner, signal);
           const events = await pass.binding.session.read([page.filter], {
             signal,
             priority: "background",
             fresh: true,
           });
           signal.throwIfAborted();
-          // Live events may have taken the room during the read.
-          await this.room(runner, signal);
-          // The relay's own page sets the cursor: a read also returns the
-          // owner's messages not yet sent, which can be older than it.
-          const checkpoint = afterPage(page, events.filter(hasEventProof));
-          // An edit since starts another pass, which reads it again.
-          const agent = this.ready(runner.pubkey);
-          if (agent?.attention !== pass.attention) return;
           // Only what the relay signed: a read also returns the owner's own
-          // messages not yet sent.
-          // One from before the listener started wakes only watches. A later
-          // one live would have heard, mentions too; catch-up may read it
-          // before replay does, which then drops it as seen.
-          for (const event of [...events].reverse())
-            if (event.kind === 9 && hasEventProof(event))
-              this.hear(
-                runner,
-                agent,
-                event as RelayEvent,
-                event.tags.find(([key]) => key === "h")?.[1],
-                event.created_at < pass.binding.connection.start,
-              );
+          // messages not yet sent, which can be older than its page.
+          const signed = events.filter(hasEventProof) as RelayEvent[];
+          const checkpoint = afterPage(page, signed);
+          for (const event of [...signed].reverse())
+            if (
+              event.kind === 9 &&
+              !(await this.caughtUp(runner, pass, event, signal))
+            )
+              return;
           this.checkpoints = { ...this.checkpoints, [stream.key]: checkpoint };
           this.saveCheckpoints();
         }
@@ -2248,21 +2238,42 @@ export class AgentsService extends Service implements Agents {
       );
     }
   }
-  /** Waits until the agent can take a whole page without dropping any of it:
-   * its queue, its classifier calls and its rate limit all have room. */
-  private async room(runner: Runner, signal: AbortSignal) {
+  /** Gives the agent one caught-up event once it can take every job the
+   * event makes, and once the rosters its watches need are confirmed: a
+   * checkpoint saved past an event never drops or evicts it. One from before
+   * the listener started wakes only watches, so a mention from before the app
+   * listened is not answered late. A later one live would have heard,
+   * mentions too; catch-up may read it before replay does, which then skips
+   * it as seen. False when an edit since ends the pass: the next one reads
+   * the event again. */
+  private async caughtUp(
+    runner: Runner,
+    pass: Pass,
+    event: RelayEvent,
+    signal: AbortSignal,
+  ) {
+    const channel = event.tags.find(([key]) => key === "h")?.[1];
     for (;;) {
       signal.throwIfAborted();
-      const admitted =
-        Date.now() - runner.windowStart >= RATE_WINDOW_MS ? 0 : runner.admitted;
-      if (
-        // Events still being classified will take queue and rate room too.
-        runner.queue.length + runner.classifying + CATCH_UP_PAGE <=
-          QUEUE_LIMIT &&
-        runner.classifying + CATCH_UP_PAGE <= CLASSIFY_LIMIT &&
-        admitted + runner.classifying + CATCH_UP_PAGE <= RATE_LIMIT
-      )
-        return;
+      const agent = this.ready(runner.pubkey);
+      if (agent?.attention !== pass.attention) return false;
+      if (this.hasSeen(runner, event.id, channel)) return true;
+      if (event.pubkey === agent.pubkey) {
+        this.markSeen(runner, event.id, channel);
+        return this.isOwn(runner, agent, event);
+      }
+      const heard = this.heard(runner, agent, event);
+      if (heard !== "held") {
+        const triggers =
+          event.created_at < pass.binding.connection.start
+            ? heard.filter((trigger) => trigger.type === "watch")
+            : heard;
+        if (this.takes(runner, triggers)) {
+          this.markSeen(runner, event.id, channel);
+          this.deliver(runner, agent, event, channel, triggers);
+          return true;
+        }
+      }
       await new Promise<void>((resolve) => {
         const done = () => {
           clearTimeout(timer);
@@ -2310,10 +2321,9 @@ export class AgentsService extends Service implements Agents {
     agent: Agent,
     event: RelayEvent,
     channelId: string | undefined,
-    watchesOnly = false,
-    heard = this.heard(runner, agent, event),
+    triggers = this.heard(runner, agent, event),
   ) {
-    if (heard === "held") {
+    if (triggers === "held") {
       runner.held.set(event.id, { event, ...(channelId ? { channelId } : {}) });
       if (runner.held.size > HELD_LIMIT) {
         runner.held.delete(runner.held.keys().next().value as string);
@@ -2323,9 +2333,6 @@ export class AgentsService extends Service implements Agents {
       }
       return;
     }
-    const triggers = watchesOnly
-      ? heard.filter((trigger) => trigger.type === "watch")
-      : heard;
     for (const trigger of triggers) {
       const job = {
         trigger,
