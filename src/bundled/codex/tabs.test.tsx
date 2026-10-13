@@ -10,6 +10,7 @@ import {
 } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { ownerReads } from "../../features/agents/reads";
 import type { AgentViewProps } from "../../features/agents/service";
 import type { HostProcessOptions } from "../../features/host/service";
 import type { RelayData } from "../../features/relay/service";
@@ -176,7 +177,7 @@ function fixture({
   } as unknown as Storage;
   const runtime = new CodexRuntime(
     spawn,
-    () => relay,
+    (pubkey) => ownerReads(relay, pubkey),
     sessions,
     (raw) => provider.resolve(raw),
   );

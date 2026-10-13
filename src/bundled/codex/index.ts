@@ -1,7 +1,9 @@
 import { isTauri } from "@tauri-apps/api/core";
+import { ownerReads } from "../../features/agents/reads";
 import type { PluginModule } from "../../plugins/api";
 import { CodexLogoIcon } from "../../shared/design-system/icons";
 import { config, defaults, validWorkspace } from "./config";
+import { codexRun, TYPE_ID } from "./run";
 import { CodexRuntime } from "./runtime";
 import { CodexSetup, withScript } from "./setup";
 import { CodexProvider, createTabs } from "./tabs";
@@ -22,11 +24,11 @@ export const apply: PluginModule["apply"] = (ctx) => {
   const providerController = new CodexProvider(start, localStorage, setup);
   const runtime = new CodexRuntime(
     start,
-    ctx.agents.relay,
+    (pubkey) => ownerReads(ctx.agents.relay(pubkey), pubkey),
     localStorage,
     (raw) => providerController.resolve(raw),
   );
-  const typeKey = `${ctx.pluginOwner?.id ?? "buzz.codex"}/codex`;
+  const typeKey = `${ctx.pluginOwner?.id ?? "buzz.codex"}/${TYPE_ID}`;
   /** A Codex agent is running, so Buzz's copy is needed; unknown until the
    * agents have loaded. */
   let needed: boolean | undefined;
@@ -65,7 +67,7 @@ export const apply: PluginModule["apply"] = (ctx) => {
     SettingsTab,
   } = createTabs(providerController, runtime, start, setup);
   ctx.agents.register({
-    id: "codex",
+    id: TYPE_ID,
     title: "Codex",
     icon: CodexLogoIcon,
     description:
@@ -123,14 +125,11 @@ export const apply: PluginModule["apply"] = (ctx) => {
         component: SettingsTab,
       },
     ],
-    models: (agent) => runtime.preview(agent),
     // A mention during the first download waits for it, within its deadline.
-    run: async (delivery) => {
-      await setup.installed(delivery.signal);
+    ...codexRun(runtime, async (signal) => {
+      await setup.installed(signal);
       if (providerController.snapshot().readiness === "checking")
         await providerController.check();
-      return runtime.run(delivery);
-    },
-    timeoutMs: 2 * 60_000,
+    }),
   });
 };

@@ -9,6 +9,12 @@ import type { EventData, ReadFilter, RelayEvent } from "../relay/events";
 import type { RelayData } from "../relay/service";
 import { meChat } from "./me-chat";
 
+/** The agent's memory entries, and whether some may be missing. */
+export type MemoryListing = Readonly<{
+  entries: readonly Memory[];
+  partial: boolean;
+}>;
+
 /** What a turn needs to know of its channel. */
 export type ChannelFacts = Readonly<{
   name?: string;
@@ -16,17 +22,13 @@ export type ChannelFacts = Readonly<{
   members: readonly string[];
 }>;
 
-/** The agent's memory entries, and whether some may be missing. */
-export type MemoryListing = Readonly<{
-  entries: readonly Memory[];
-  partial: boolean;
-}>;
-
 export type AgentReads = Readonly<{
   /** The connection these reads go through. A new one, even to the same
    * community, may read as someone else, so nothing read through an old one
    * carries over. */
   connection: object;
+  /** The community these reads are of; it changes when the agent's does. */
+  scope: string;
   /** The channel as the community lists it, or undefined when unknown. */
   channel(id: string): Promise<ChannelFacts | undefined>;
   read(
@@ -68,6 +70,7 @@ export function ownerReads(
   const { session } = snapshot;
   return Object.freeze({
     connection: session,
+    scope: snapshot.scope ?? "",
     channel: async (id: string) => {
       const summary =
         session.channels.list().channels.find((item) => item.id === id) ??
