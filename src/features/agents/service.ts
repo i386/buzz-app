@@ -488,7 +488,8 @@ export type FoundAgents = PortableAgents &
 /** What importing an old Buzz team did. Members that came are kept even when
  * others, or the team itself, did not. */
 export type TeamPort = Readonly<{
-  /** The team as saved, absent when no member is here to put on it. */
+  /** The team that was saved, including an existing team cleaned to zero
+   * members. Absent when no team was saved. */
   team?: Team;
   imported: readonly Agent[];
   failed: readonly Readonly<{ name: string; error: string }>[];
