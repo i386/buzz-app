@@ -1250,7 +1250,9 @@ export class AgentsService extends Service implements Agents {
       return fits(here, here.name || pubkey);
     });
     const result = { imported, failed, elsewhere, foreign };
-    if (!members.length) return result;
+    // A saved team is rewritten so the members judged out leave it; a new
+    // one is made only with members.
+    if (!saved && !members.length) return result;
     try {
       const team = this.writeImportedTeam(old, teamId, saved, [
         ...kept,

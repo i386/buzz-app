@@ -917,6 +917,43 @@ it("drops another account's agents an earlier import left on the team, keeping i
   expect(readTeams(storage)).toEqual([team]);
 });
 
+it("drops another account's agents from a saved team even when no member imports", async () => {
+  const storage = memoryStorage();
+  const other = "f".repeat(64);
+  writeTeams(storage, [
+    { ...savedShift([carrow, birch]), name: "Renamed", instructions: "Mine." },
+  ]);
+  const { service, native } = await setup({
+    storage,
+    identities: [here(carrow), { ...here(birch), owner: other }],
+  });
+  listsTeam(native, nightShift([alder, birch]));
+  native.port.mockRejectedValue(new Error("Keychain access was denied"));
+  const result = await importTeam(service);
+  const team = {
+    ...savedShift([carrow]),
+    name: "Renamed",
+    instructions: "Mine.",
+  };
+  expect(result.foreign).toEqual(["Birch"]);
+  expect(result.failed).toEqual([
+    { name: "Alder", error: "Keychain access was denied" },
+  ]);
+  expect(service.snapshot().teams).toEqual([team]);
+  expect(readTeams(storage)).toEqual([team]);
+});
+
+it("creates no team when no member imports and none was saved", async () => {
+  const storage = memoryStorage();
+  const { service, native } = await setup({ storage });
+  listsTeam(native, nightShift([alder]));
+  native.port.mockRejectedValue(new Error("Keychain access was denied"));
+  const result = await importTeam(service);
+  expect(result.team).toBeUndefined();
+  expect(service.snapshot().teams).toEqual([]);
+  expect(readTeams(storage)).toEqual([]);
+});
+
 it("lists a team whose members are all here, and imports it from them", async () => {
   const { service, native } = await setup({
     identities: [here(alder), here(birch)],
