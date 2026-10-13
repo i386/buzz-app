@@ -15,6 +15,7 @@
       "!!dist-author",
       "!!dist-plugins",
       "!!dist-buzz-mcp",
+      "!!dist-agent-host",
       "!!.profiles",
       "!!src-tauri/target",
       "!!src-tauri/gen",

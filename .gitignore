@@ -34,3 +34,4 @@ dist-plugins/
 # Leftover generated v1 runtime resources from older checkouts.
 src-tauri/resources/agent-runtime/*
 dist-buzz-mcp/
+dist-agent-host/

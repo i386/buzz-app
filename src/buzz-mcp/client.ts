@@ -49,7 +49,7 @@ export interface BuzzClient {
   /** The agent's memory entries, decrypted. */
   memories(): Promise<readonly Memory[]>;
   /** Writes entry `slug`, newer than the one it replaces (`after`, or 0). */
-  remember(slug: string, body: string, after: number): Promise<void>;
+  remember(slug: string, body: string, after: number): Promise<unknown>;
 }
 
 /** Where the agent is working, so tools can default to it. `topLevel` keeps

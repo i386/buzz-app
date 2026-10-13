@@ -18,6 +18,11 @@ const now = () => Math.floor(Date.now() / 1000);
  * strictest hosts, and base64 is 4 characters per 3 bytes. */
 const MEDIA_LIMIT = (5 * 1024 * 1024 * 3) / 4;
 
+/** A BuzzClient whose memory writes give back the event they posted. */
+export type NodeClient = Omit<BuzzClient, "remember"> & {
+  remember(slug: string, body: string, after: number): Promise<BuzzEvent>;
+};
+
 export function nodeClient(
   options: Readonly<{
     relay: string;
@@ -28,7 +33,7 @@ export function nodeClient(
     /** Files outside it cannot be read. */
     root: string;
   }>,
-): BuzzClient {
+): NodeClient {
   const secret = options.key.startsWith("nsec1")
     ? (decode(options.key as `nsec1${string}`).data as Uint8Array)
     : hexToBytes(options.key);
@@ -230,7 +235,7 @@ export function nodeClient(
       const plaintext = JSON.stringify(
         slug === "core" ? { slug, profile: body } : { slug, value: body },
       );
-      await post(
+      return post(
         sign(
           {
             kind: 30174,

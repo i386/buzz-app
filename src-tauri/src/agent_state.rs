@@ -252,6 +252,11 @@ mod tests {
         );
         assert_eq!(key.len(), 251);
         assert!(encode(&key).len() > NAME_LIMIT);
+        // The name the agent host's `fileName` gives it (storage.test.ts).
+        assert_eq!(
+            file_name(&key),
+            "~2418a80781b72ec15bca6c4423fa41f0937d29e13b19fe1247bf0daaa571773f"
+        );
         for key in [key.as_str(), &":".repeat(86), &"k".repeat(NAME_LIMIT + 1)] {
             state.set(key, Some("{\"a\":1}")).unwrap();
             let name = file_name(key);
