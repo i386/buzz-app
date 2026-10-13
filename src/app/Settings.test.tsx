@@ -10,6 +10,8 @@ import {
   waitFor,
   within,
 } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import { ToastProvider } from "../shared/design-system/ui/Toast";
 import { Context } from "@deepseek-ai/cordis";
 import { afterEach, expect, it, vi } from "vitest";
 import { createCommunityMembership } from "../bundled/moderation/membership";
@@ -18,6 +20,7 @@ import {
   type SettingsCard,
   type SettingsCards,
 } from "../features/settings/service";
+import type { ClientSnapshot } from "../features/communities/service";
 import type { RelayData } from "../features/relay/service";
 import type { Contribution } from "../plugins/contributions";
 
@@ -380,3 +383,75 @@ it.each(["primary", null])(
     expect(hosted(shell as HTMLElement).querySelector("svg")).not.toBeNull();
   },
 );
+
+it("retains departure confirmation until local cleanup settles", async () => {
+  let client: ClientSnapshot = {
+    ...communityState,
+    status: "ready",
+    relayAvailable: true,
+  };
+  const listeners = new Set<() => void>();
+  let finish!: () => void;
+  const cleanupFinished = new Promise<void>((resolve) => {
+    finish = resolve;
+  });
+  const leave = vi.fn(async () => {
+    client = { ...client, selected: null, memberships: [] };
+    for (const listener of listeners) listener();
+    await cleanupFinished;
+    return [];
+  });
+  const { cards } = registry([]);
+  const user = userEvent.setup();
+  render(
+    <ToastProvider>
+      <Settings
+        {...host}
+        cards={cards}
+        communities={{
+          ...host.communities,
+          subscribe: (listener) => {
+            listeners.add(listener);
+            return () => {
+              listeners.delete(listener);
+            };
+          },
+          snapshot: () => client,
+          leave,
+        }}
+      />
+    </ToastProvider>,
+  );
+  await user.click(screen.getByRole("button", { name: "Leave or remove" }));
+  await user.click(
+    screen.getByRole("button", { name: "Remove from this device" }),
+  );
+  try {
+    await user.click(
+      within(screen.getByRole("alertdialog")).getByRole("button", {
+        name: "Remove from this device",
+      }),
+    );
+    await waitFor(() => expect(leave).toHaveBeenCalledOnce());
+    expect(client.memberships).toEqual([]);
+    expect(screen.getByRole("alertdialog")).toBeVisible();
+    expect(
+      within(screen.getByRole("alertdialog")).getByRole("button", {
+        name: "Cancel",
+      }),
+    ).toBeDisabled();
+  } finally {
+    await act(async () => finish());
+  }
+  await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
+  expect(screen.getByRole("button", { name: "Profile" })).toHaveAttribute(
+    "aria-current",
+    "page",
+  );
+  expect(screen.queryByRole("button", { name: "Leave or remove" })).toBeNull();
+  expect(
+    screen.getByText(
+      "Primary was removed from this device. Your membership wasn’t changed. You can add it again later.",
+    ),
+  ).toBeVisible();
+});

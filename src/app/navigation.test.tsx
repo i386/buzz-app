@@ -7,6 +7,7 @@ import {
   render,
   screen,
   waitFor,
+  within,
 } from "@testing-library/react";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { keypair, signed } from "../features/relay/testing";
@@ -354,4 +355,70 @@ it("does not reconnect an unrelated community when the addressed Settings scope 
   );
   expect(current.navigation.snapshot().reason).toBe("denied");
   expect(retry).not.toHaveBeenCalled();
+});
+
+it("keeps the confirmed departure mounted through removal, then opens Personal Profile", async () => {
+  membershipFixture();
+  const target = {
+    ...membershipTarget,
+    section: "leave-community",
+  };
+  window.history.replaceState(
+    null,
+    "",
+    `/#buzz=${encodeURIComponent(JSON.stringify(target))}`,
+  );
+  const current = createServices();
+  services = current;
+  let finish!: () => void;
+  const pendingCleanup = new Promise<void>((resolve) => {
+    finish = resolve;
+  });
+  const remove = current.communities.leave;
+  vi.spyOn(current.communities, "leave").mockImplementation(async (...args) => {
+    const result = remove(...args);
+    await pendingCleanup;
+    return result;
+  });
+  render(<App services={current} />);
+  await screen.findByRole("heading", { name: "Leave or remove" });
+  fireEvent.click(
+    screen.getByRole("button", { name: "Remove from this device" }),
+  );
+  const dialog = await screen.findByRole("alertdialog");
+  try {
+    fireEvent.click(
+      within(dialog).getByRole("button", { name: "Remove from this device" }),
+    );
+    await waitFor(() =>
+      expect(current.communities.snapshot().selected).toBeNull(),
+    );
+    expect(
+      current.communities.snapshot().memberships.some((m) => m.id === primary),
+    ).toBe(false);
+    expect(dialog).toBeVisible();
+    expect(
+      within(dialog).getByRole("button", { name: "Cancel" }),
+    ).toBeDisabled();
+    expect(screen.queryByText("This destination couldn’t open")).toBeNull();
+  } finally {
+    await act(async () => finish());
+  }
+  await screen.findByRole("heading", { name: "Profile" });
+  await waitFor(() =>
+    expect(current.navigation.snapshot().entry.target).toEqual({
+      version: 1,
+      kind: "settings",
+      section: "profile",
+      scope: null,
+    }),
+  );
+  expect(screen.queryByRole("alertdialog")).toBeNull();
+  expect(screen.queryByText("This destination couldn’t open")).toBeNull();
+  // The presentation lease never makes a removed community navigable again.
+  await act(async () => {
+    void current.navigation.open(target);
+  });
+  await screen.findByText("This destination couldn’t open");
+  expect(current.navigation.snapshot().reason).toBe("denied");
 });

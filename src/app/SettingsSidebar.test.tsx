@@ -131,5 +131,14 @@ it.each([null, "primary"])(
     );
     await userEvent.setup().click(profile);
     expect(onSection).toHaveBeenCalledWith("profile");
+    if (selected) {
+      const leave = screen.getByRole("button", { name: "Leave or remove" });
+      expect(leave.closest("section")).toHaveTextContent("Primary");
+      expect(leave.querySelector("svg")).toHaveClass("tabler-icon-logout");
+    } else {
+      expect(
+        screen.queryByRole("button", { name: "Leave or remove" }),
+      ).toBeNull();
+    }
   },
 );

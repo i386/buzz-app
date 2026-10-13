@@ -7,6 +7,7 @@ import {
   KeyboardIcon,
   PaletteIcon,
   RobotIcon,
+  SignOutIcon,
   SquaresFourIcon,
   UserIcon,
   UsersIcon,
@@ -52,8 +53,15 @@ const developer: SettingsSection = {
   label: "Developer",
   icon: WrenchIcon,
 };
+const departure: SettingsSection = {
+  id: "leave-community",
+  label: "Leave or remove",
+  icon: SignOutIcon,
+};
 const builtIn = new Set(
-  [profile, ...app, ...(developerMode ? [developer] : [])].map(({ id }) => id),
+  [profile, departure, ...app, ...(developerMode ? [developer] : [])].map(
+    ({ id }) => id,
+  ),
 );
 
 /** Host-owned sections; any other section is a plugin card contribution key. */
@@ -90,6 +98,7 @@ export function settingsSections(
               ...cards
                 .filter((card) => !card.group && !card.section)
                 .map((card) => section(card, ChatCircleIcon)),
+              departure,
             ],
           },
         ]

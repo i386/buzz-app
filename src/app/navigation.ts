@@ -11,13 +11,23 @@ import { communityDestination } from "../features/communities/destination";
 import type { OpenTarget } from "../features/navigation/targets";
 import type { PageNavigation } from "../features/navigation/service";
 import type {
+  OpenAttempt,
   OpenFailure,
   NavigationOpenOptions,
 } from "../features/navigation/controller";
 import { isBuiltInSettingsSection } from "./settings-sections";
 
 const channelsKey = "buzz.channels/channels";
-export function useAppNavigation(services: AppServices) {
+/** Presentation-only lease for an already-confirmed Settings departure. */
+export type PendingSettingsDeparture = {
+  attempt: OpenAttempt;
+  viewer: string;
+  communityId: string;
+};
+export function useAppNavigation(
+  services: AppServices,
+  departure?: PendingSettingsDeparture | null,
+) {
   const navigation = services.navigation;
   const state = useSyncExternalStore(navigation.subscribe, navigation.snapshot);
   const client = useSyncExternalStore(
@@ -67,6 +77,16 @@ export function useAppNavigation(services: AppServices) {
         (item) => communityDestination(item.id).url === scope.communityOrigin,
       )
     : undefined;
+  // Only this admitted action may outlive its own saved membership. This does
+  // not authorize another community route or grant a revoked page request.
+  const finishingDeparture =
+    departure?.attempt === state.attempt &&
+    target.kind === "settings" &&
+    target.section === "leave-community" &&
+    client.viewer === departure.viewer &&
+    scope?.viewer === departure.viewer &&
+    scope.communityOrigin === communityDestination(departure.communityId).url &&
+    (client.selected === null || client.selected === departure.communityId);
   let failure: OpenFailure | undefined;
   const legacyHome = target.kind === "home";
   const legacyPage =
@@ -82,8 +102,8 @@ export function useAppNavigation(services: AppServices) {
   } else if (scope) {
     if (client.status === "loading") waiting = true;
     else if (client.viewer !== scope.viewer) failure = "denied";
-    else if (!membership) failure = "denied";
-    else if (client.selected !== membership.id) waiting = true;
+    else if (!membership && !finishingDeparture) failure = "denied";
+    else if (membership && client.selected !== membership.id) waiting = true;
   }
   if (pageKey && !failure && !legacyPage) {
     if (startup === "loading") waiting = true;

@@ -8,13 +8,18 @@ import type { SettingsCards } from "../settings/service";
 import type { OpenTarget } from "../navigation/targets";
 import { communityFromScope } from "../relay/gifs";
 import { useRelayConnection } from "../relay/react";
-import { requestLeave, type LeaveOutcome } from "./api";
 import type { Communities, Membership } from "./service";
+import {
+  CommunityDepartureError,
+  leaveCleanupFailureText,
+  leaveCommunity,
+  leaveCommunityFailureText,
+  leftCommunityText,
+} from "./departure";
 import { CommunityDialog } from "./CommunityDialog";
 import type { InviteLink } from "./invite-link";
 import { CommunityRailItem, MEMBERSHIP_SECTION } from "./CommunityRailItem";
 import { communityDestination } from "./destination";
-import type { PurgeFailure } from "./device-state";
 import { Tooltip } from "../../shared/design-system/ui/Tooltip";
 import styles from "./Communities.module.css";
 import { fetchCommunityIcon } from "./community-icon";
@@ -138,33 +143,31 @@ export function CommunityRail({
     if (!leaving || leaving.pending) return;
     const { membership } = leaving;
     setLeaving({ membership, pending: true });
-    let outcome: LeaveOutcome;
+    let result: Awaited<ReturnType<typeof leaveCommunity>>;
     try {
-      outcome = await requestLeave(membership.id);
+      result = await leaveCommunity(communities, membership);
     } catch (error) {
-      notify(leaveFailureText(membership.name, error), "error");
+      // Once the relay accepts the leave, a device persistence failure has
+      // different recovery copy from a request it never settled.
+      const departure =
+        error instanceof CommunityDepartureError ? error : undefined;
+      notify(
+        departure?.phase === "device"
+          ? leaveCleanupFailureText(
+              membership.name,
+              departure.reason,
+              departure.outcome,
+            )
+          : leaveCommunityFailureText(
+              membership.name,
+              departure?.reason ?? error,
+            ),
+        "error",
+      );
       setLeaving(null);
       return;
     }
-    // From here a retry cannot reach the relay's membership; only this device
-    // can still fail, and its failures read differently from a lost connection.
-    const wasSelected = communities.snapshot().selected === membership.id;
-    let residue: PurgeFailure[];
-    try {
-      // A banned viewer is still a member on the relay (bans can be timed or
-      // lifted), so the device keeps that origin's drafts and reading
-      // positions for a later re-add instead of purging them.
-      residue = await communities.leave(membership.id, {
-        purge: outcome !== "access-revoked",
-      });
-    } catch (error) {
-      // Only the device record failed to save, before anything changed: the
-      // community is still in the rail, and leaving it again reaches the
-      // already-absent path.
-      notify(cleanupFailureText(membership.name, error), "error");
-      setLeaving(null);
-      return;
-    }
+    const { wasSelected, residue, outcome } = result;
     // The community is gone from this device whatever happens next, so only
     // the service call above may read as a cleanup failure.
     if (wasSelected) {
@@ -182,7 +185,7 @@ export function CommunityRail({
       }
     }
     notify(
-      leftText(membership.name, outcome, residue.length > 0),
+      leftCommunityText(membership.name, outcome, residue.length > 0),
       outcome === "left" ? "success" : "info",
     );
     setLeaving(null);
@@ -282,45 +285,4 @@ export function CommunityRail({
       )}
     </>
   );
-}
-
-/** What the relay settled, plus whether any saved data outlived the purge. The
- * banned answer promises nothing about how long the ban lasts. */
-function leftText(name: string, outcome: LeaveOutcome, residue: boolean) {
-  const settled =
-    outcome === "already-absent"
-      ? `You were no longer a member of ${name}, so it was removed from this device.`
-      : outcome === "access-revoked"
-        ? `You’re currently banned from ${name}, so the leave was refused. It was removed from this device and can be added again by its URL if access is restored.`
-        : `Left ${name}.`;
-  return residue ? `${settled} Some saved data couldn’t be cleared.` : settled;
-}
-
-/** The relay has answered, and only the device record failed to save, before
- * anything changed. The storage error is named so a store that never saves
- * reads as such, rather than as the same retry promise on every attempt. */
-function cleanupFailureText(name: string, error: unknown) {
-  // The service wraps the storage error as the cause; prefer its own words.
-  const reason = (
-    wordsOf(error instanceof Error ? error.cause : undefined) || wordsOf(error)
-  ).replace(/\.$/, "");
-  return `Left ${name}, but this device couldn’t finish cleaning up${
-    reason ? ` (${reason})` : ""
-  }. Leave it again to finish.`;
-}
-
-const wordsOf = (error: unknown) =>
-  error instanceof Error
-    ? error.message
-    : typeof error === "string"
-      ? error
-      : "";
-
-/** Relay-authored refusals the viewer can act on read verbatim-ish; everything
- * else, including timeouts and unreachable relays, keeps one retry message. */
-function leaveFailureText(name: string, error: unknown) {
-  const reason = error instanceof Error ? error.message : "";
-  if (reason === "invalid: relay owner cannot leave")
-    return `The relay owner can’t leave ${name}.`;
-  return `Couldn’t leave ${name}. Check your connection and try again.`;
 }

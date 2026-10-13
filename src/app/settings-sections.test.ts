@@ -59,7 +59,11 @@ it.each([
     primary,
     "profile",
     [
-      ["community", "Primary", ["profile", "example/groups", "other/groups"]],
+      [
+        "community",
+        "Primary",
+        ["profile", "example/groups", "other/groups", "leave-community"],
+      ],
       ["administration", "Administration", ["example/membership"]],
       ["group:Communities", "Communities", ["example/hosted"]],
       ["app", "App", app],
@@ -104,7 +108,7 @@ it("leaves contributed group icons to each presentation", () => {
 });
 
 it("classifies built-in sections apart from plugin card keys", () => {
-  for (const id of ["profile", ...app])
+  for (const id of ["profile", "leave-community", ...app])
     expect(isBuiltInSettingsSection(id)).toBe(true);
   expect(isBuiltInSettingsSection("developer")).toBe(developerMode);
   for (const id of ["example/groups", "Profile", "", "administration"])

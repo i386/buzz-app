@@ -134,6 +134,58 @@ test("short narrow Settings keeps full plugin rows usable at 200% interface size
   await expect(channelsSidebar).toBeVisible();
 });
 
+test("Leave community offers local removal without contacting the relay", async ({
+  page,
+  app,
+}) => {
+  await page.goto(app.origin);
+  await button(page, "Your profile").click();
+  await page.getByRole("menuitem", { name: "Settings", exact: true }).click();
+  const settings = page.getByRole("complementary", {
+    name: "Settings sidebar",
+  });
+  const leave = settings.getByRole("button", {
+    name: "Leave or remove",
+    exact: true,
+  });
+  await expect(leave).toBeVisible();
+  await leave.click();
+  await expect(
+    page.getByRole("heading", { name: "Leave or remove", exact: true }),
+  ).toBeVisible();
+  await page
+    .getByRole("button", { name: "Remove from this device", exact: true })
+    .click();
+  const dialog = page.getByRole("alertdialog", {
+    name: "Remove Primary from this device?",
+  });
+  await expect(dialog).toContainText("without changing your membership");
+  const leaveRequests = [];
+  page.on("request", (request) => {
+    if (new URL(request.url()).pathname.endsWith("/leave"))
+      leaveRequests.push(request.url());
+  });
+  await dialog
+    .getByRole("button", { name: "Remove from this device", exact: true })
+    .click();
+  await expect(
+    page.getByText(
+      "Primary was removed from this device. Your membership wasn’t changed. You can add it again later.",
+      { exact: true },
+    ),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "Personal space", exact: true }),
+  ).toHaveAttribute("aria-current", "true");
+  await expect(
+    page.getByRole("heading", { name: "Profile", exact: true }),
+  ).toBeVisible();
+  await expect(
+    page.getByText("This destination couldn’t open", { exact: true }),
+  ).toHaveCount(0);
+  expect(leaveRequests).toHaveLength(0);
+});
+
 test.describe("community administration permissions", () => {
   test("shows Membership to a verified owner", async ({ page, app }) => {
     let rosterGate;
@@ -419,6 +471,10 @@ confirmedPresence(
       await expect(customEmoji).toBeFocused();
       await tab();
       await expect(
+        sections.getByRole("button", { name: "Leave or remove", exact: true }),
+      ).toBeFocused();
+      await tab();
+      await expect(
         sections.getByRole("button", { name: "Builderlab", exact: true }),
       ).toBeFocused();
       await tab();
@@ -495,6 +551,10 @@ confirmedPresence(
       await expect(channelTemplates).toBeFocused();
       await tab();
       await expect(customEmoji).toBeFocused();
+      await tab();
+      await expect(
+        sections.getByRole("button", { name: "Leave or remove", exact: true }),
+      ).toBeFocused();
       await tab();
       await expect(
         sections.getByRole("button", { name: "Builderlab", exact: true }),
