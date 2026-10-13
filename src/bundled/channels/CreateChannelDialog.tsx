@@ -6,13 +6,16 @@ import {
   useChannelTemplates,
 } from "../../features/channel-templates/local";
 import { Select } from "../../shared/design-system/ui/Select";
-import { useAgentsSnapshot } from "../../features/agents/react";
+import { useTeams } from "../../features/agents/react";
+import { useAgentChoices } from "../../features/agents/use-choices";
+import { templateAgentChoices } from "../../features/agents/choices";
 import {
   useEffect,
   useId,
   useLayoutEffect,
   useRef,
   useState,
+  useSyncExternalStore,
   type RefObject,
 } from "react";
 import { Button } from "../../shared/design-system/ui/Button";
@@ -102,25 +105,47 @@ function OpenCreateChannelDialog({
   const [error, setError] = useState("");
   const [groupId, setGroupId] = useState("");
   const templates = useChannelTemplates();
-  const agentsSnapshot = useAgentsSnapshot(agents);
+  const teams = useTeams(agents);
   const [chosenTemplate, setTemplateId] = useState("");
   // A template deleted meanwhile, here or in another window, is no choice.
   const template = templates.find((item) => item.id === chosenTemplate);
   const templateId = template?.id ?? "";
-  // The template's agents and team members that are the owner's agents here.
-  const agentNames = new Map(
-    (agentsSnapshot?.agents ?? []).map((agent) => [agent.pubkey, agent.name]),
+  // A template names agents and teams' members; which are the owner's agents in
+  // this community is the shared selection's call, under the policy session
+  // setup applies.
+  const needsAgents =
+    !!template?.agents.length ||
+    !!template?.teams.some(
+      (id) => teams.find((team) => team.id === id)?.members.length,
+    );
+  const choices = useAgentChoices(session, false, needsAgents);
+  const roster = useSyncExternalStore(
+    session.channels.subscribeList,
+    session.channels.list,
+    session.channels.list,
   );
+  const agentsReady =
+    choices.templates.status === "ready" && choices.archives.status === "ready";
+  const agentNames = new Map(
+    (agentsReady ? templateAgentChoices(choices, roster) : []).map((agent) => [
+      agent.pubkey,
+      agent.name,
+    ]),
+  );
+  // Members not yet checked are neither added nor dropped: creation waits.
+  const unresolved = needsAgents && !agentsReady;
+  const checkingAgents =
+    unresolved &&
+    (choices.templates.pending ||
+      choices.archives.status === "idle" ||
+      choices.archives.status === "loading");
   const templateSetup = template && {
-    agents: templateAgents(
-      template,
-      agentsSnapshot?.teams ?? [],
-      new Set(agentNames.keys()),
-    ),
+    agents: templateAgents(template, teams, new Set(agentNames.keys())),
     canvas: template.canvas,
   };
   const templateNote =
     templateSetup &&
+    !unresolved &&
     ([
       templateSetup.agents.length
         ? `Adds ${templateSetup.agents.map((key) => agentNames.get(key)).join(", ")}`
@@ -168,7 +193,8 @@ function OpenCreateChannelDialog({
     visibility: privateChannel ? "private" : "public",
   });
   // Recovery must retain the original frozen request, not reinterpret its fields.
-  const invalid = !pending && Object.values(errors).some(Boolean);
+  const invalid =
+    !pending && (Object.values(errors).some(Boolean) || unresolved);
 
   const dirty =
     !pending &&
@@ -431,7 +457,16 @@ function OpenCreateChannelDialog({
                 label="Template"
                 variant="field"
                 value={templateId}
-                description={templateNote}
+                description={
+                  checkingAgents
+                    ? "Checking which of its agents are in this community…"
+                    : templateNote
+                }
+                error={
+                  unresolved && !checkingAgents
+                    ? "Its agents can’t be checked right now, so they can’t be added. Choose None to create the channel without them."
+                    : undefined
+                }
                 groups={[
                   {
                     label: "",
