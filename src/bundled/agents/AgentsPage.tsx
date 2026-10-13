@@ -953,6 +953,7 @@ function ImportAgents({
           last && {
             ...last,
             agents: last.agents.filter((item) => !came.has(item.pubkey)),
+            here: [...last.here, ...came],
           },
       );
       // Leaving would hide the one place that names what still needs a hand.

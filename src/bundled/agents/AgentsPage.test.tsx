@@ -1048,6 +1048,7 @@ it("stays on Import and names each part of a team import that did not come", asy
   expect(
     screen.queryByRole("button", { name: "Import Bea" }),
   ).not.toBeInTheDocument();
+  expect(screen.getByText("2 members · 1 already here")).toBeInTheDocument();
   await user.click(importTeam);
   onImport();
   expect(screen.getByRole("alert")).toHaveTextContent(
