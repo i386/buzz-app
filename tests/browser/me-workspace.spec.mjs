@@ -155,11 +155,12 @@ test("Me sidebar shares working activity, keyboard preview and local panel navig
     .getByRole("button", { name: "Close Agent Activity tab", exact: true })
     .click();
   await expect(alpha).toBeFocused();
-  // The installed clock runs, so pause at a fixed instant ahead of it rather
-  // than a test-side timestamp that the page clock may already have passed.
-  const base = Date.now();
-  await page.clock.install({ time: base });
-  await page.clock.pauseAt(base + 1_000);
+  // Fix Date while pausing so the target cannot fall behind the browser clock.
+  // Then restore advancing Date with timers still paused, preserving activity age.
+  const clockTime = await page.evaluate(() => Date.now());
+  await page.clock.setFixedTime(clockTime);
+  await page.clock.pauseAt(clockTime);
+  await page.clock.setSystemTime(clockTime);
   // Cross the closed trigger, then reopen by keyboard before hover dismissal.
   await alpha.hover();
   await page.mouse.move(0, 0);
