@@ -252,6 +252,7 @@ export function createRelaySession(
   const observations = new Set<(events: readonly RelayEvent[]) => void>();
   const incomingListeners = new Set<IncomingListener>();
   const liveEventListeners = new Set<LiveListener>();
+  const replayListeners = new Set<LiveListener>();
   const timers = new Set<ReturnType<typeof setTimeout>>();
   const pendingConfirmation = new Set<string>();
   const refreshers = new Set<() => Promise<void>>();
@@ -1593,13 +1594,17 @@ export function createRelaySession(
       };
     },
     /** Verified, access-filtered live-phase events of any kind, after reconciliation.
-     * Never replay, finite reads or local intent. Includes the viewer's own echoes.
-     * Overlapping routes can deliver one event more than once; listeners dedupe by id. */
-    subscribeLive(listener: LiveListener) {
+     * Never finite reads or local intent, and replay only with `replay`: the
+     * recent history each subscription sends again before it goes live, as after
+     * a reconnect, marked `replay` on its batch. Includes the viewer's own echoes.
+     * Overlapping routes and replays can deliver one event more than once;
+     * listeners dedupe by id. */
+    subscribeLive(listener: LiveListener, options?: { replay?: boolean }) {
       if (closed) return () => {};
-      liveEventListeners.add(listener);
+      const listeners = options?.replay ? replayListeners : liveEventListeners;
+      listeners.add(listener);
       return () => {
-        liveEventListeners.delete(listener);
+        listeners.delete(listener);
       };
     },
     typing: typing.capability,
@@ -2341,9 +2346,10 @@ export function createRelaySession(
         liveSnapshot.status === "connected"
       )
         channelActivity.accept(visible);
+      const replay = provenance?.phase === "replay";
       if (
-        provenance?.phase === "live" &&
-        liveEventListeners.size &&
+        (provenance?.phase === "live" || replay) &&
+        (replayListeners.size || (!replay && liveEventListeners.size)) &&
         visible.length &&
         !closed &&
         epoch === accessEpoch &&
@@ -2352,8 +2358,11 @@ export function createRelaySession(
         const batch = Object.freeze({
           events: Object.freeze([...visible]),
           ...(provenance?.channelId ? { channelId: provenance.channelId } : {}),
+          ...(replay ? { replay: true as const } : {}),
         });
-        for (const listener of liveEventListeners) {
+        for (const listener of replay
+          ? [...replayListeners]
+          : [...liveEventListeners, ...replayListeners]) {
           if (closed || epoch !== accessEpoch) break;
           try {
             listener(batch);
@@ -2625,6 +2634,7 @@ export function createRelaySession(
       liveListeners.clear();
       incomingListeners.clear();
       liveEventListeners.clear();
+      replayListeners.clear();
       observations.clear();
       for (const timer of timers) clearTimeout(timer);
       for (const dispose of [...views.keys()]) dispose();

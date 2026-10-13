@@ -12,10 +12,13 @@ export type IncomingMessage = Readonly<{
   audience?: "agents";
 }>;
 export type IncomingListener = (messages: readonly IncomingMessage[]) => void;
-/** Verified live-phase events from one delivery. `channelId` is the route's channel
- * when the wire scope was unambiguous; global routes (profiles, #p hints) omit it. */
+/** Verified events from one delivery. `channelId` is the route's channel
+ * when the wire scope was unambiguous; global routes (profiles, #p hints) omit it.
+ * `replay` marks the recent history a subscription sends before it goes live,
+ * as after a reconnect; it reaches only listeners that asked for it. */
 export type LiveBatch = Readonly<{
   events: readonly RelayEvent[];
   channelId?: string;
+  replay?: true;
 }>;
 export type LiveListener = (batch: LiveBatch) => void;

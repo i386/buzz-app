@@ -449,6 +449,9 @@ declare module "@deepseek-ai/cordis" {
 const QUEUE_LIMIT = 32;
 /** The spec asks for at least the agent's 2,048 most recent events. */
 const SEEN_LIMIT = 2_048;
+/** Watched events each agent keeps while their channel's roster is only the one
+ * saved on disk, until the relay confirms it. */
+const HELD_LIMIT = 256;
 /** Bounds one cleanup attempt, whose relay steps otherwise wait on the outbox. */
 const CLEANUP_TIMEOUT_MS = 60_000;
 /** Runs per agent per minute; bounds two agents that answer each other. */
@@ -676,6 +679,9 @@ type Runner = {
   /** Events seen, and events it wrote (so reactions to them reach no watch). */
   readonly seen: Set<string>;
   readonly wrote: Set<string>;
+  /** Watched events whose channel roster is not confirmed yet, by id: they are
+   * matched again once it is (see `member()`). */
+  readonly held: Map<string, { event: RelayEvent; channelId?: string }>;
   /** Whether native may hold the agent for this copy; true at first, since
    * native outlives a page reload. */
   mayHold: boolean;
@@ -1755,20 +1761,31 @@ export class AgentsService extends Service implements Agents {
   }
 
   /** Delivers the session's live events, and retries what failed whenever its
-   * connection recovers, which happens within the same session. */
+   * connection recovers, which happens within the same session. A subscription
+   * that comes back, after a reconnect or a failed route, first sends its
+   * recent history again: what in it is new since this listener started was
+   * missed while it was down, and is delivered now (`seen` drops the rest).
+   * Older history is catch-up's, not replay's. */
   private listen(session: RelaySession, origin: string) {
     let connected = session.live.snapshot().status === "connected";
-    const stopEvents = session.subscribeLive((batch) =>
-      this.dispatch(batch, origin),
+    const since = seconds();
+    const stopEvents = session.subscribeLive(
+      (batch) => this.dispatch(batch, origin, since),
+      { replay: true },
     );
     const stopStatus = session.live.subscribe(() => {
       const now = session.live.snapshot().status === "connected";
       if (now && !connected) this.sync();
       connected = now;
     });
+    // A roster the relay confirms decides the events held for it.
+    const stopRosters = session.channels.subscribeList?.(() =>
+      this.releaseHeld(origin),
+    );
     return () => {
       stopEvents();
       stopStatus();
+      stopRosters?.();
     };
   }
 
@@ -1877,6 +1894,7 @@ export class AgentsService extends Service implements Agents {
       admitted: 0,
       seen: new Set(),
       wrote: new Set(),
+      held: new Map(),
       mayHold: true,
       epoch: 0,
       classifying: 0,
@@ -1886,6 +1904,7 @@ export class AgentsService extends Service implements Agents {
   private retire(runner: Runner) {
     this.localActivity.clear(undefined, runner.pubkey);
     runner.queue.length = 0;
+    runner.held.clear();
     runner.controller.abort();
   }
   /** The runner's event watches for the agent's current attention. */
@@ -1908,13 +1927,15 @@ export class AgentsService extends Service implements Agents {
     return watches;
   }
 
-  /** Gives a community's live events to the agents in it. */
-  private dispatch(batch: LiveBatch, origin: string) {
+  /** Gives a community's live events, and replayed ones from `since` on, to
+   * the agents in it. */
+  private dispatch(batch: LiveBatch, origin: string, since: number) {
     for (const runner of this.runners.values()) {
       const agent = this.ready(runner.pubkey);
       if (!agent || originOf(agent.relay) !== origin || !runner.type?.run)
         continue;
       for (const event of batch.events) {
+        if (batch.replay && event.created_at < since) continue;
         if (runner.seen.has(event.id)) continue;
         bounded(runner.seen, event.id);
         // An agent never hears itself; its own events keep reactions to them
@@ -1923,24 +1944,52 @@ export class AgentsService extends Service implements Agents {
           bounded(runner.wrote, event.id);
           continue;
         }
-        for (const trigger of this.heard(runner, agent, event)) {
-          const job = {
-            trigger,
-            ...(batch.channelId ? { channelId: batch.channelId } : {}),
-            ...(trigger.type === "watch"
-              ? {
-                  matched: {
-                    object: agent.attention[trigger.slug] as AttentionObject,
-                    epoch: runner.epoch,
-                  },
-                }
-              : {}),
-          };
-          if (trigger.type === "watch" && trigger.watch.classifier)
-            this.classified(runner, agent, { ...job, trigger });
-          else this.enqueue(runner, job);
-        }
+        this.deliver(runner, agent, event, batch.channelId);
       }
+    }
+  }
+  /** Matches the held events of a community's agents again, as its rosters
+   * change: one now confirmed wakes the watches it matches, or none. */
+  private releaseHeld(origin: string) {
+    for (const runner of this.runners.values()) {
+      if (!runner.held.size) continue;
+      const agent = this.ready(runner.pubkey);
+      if (!agent || originOf(agent.relay) !== origin) continue;
+      for (const [id, { event, channelId }] of [...runner.held]) {
+        runner.held.delete(id);
+        this.deliver(runner, agent, event, channelId);
+      }
+    }
+  }
+  private deliver(
+    runner: Runner,
+    agent: Agent,
+    event: RelayEvent,
+    channelId: string | undefined,
+  ) {
+    const triggers = this.heard(runner, agent, event);
+    if (triggers === "held") {
+      runner.held.set(event.id, { event, ...(channelId ? { channelId } : {}) });
+      if (runner.held.size > HELD_LIMIT)
+        runner.held.delete(runner.held.keys().next().value as string);
+      return;
+    }
+    for (const trigger of triggers) {
+      const job = {
+        trigger,
+        ...(channelId ? { channelId } : {}),
+        ...(trigger.type === "watch"
+          ? {
+              matched: {
+                object: agent.attention[trigger.slug] as AttentionObject,
+                epoch: runner.epoch,
+              },
+            }
+          : {}),
+      };
+      if (trigger.type === "watch" && trigger.watch.classifier)
+        this.classified(runner, agent, { ...job, trigger });
+      else this.enqueue(runner, job);
     }
   }
   /** Runs a matched watch's classifier, then queues the event if it passes.
@@ -2074,7 +2123,13 @@ export class AgentsService extends Service implements Agents {
       null
     );
   }
-  private heard(runner: Runner, agent: Agent, event: RelayEvent): Trigger[] {
+  /** What `event` wakes in the agent, or "held" while a watch it matches waits
+   * for its channel's roster to be confirmed. */
+  private heard(
+    runner: Runner,
+    agent: Agent,
+    event: RelayEvent,
+  ): Trigger[] | "held" {
     const wrote = (id: string) => runner.wrote.has(id);
     // Another of the owner's agents wakes it only by naming it, wherever: were a
     // watch enough, two agents replying to each other would never stop. The
@@ -2089,22 +2144,35 @@ export class AgentsService extends Service implements Agents {
       return CHAT_KINDS.includes(event.kind)
         ? [{ type: "mention", event }]
         : [];
-    if (!agent.attentionEnabled || !this.member(agent, event)) return [];
-    return this.watches(runner, agent)
-      .filter(({ watch, filter }) => watchMatches(watch, event, filter))
-      .map(({ filter: _, ...match }) => ({ type: "watch", event, ...match }));
+    if (!agent.attentionEnabled) return [];
+    const matches = this.watches(runner, agent).filter(({ watch, filter }) =>
+      watchMatches(watch, event, filter),
+    );
+    if (!matches.length) return [];
+    const member = this.member(agent, event);
+    if (member === undefined) return "held";
+    return member
+      ? matches.map(({ filter: _, ...match }) => ({
+          type: "watch",
+          event,
+          ...match,
+        }))
+      : [];
   }
   /** Whether the agent is in the event's channel, by its relay-signed roster.
    * The stream is the owner's, so a watch, even of "all", sees only what the
    * agent itself could read; an event with no channel, or whose roster is
-   * unknown, wakes no watch. */
-  private member(agent: Agent, event: RelayEvent) {
+   * unknown, wakes no watch. A roster only loaded from disk decides nothing
+   * (undefined): the agent may have been removed or added since it was saved,
+   * so the event waits until the relay confirms it. */
+  private member(agent: Agent, event: RelayEvent): boolean | undefined {
     const channel = event.tags.find((tag) => tag[0] === "h")?.[1];
     const channels = this.bindingOf(agent)?.session.channels;
     if (!channel || !channels) return false;
     const summary =
       channels.list().channels.find((item) => item.id === channel) ??
       channels.get?.(channel);
+    if (summary?.cached) return undefined;
     return !!summary?.members?.includes(agent.pubkey);
   }
   /** The job as it should run now, or undefined when it should not run: a
