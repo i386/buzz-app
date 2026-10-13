@@ -63,7 +63,7 @@ export function validChannelCommand(event) {
       !!tags[1][1].trim() &&
       [...tags[1][1]].length <= 120 &&
       ["open", "private"].includes(tags[2][1]) &&
-      tags[3][1] === "stream" &&
+      ["stream", "system"].includes(tags[3][1]) &&
       (!about ||
         (about.length === 2 &&
           [...aboutValue].length <= 1000 &&

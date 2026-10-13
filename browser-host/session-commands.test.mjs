@@ -37,6 +37,25 @@ it("allows only ordinary invitations, without extra roles", () => {
   expect(validChannelCommand({ ...invite, kind: 9001 })).toBe(false);
 });
 
+it("admits stream and NIP-CL system channel creation only", () => {
+  const create = (type) => ({
+    kind: 9007,
+    created_at: 1,
+    content: "",
+    tags: [
+      ["h", id],
+      ["name", "For You records"],
+      ["visibility", "private"],
+      ["channel_type", type],
+      ["t", "for-you"],
+    ],
+  });
+  expect(validChannelCommand(create("stream"))).toBe(true);
+  expect(validChannelCommand(create("system"))).toBe(true);
+  for (const type of ["dm", "forum", "session", "System", ""])
+    expect(validChannelCommand(create(type))).toBe(false);
+});
+
 it("preserves strict Sessions metadata while allowing ordinary stream visibility", () => {
   const create = {
     kind: 9007,

@@ -2,7 +2,7 @@ import { canonicalDetailsName } from "./channel-details-protocol";
 import { channelLabelTags } from "./channel-labels";
 import { sessionDescription } from "../sessions/metadata";
 import type { Outbox } from "./outbox";
-import type { ChannelQueries } from "./contracts";
+import type { ChannelQueries, ChannelSummary } from "./contracts";
 import type { RelayReader } from "./reader";
 
 export const DEFAULT_TEMPORARY_CHANNEL_TTL_SECONDS = 7 * 24 * 60 * 60;
@@ -182,13 +182,18 @@ export function createWorkSessions(
    * its `refreshRoster` (roster only) for a channel it already carries, such
    * as one an agent was just added to. Otherwise, or when that read leaves the
    * gate unsatisfied, the full viewer-roster discovery runs. All three apply
-   * through the same discovery path. */
+   * through the same discovery path.
+   *
+   * A system channel (NIP-CL) never joins the list, and the relay leaves it
+   * out of the full roster read. Its evidence is the exact one-channel read
+   * alone, checked through `get`, and repeated until the gate decides. */
   async function refresh(
     id: string,
     expected: {
       member?: string;
       members?: readonly string[];
       parent?: string;
+      system?: boolean | undefined;
     } = {},
     sessionOnly = true,
   ) {
@@ -197,6 +202,7 @@ export function createWorkSessions(
     // Aborted once the gate decides, so a still-running exact read releases
     // its reader slot instead of holding it until the connection closes.
     const exact = new AbortController();
+    let recheck = () => {};
     const wait = new Promise<void>((resolve, reject) => {
       let unsubscribe = () => {};
       const done = (error?: Error) => {
@@ -219,27 +225,23 @@ export function createWorkSessions(
           ),
         15000,
       );
+      const matches = (channel: ChannelSummary) =>
+        channel.id === id &&
+        (!sessionOnly || channel.channelType === "session") &&
+        (!expected.member || channel.members?.includes(expected.member)) &&
+        (!expected.members ||
+          expected.members.every((key) => channel.members?.includes(key))) &&
+        (!expected.parent || channel.parentChannelId === expected.parent);
       const inspect = (reportError = true) => {
         const list = channels.list();
-        if (reportError && list.status === "error")
+        if (expected.system) {
+          const channel = channels.get?.(id);
+          if (channel?.channelType === "system" && matches(channel)) done();
+        } else if (reportError && list.status === "error")
           done(new Error(list.error ?? "Session membership could not load."));
-        else if (
-          list.status === "ready" &&
-          list.channels.some(
-            (channel) =>
-              channel.id === id &&
-              (!sessionOnly || channel.channelType === "session") &&
-              (!expected.member ||
-                channel.members?.includes(expected.member)) &&
-              (!expected.members ||
-                expected.members.every((key) =>
-                  channel.members?.includes(key),
-                )) &&
-              (!expected.parent || channel.parentChannelId === expected.parent),
-          )
-        )
-          done();
+        else if (list.status === "ready" && list.channels.some(matches)) done();
       };
+      recheck = inspect;
       unsubscribe = channels.subscribeList(inspect);
       signal.addEventListener("abort", abort, { once: true });
       if (signal.aborted) abort();
@@ -248,6 +250,27 @@ export function createWorkSessions(
     // The gate may time out or abort while a read is in flight; its rejection
     // stays observed here and is rethrown below.
     const gate = wait.catch(() => {});
+    if (expected.system) {
+      while (!settled) {
+        try {
+          await channels.resolve?.([id], {
+            signal: AbortSignal.any([signal, exact.signal]),
+            consistency: "strong",
+          });
+        } catch {
+          // A failed exact read is retried until the gate times out.
+        }
+        if (settled) break;
+        recheck();
+        if (!settled)
+          await Promise.race([
+            gate,
+            new Promise((resolve) => setTimeout(resolve, 500)),
+          ]);
+      }
+      await wait;
+      return;
+    }
     // The exact read extends a list discovery has already made ready. Any other
     // status (idle, loading, error) needs the full pass to become ready at all,
     // and that pass carries the new channel; the store's exact reads would
@@ -506,7 +529,11 @@ export function createWorkSessions(
       description?: string,
       ttlSeconds?: number,
       active?: () => boolean,
-      options: Readonly<{ labels?: readonly string[] | undefined }> = {},
+      options: Readonly<{
+        labels?: readonly string[] | undefined;
+        /** NIP-CL system channel: left out of reads that do not name it. */
+        system?: boolean | undefined;
+      }> = {},
     ) {
       writer();
       identifier(id);
@@ -534,7 +561,7 @@ export function createWorkSessions(
             ["h", id],
             ["name", name],
             ["visibility", visibility],
-            ["channel_type", "stream"],
+            ["channel_type", options.system ? "system" : "stream"],
             ...(about ? [["about", about]] : []),
             ...(ttlSeconds ? [["ttl", String(ttlSeconds)]] : []),
             ...labelTags,

@@ -365,7 +365,7 @@ pub(super) fn creation(event: &EventTemplate) -> bool {
         || name.trim().is_empty()
         || name.chars().count() > 120
         || !matches!(visibility, "open" | "private")
-        || channel_type != "stream"
+        || !matches!(channel_type, "stream" | "system")
     {
         return false;
     }
@@ -651,8 +651,12 @@ mod boundary_tests {
         event.tags.push(vec!["p".into(), "attacker".into()]);
         assert!(!creation(&event));
         event.tags.pop();
-        event.tags[3][1] = "dm".into();
-        assert!(!creation(&event));
+        event.tags[3][1] = "system".into();
+        assert!(creation(&event));
+        for other in ["dm", "forum", "session", "System", ""] {
+            event.tags[3][1] = other.into();
+            assert!(!creation(&event), "{other:?}");
+        }
     }
 
     #[test]

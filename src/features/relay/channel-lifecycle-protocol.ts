@@ -107,7 +107,7 @@ export function lifecycleRecord(
 
 export type ChannelLifecycleSettings = Readonly<{
   channelId: string;
-  channelType: "stream" | "forum" | "dm";
+  channelType: "stream" | "forum" | "dm" | "system";
   canArchive: boolean;
   canUnarchive: boolean;
   canDelete: boolean;
@@ -129,7 +129,12 @@ export function lifecycleSettings(
   if (!metadata || !admins || !roster)
     throw new Error("Current channel permissions could not be verified");
   const type = channelTypeTag(metadata);
-  if (type !== "stream" && type !== "forum" && type !== "dm")
+  if (
+    type !== "stream" &&
+    type !== "forum" &&
+    type !== "dm" &&
+    type !== "system"
+  )
     throw new Error("Current channel type could not be verified");
   const members = new Set<string>();
   for (const entry of roster.tags.filter(([key]) => key === "p")) {

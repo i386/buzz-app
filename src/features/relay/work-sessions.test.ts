@@ -1750,3 +1750,32 @@ it("refuses a new labeled channel without signing when the relay does not advert
     owner.dispose();
   }
 });
+
+it("creates a NIP-CL system channel with its labels", () => {
+  const test = setup();
+  const id = "22222222-2222-4222-8222-222222222222";
+  test.service.createChannel(
+    id,
+    "For You records",
+    "private",
+    undefined,
+    undefined,
+    undefined,
+    { labels: ["for-you"], system: true },
+  );
+  expect(test.outbox.send).toHaveBeenLastCalledWith(
+    {
+      kind: 9007,
+      content: "",
+      tags: [
+        ["h", id],
+        ["name", "For You records"],
+        ["visibility", "private"],
+        ["channel_type", "system"],
+        ["t", "for-you"],
+      ],
+    },
+    undefined,
+    undefined,
+  );
+});

@@ -42,7 +42,7 @@ export function memberAuthority(
   const type = channelTypeTag(metadata);
   const archived = exactLifecycleTag(metadata, "archived");
   if (
-    !["stream", "forum", "dm"].includes(type ?? "") ||
+    !["stream", "forum", "dm", "system"].includes(type ?? "") ||
     (archived !== undefined && archived !== "true" && archived !== "false")
   )
     throw new Error("Malformed channel state");

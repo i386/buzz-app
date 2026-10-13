@@ -10,7 +10,6 @@ import type { AddressInfo } from "node:net";
 import type { ViteDevServer } from "vite";
 import { afterAll, assert, expect, it, vi } from "vitest";
 import { relayBrokerPlugin } from "../../../browser-host/relay-broker.mjs";
-import { openBrokerSocket } from "../../../tests/broker-socket.mjs";
 import { connectBrokerTransport } from "./transport";
 import { createRelaySession } from "./session";
 import { keypair } from "./testing";
@@ -34,9 +33,8 @@ afterAll(async () => {
 });
 
 /** One viewer's real broker (real upstream fetch and socket) and session. */
-async function viewerSession() {
+async function viewerSession(key = keypair()) {
   assert.exists(relayUrl);
-  const key = keypair();
   let handler: RequestListener | undefined;
   const server = createServer((req, res) => {
     req.headers.origin = `http://${req.headers.host}`;
@@ -59,14 +57,13 @@ async function viewerSession() {
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
   const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
   const transport = await connectBrokerTransport(base);
-  const live = await openBrokerSocket(transport);
-  const owner = createRelaySession(
-    { ...transport, subscribe: undefined } as unknown as typeof transport,
-    { outboxStorage: { load: () => [], save() {} } },
-  );
+  // The session owns the live socket, as in the app: history windows load
+  // through its demand-driven subscription.
+  const owner = createRelaySession(transport, {
+    outboxStorage: { load: () => [], save() {} },
+  });
   cleanup.push(async () => {
     owner.dispose();
-    live.dispose();
     server.closeAllConnections();
     await new Promise<void>((resolve) => server.close(() => resolve()));
   });
@@ -139,5 +136,82 @@ it.skipIf(!relayUrl)(
     expect((await details.load(first)).labels).toEqual([]);
     expect(await find(bob, "moved")).toEqual([]);
     console.info("[e2e] relabel and clear confirmed");
+  },
+);
+
+it.skipIf(!relayUrl)(
+  "keeps a private system channel out of lists but readable by its members",
+  { timeout: 60_000 },
+  async () => {
+    const alice = await viewerSession();
+    const bob = await viewerSession();
+    const label = `e2e-sys-${Date.now().toString(36)}`;
+    const id = await alice.session.channelCreation.create({
+      name: "records",
+      visibility: "private",
+      system: true,
+      labels: [label],
+    });
+    console.info("[e2e] system channel", { label, id });
+    alice.session.messages.send(id, "record one");
+    // The relay accepted the message into the system channel. A seen
+    // message may already have left the outbox.
+    await vi.waitFor(
+      () =>
+        expect(
+          alice.session.outbox
+            ?.snapshot()
+            .filter((item) => item.event.kind === 9)
+            .every((item) => /accepted|seen/.test(item.delivery ?? "")),
+        ).toBe(true),
+      { timeout: 10_000 },
+    );
+
+    // A fresh session for the same key: the full roster read leaves the system
+    // channel out, and the list never shows it.
+    const again = await viewerSession(alice.key);
+    const [found] =
+      (await again.session.channels.findLabeled?.({
+        creator: alice.key.pubkey,
+        label,
+      })) ?? [];
+    expect(found).toMatchObject({
+      id,
+      channelType: "system",
+      private: true,
+      hidden: true,
+      labels: [label],
+      creator: alice.key.pubkey,
+    });
+    again.session.channels.ensureList();
+    await vi.waitFor(
+      () => expect(again.session.channels.list().status).toBe("ready"),
+      { timeout: 10_000 },
+    );
+    expect(
+      again.session.channels.list().channels.map((c) => c.id),
+    ).not.toContain(id);
+    // The complete roster read did not revoke access the relay never denied.
+    expect(again.session.channels.get?.(id)?.channelType).toBe("system");
+    again.session.channels.ensure(id);
+    await vi.waitFor(
+      () =>
+        expect(
+          again.session.channels.window(id).rows.map((row) => row.content),
+        ).toContain("record one"),
+      { timeout: 10_000 },
+    );
+    console.info(
+      "[e2e] member read",
+      again.session.channels.window(id).rows.length,
+    );
+
+    // A non-member cannot find a private system channel.
+    expect(
+      await bob.session.channels.findLabeled?.({
+        creator: alice.key.pubkey,
+        label,
+      }),
+    ).toEqual([]);
   },
 );

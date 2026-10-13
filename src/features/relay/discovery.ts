@@ -115,9 +115,12 @@ export class DiscoveryState {
     let changed = !this.complete;
     this.complete = true;
     // Keep the last signed version: an old replay cannot undo authoritative loss.
+    // The relay leaves system channels out of the `#p` roster read (NIP-CL),
+    // so their absence from it says nothing about access.
     for (const [id, roster] of this.rosters)
       if (
         hasTag(roster, "p", this.viewer) &&
+        tag(roster, "t") !== "system" &&
         !ids.has(id) &&
         !this.denied.has(id) &&
         started.get(id) === roster
@@ -206,6 +209,7 @@ export class DiscoveryState {
       type === "stream" ||
       type === "forum" ||
       type === "dm" ||
+      type === "system" ||
       (type === "session" && this.isSession(id))
         ? type
         : undefined;
@@ -291,12 +295,14 @@ export class DiscoveryState {
       return metadata ? [roster, metadata] : [roster];
     });
   }
+  /** The channel list. System channels (NIP-CL) hold app data, not
+   * conversation: they stay readable through get() but never list here. */
   channels(): ChannelSummary[] {
     return [...this.rosters.keys()]
       .filter((id) => this.authorized(id))
       .flatMap((id) => {
         const channel = this.get(id);
-        return channel ? [channel] : [];
+        return channel && channel.channelType !== "system" ? [channel] : [];
       })
       .sort((a, b) => a.name.localeCompare(b.name) || a.id.localeCompare(b.id));
   }
