@@ -331,6 +331,10 @@ export async function connectNativeTransport(
     throw new Error("Relay did not advertise its identity");
   const creation =
     Array.isArray(info.supported_nips) && info.supported_nips.includes(29);
+  // NIP-CL: the relay keeps channel labels and answers label lookups.
+  const channelIdentity =
+    Array.isArray(info.supported_extensions) &&
+    info.supported_extensions.includes("nip-cl");
   const transport = await connectSignedTransport(
     nativeRelaySigner(origin),
     origin,
@@ -829,6 +833,7 @@ export async function connectNativeTransport(
     },
     uploadAttachment: (file, signal, progress) =>
       nativeAttachmentUpload(origin, file, signal, progress),
+    ...(channelIdentity ? { channelIdentity: true as const } : {}),
     writer: {
       ...writer,
       kinds: creation ? [...nativeWriteKinds, 9007] : nativeWriteKinds,

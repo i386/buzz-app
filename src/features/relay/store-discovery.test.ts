@@ -37,12 +37,16 @@ beforeAll(() => {
 afterEach(() => {
   for (const owner of owners.splice(0)) owner.dispose();
 });
-function setup(options: ChannelStoreOptions = {}) {
+function setup(
+  options: ChannelStoreOptions = {},
+  relayInfo: { channelIdentity?: true } = {},
+) {
   const wire = scriptedTransport(viewer.pubkey, relay.pubkey);
   let receive!: (events: readonly RelayEvent[]) => void;
   const owner = createRelaySession(
     {
       ...wire.transport,
+      ...relayInfo,
       subscribe(callbacks) {
         receive = callbacks.receive;
         return { update() {}, retry() {}, dispose() {} };
@@ -733,8 +737,20 @@ it("ranks public name matches before the cut and reuses one metadata page while 
   expect(h.channels.matchPublic?.("ops")).toEqual([]);
 });
 
-it("finds one creator's labeled channels oldest first and admits only relay-proven matches", async () => {
+it("refuses a label lookup without sending it when the relay does not advertise NIP-CL", async () => {
   const h = setup();
+  h.channels.ensureList();
+  await h.rosters(0);
+  await h.settled();
+  const sent = h.pending.length;
+  await expect(
+    h.channels.findLabeled?.({ creator: keypair().pubkey, label: "for-you" }),
+  ).rejects.toThrow(/does not support channel labels/);
+  expect(h.pending.length).toBe(sent);
+});
+
+it("finds one creator's labeled channels oldest first and admits only relay-proven matches", async () => {
+  const h = setup({}, { channelIdentity: true });
   h.channels.ensureList();
   await h.rosters(0);
   await h.settled();

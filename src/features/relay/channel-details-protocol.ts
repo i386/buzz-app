@@ -95,7 +95,7 @@ function labelsError(labels: unknown): string | undefined {
 }
 
 /** Same label set, ignoring order and duplicates. */
-function sameLabels(a: readonly string[], b: readonly string[]) {
+export function sameLabels(a: readonly string[], b: readonly string[]) {
   const left = new Set(a);
   const right = new Set(b);
   return (

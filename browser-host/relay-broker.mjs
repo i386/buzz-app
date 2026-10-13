@@ -307,6 +307,10 @@ async function relayAuthority(fetch, relay) {
     relayAuthor: author,
     channelCreation:
       Array.isArray(nip11.supported_nips) && nip11.supported_nips.includes(29),
+    // NIP-CL: the relay keeps channel labels and answers label lookups.
+    channelIdentity:
+      Array.isArray(nip11.supported_extensions) &&
+      nip11.supported_extensions.includes("nip-cl"),
     ...(readSnapshotCommunity(nip11.read_state_snapshot)
       ? { readStateCommunity: readSnapshotCommunity(nip11.read_state_snapshot) }
       : {}),
@@ -1376,6 +1380,7 @@ export function relayBrokerPlugin({
               channelActivity: true,
               sidebarMuteWrites: true,
               channelKit: true,
+              channelIdentity: (await getAuthority(relay)).channelIdentity,
               readState: true,
               sidebarPreferenceWrites: true,
               sidebarSectionRemoval: true,

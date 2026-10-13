@@ -5,6 +5,14 @@ export const MAX_CHANNEL_LABELS = 8;
 const CHANNEL_TYPES = new Set(["stream", "forum", "dm", "workflow", "system"]);
 const LABEL = /^[a-z0-9.:-]{1,64}$/;
 
+/** Refusal for NIP-CL writes and lookups on a relay that does not advertise
+ * `nip-cl`. Such a relay drops label tags, so nothing is sent. */
+export function channelIdentityUnsupported(): Error {
+  return new Error(
+    "This community's relay does not support channel labels yet.",
+  );
+}
+
 /** A label must not equal a channel type, so it cannot make a channel look like another type. */
 export function validChannelLabel(value: unknown): value is string {
   return (

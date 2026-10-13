@@ -24,7 +24,11 @@ import { createMemberAdministration } from "../channel-members/administration";
 import { createChannelLifecycle } from "./channel-lifecycle";
 import { createChannelDetails } from "./channel-details";
 import { canonicalDetailsName } from "./channel-details-protocol";
-import { MAX_CHANNEL_LABELS, validChannelLabel } from "./channel-labels";
+import {
+  channelIdentityUnsupported,
+  MAX_CHANNEL_LABELS,
+  validChannelLabel,
+} from "./channel-labels";
 import { createWorkflows } from "../workflows/capability";
 import { isWorkflowOperation } from "../workflows/protocol";
 import {
@@ -719,6 +723,7 @@ export function createRelaySession(
           viewer: transport.viewer,
           relayAuthor: transport.relayAuthor,
           archiveAuthority: transport.archiveAuthority,
+          channelIdentity: transport.channelIdentity,
           media: (url, size) => transport.media(url, size),
           revokeAccess,
           visible: (events) => events.filter(visibility(events)),
@@ -752,6 +757,7 @@ export function createRelaySession(
   const details = createChannelDetails({
     reader: transport && !options.cachedOnly ? requests.reader : undefined,
     writer: transport?.channelDetails,
+    labels: transport?.channelIdentity === true,
     viewer: transport?.viewer ?? "",
     relayAuthor: transport?.relayAuthor ?? "",
     canAccess: (id) => !closed && channels.canParticipate(id),
@@ -1485,8 +1491,12 @@ export function createRelaySession(
     async create(input: ChannelCreationInput) {
       input = { ...input, name: canonicalDetailsName(input.name) };
       if (!transport) throw new Error("The community connection changed.");
+      // A relay without NIP-CL drops label tags: refuse before any new write.
+      // A saved creation that was already signed may still be retried below.
+      const unsupported = !!input.labels?.length && !transport.channelIdentity;
       await writes?.ready;
       if (channelSetup && !pendingCreation()) {
+        if (unsupported) throw channelIdentityUnsupported();
         const run = channelSetup.run(input, transport.viewer);
         let opened: string | undefined;
         void run.completion.catch((error) => {
@@ -1523,6 +1533,7 @@ export function createRelaySession(
           throw new Error(
             "Another channel is still awaiting confirmation. Retry it before changing the details.",
           );
+        if (unsupported) throw channelIdentityUnsupported();
         const id = crypto.randomUUID();
         pendingChannelCreation = {
           signature,

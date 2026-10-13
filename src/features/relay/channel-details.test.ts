@@ -35,7 +35,7 @@ function deferred<T>() {
   });
   return { promise, resolve };
 }
-function harness(role = "owner") {
+function harness(role = "owner", labels = false) {
   let clock = 100;
   const record = (kind: number, tags: string[][]) =>
     finalizeEvent(
@@ -74,6 +74,7 @@ function harness(role = "owner") {
   const owner = createChannelDetails({
     reader: { read },
     writer: { sign, publish },
+    labels,
     viewer,
     relayAuthor,
     canAccess: () => active,
@@ -839,4 +840,28 @@ it("writes NIP-CL labels only when the set changes, and admits only valid label 
       tags: [...head, ["visibility", "open"], ["ttl", ""], ["t", "a"]],
     }),
   ).not.toThrow();
+});
+
+it("refuses a label change without signing when the relay does not advertise NIP-CL", async () => {
+  const old = harness();
+  const base = await old.owner.capability.load(id);
+  expect(base.labels).toEqual([]);
+  await expect(
+    old.owner.capability.save(base, { ...draft, labels: ["for-you"] }),
+  ).rejects.toThrow(/does not support channel labels/);
+  expect(old.sign).not.toHaveBeenCalled();
+  // Other edits still save, with the unchanged (empty) label set.
+  await old.owner.capability.save(base, { ...draft, labels: [] });
+  expect(old.publish).toHaveBeenCalledOnce();
+
+  const supported = harness("owner", true);
+  const current = await supported.owner.capability.load(id);
+  await supported.owner.capability
+    .save(current, { ...draft, labels: ["for-you"] })
+    .catch(() => {});
+  expect(supported.sign).toHaveBeenCalledOnce();
+  expect(supported.sign.mock.calls[0]?.[0].tags).toContainEqual([
+    "t",
+    "for-you",
+  ]);
 });

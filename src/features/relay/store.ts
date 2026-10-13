@@ -16,6 +16,7 @@ import type {
 import { DiscoveryState, metadataName, openMetadata } from "./discovery";
 import {
   channelIdentity,
+  channelIdentityUnsupported,
   channelLabelTags,
   compareChannelAge,
 } from "./channel-labels";
@@ -122,6 +123,8 @@ export function createChannelStore(
         /** Returns true when session post-subscribe catch-up owns this demand. */
         demand?(channelId: string): boolean;
         rosterChanged?(strong?: boolean): void;
+        /** The relay advertises NIP-CL; label lookups are refused without it. */
+        channelIdentity?: true | undefined;
       })
     | null,
   directory: ProfileDirectory,
@@ -1519,6 +1522,8 @@ export function createChannelStore(
   ): Promise<readonly ChannelSummary[]> {
     if (disposed || !transport || !discovery || options.cachedOnly)
       throw new Error("Relay is unavailable");
+    // An old relay ignores the label filter; "none found" would be a guess.
+    if (!transport.channelIdentity) throw channelIdentityUnsupported();
     if (!/^[0-9a-f]{64}$/.test(query.creator))
       throw new Error("Choose a valid channel creator.");
     channelLabelTags([query.label]);

@@ -121,6 +121,9 @@ export interface ReadTransport {
   /** Purpose-bound NIP-ER codec; never a general NIP-44 or signing primitive. */
   readonly reminders?: ReminderHost;
   readonly channelKit?: ChannelKitHost;
+  /** The relay advertises NIP-CL (`nip-cl` in NIP-11 `supported_extensions`):
+   * it keeps channel labels and answers label lookups. */
+  readonly channelIdentity?: true;
   /** Strictly validated atomic writer snapshot; never an ordinary event-array query. */
   readStateSnapshot?(
     signal: AbortSignal,
@@ -410,6 +413,7 @@ export async function connectBrokerTransport(
     channelActivity?: boolean;
     sidebarMuteWrites?: boolean;
     channelKit?: boolean;
+    channelIdentity?: boolean;
     sidebarPreferenceWrites?: boolean;
     sidebarSectionRemoval?: boolean;
     sidebarStarWrites?: boolean;
@@ -723,6 +727,9 @@ export async function connectBrokerTransport(
             return result.json();
           },
         }
+      : {}),
+    ...(session.channelIdentity === true
+      ? { channelIdentity: true as const }
       : {}),
     ...(session.channelKit
       ? {
