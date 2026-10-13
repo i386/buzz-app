@@ -36,6 +36,7 @@ import {
 import type { ChannelSummary } from "../relay/contracts";
 import { useChannelRowMenu } from "../../bundled/channels/useChannelRowMenu";
 import { ToastNotice } from "../../shared/design-system/ui/Toast";
+import { RecoveryNotice, useRecoveryShown } from "../relay/RecoveryNotice";
 import { clientMetrics } from "../developer/client-metrics";
 import {
   BellIcon,
@@ -204,6 +205,7 @@ function ReadySidebar({
   viewer?: string | undefined;
 }) {
   const list = useChannelList(queries.channels);
+  const recoveryShown = useRecoveryShown(queries.recovery);
   const placement = useMePlacement(queries);
   const preferences = useSidebarPreferences(queries.sidebarPreferences);
   const startup = useSidebarStartup(queries, list, preferences);
@@ -215,10 +217,6 @@ function ReadySidebar({
   const readAction = useChannelReadAction();
   const readWrite = readAction.state;
   const [rowFocus, setRowFocus] = useState<string>();
-  const kitState = useSyncExternalStore(
-    queries.channelKit.subscribe,
-    queries.channelKit.snapshot,
-  );
   const hiddenDms = useHiddenDms(scope, queries, list);
   const lifecycle = queries.channelLifecycle;
   const dmVisibility = useSyncExternalStore(
@@ -987,22 +985,9 @@ function ReadySidebar({
             preferences.status === "loading" || startup.updating || undefined
           }
         >
-          {kitState.status === "error" && (
-            <p role="alert">
-              {kitState.error}{" "}
-              <Button onClick={() => void queries.channelKit.refresh()}>
-                Retry templates
-              </Button>
-            </p>
-          )}
-          {meEnabled && placement.status !== "ready" && (
-            <p role="status">
-              {placement.error ?? "Loading Me placement…"}{" "}
-              <Button onClick={() => void queries.mePlacement.refresh()}>
-                Retry Me
-              </Button>
-            </p>
-          )}
+          {/* Templates, Me placement, saved preferences, hidden conversations
+              and live updates recover through one automatic owner. */}
+          {!cached && <RecoveryNotice recovery={queries.recovery} />}
           {setupNotices.map((notice) => (
             <ToastNotice
               key={notice.id}
@@ -1018,14 +1003,6 @@ function ReadySidebar({
               </Button>
             </ToastNotice>
           ))}
-          {!cached && dmVisibility.status === "error" && (
-            <div role="alert">
-              Hidden conversations could not be refreshed.{" "}
-              <Button onClick={() => void lifecycle.refreshVisibility()}>
-                Retry hidden conversations
-              </Button>
-            </div>
-          )}
           <SidebarUnread listRef={sidebar.list} dmPreviews={unreadDmPreviews}>
             <SidebarNavigation>{children}</SidebarNavigation>
             <ChannelSidebarDnd
@@ -1204,7 +1181,7 @@ function ReadySidebar({
                 Loading your sidebar…
               </p>
             )}
-            {list.status === "error" && (
+            {list.status === "error" && !recoveryShown && (
               <p role="alert" className={styles.empty}>
                 {list.error}
               </p>
@@ -1318,19 +1295,7 @@ function ReadySidebar({
                 </button>
               </div>
             ))}
-          {!cached && startup.ready && preferences.status === "error" ? (
-            <ToastNotice
-              title="Saved sidebar preferences couldn’t refresh"
-              description="Your conversations are still available."
-              tone="warning"
-            >
-              <Button type="button" size="sm" onClick={preferences.reload}>
-                Retry
-              </Button>
-            </ToastNotice>
-          ) : !cached &&
-            startup.ready &&
-            preferences.status === "unsupported" ? (
+          {!cached && startup.ready && preferences.status === "unsupported" ? (
             <p className={styles.preferenceNotice} role="status">
               Saved groups and stars aren’t supported by this host yet.
             </p>

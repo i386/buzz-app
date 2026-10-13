@@ -101,6 +101,11 @@ import { createMessages } from "./messages";
 import { createThreadView } from "./threads";
 import { ByteLru } from "./budget";
 import { createRelayProfiler } from "./profiling";
+import {
+  createRecovery,
+  type RecoverySource,
+  type RecoveryStatus,
+} from "./recovery";
 import { createReminders } from "./reminders";
 import {
   retainEvents,
@@ -906,8 +911,7 @@ export function createRelaySession(
       ...liveSnapshot,
       ...(channels.suspendedPreviews().length
         ? {
-            error:
-              "Public preview access needs rechecking; retry live updates.",
+            error: "Public preview access needs rechecking.",
           }
         : {}),
       roster: channels.roster(),
@@ -1545,6 +1549,75 @@ export function createRelaySession(
     },
     writes?.local,
   );
+  const recoverable = (
+    subscribe: (listener: () => void) => () => void,
+    status: () => RecoveryStatus,
+    retry: () => void,
+  ): RecoverySource => Object.freeze({ subscribe, status, retry });
+  const loadState = (status: string): RecoveryStatus =>
+    status === "error" ? "failed" : status === "loading" ? "busy" : "settled";
+  // Background reads only. A failed read always retries; see recovery.ts.
+  // The live source also owns the channel roster (live.retry retries it).
+  const liveRecovery = recoverable(
+    live.subscribe,
+    () => {
+      const view = live.snapshot();
+      // "retrying" counts as failed so wake, network and focus signals skip
+      // the live layer's own backoff wait too.
+      if (
+        view.status === "error" ||
+        view.status === "retrying" ||
+        view.roster.state === "error" ||
+        view.roster.state === "deferred" ||
+        view.heads.some((head) => head.state === "error") ||
+        view.routes.some((route) => route.status === "error")
+      )
+        return "failed";
+      // A retried read in flight is not proof of recovery. Reporting it as
+      // settled would reset the delay and loop the retry every second.
+      return view.status === "connecting" ||
+        view.roster.state === "pending" ||
+        view.heads.some((head) => head.state === "pending") ||
+        view.routes.some((route) => route.status === "pending")
+        ? "busy"
+        : "settled";
+    },
+    live.retry,
+  );
+  const recovery = transport
+    ? createRecovery([
+        liveRecovery,
+        recoverable(
+          channelKit.capability.subscribe,
+          () => loadState(channelKit.capability.snapshot().status),
+          () => void channelKit.capability.refresh(),
+        ),
+        recoverable(
+          mePreferences.placement.subscribe,
+          () => loadState(mePreferences.placement.snapshot().status),
+          () => void mePreferences.placement.refresh(),
+        ),
+        recoverable(
+          sidebarPreferences.queries.subscribe,
+          () => loadState(sidebarPreferences.queries.snapshot().status),
+          () => void sidebarPreferences.queries.refresh(),
+        ),
+        recoverable(
+          lifecycle.capability.subscribe,
+          () => loadState(lifecycle.capability.snapshot().status),
+          () => void lifecycle.capability.refreshVisibility(),
+        ),
+      ])
+    : undefined;
+  // A live stream that connects again proves the relay answers: retry the
+  // other failed reads now instead of waiting out their delay.
+  let liveWasConnected = liveView.status === "connected";
+  const stopLiveRecovery = live.subscribe(() => {
+    const connected = live.snapshot().status === "connected";
+    // The live layer owns its own reconnect recovery; retry the rest.
+    if (connected && !liveWasConnected) recovery?.retryNow(liveRecovery);
+    liveWasConnected = connected;
+  });
   const session = Object.freeze({
     memberAdditions,
     presence,
@@ -1625,6 +1698,8 @@ export function createRelaySession(
     mePlacement: mePreferences.placement,
     reminders: reminders?.capability,
     live,
+    /** The one automatic retry owner for background reads. Undefined offline. */
+    recovery,
     profiling,
     attachments:
       uploadAttachment && writes?.outbox.supports(9)
@@ -2574,6 +2649,8 @@ export function createRelaySession(
     dispose() {
       stopMeGroups();
       closed = true;
+      stopLiveRecovery();
+      recovery?.dispose();
       projects.clearHomes();
       typing.dispose();
       lifetime.abort();

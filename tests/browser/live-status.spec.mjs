@@ -15,13 +15,9 @@ test("clean pending setup stays in diagnostics and never flashes a warning durin
     window.__bannerSeen = [];
     window.__bannerObserver = new MutationObserver(() => {
       for (const status of document.querySelectorAll(
-        '[role="status"][aria-label="Live updates need attention"]',
+        '[role="status"][aria-label="Reconnecting to relay…"], [role="status"][aria-label="Live updates limited"]',
       )) {
-        if (
-          status.textContent.includes(
-            "Only currently accessible messages remain readable.",
-          )
-        )
+        if (status.textContent.includes("readable."))
           window.__bannerSeen.push(status.textContent);
       }
     });
@@ -36,9 +32,9 @@ test("clean pending setup stays in diagnostics and never flashes a warning durin
   await expect(
     page.getByRole("textbox", { name: "Message #Alpha", exact: true }),
   ).toBeVisible();
-  const warning = page
-    .getByRole("status", { name: "Live updates need attention", exact: true })
-    .filter({ hasText: "Only currently accessible messages remain readable." });
+  const warning = page.getByRole("status", {
+    name: /^(Reconnecting to relay…|Live updates limited)$/,
+  });
   await expect.poll(() => app.relay.hasRoute("primary", "beta")).toBe(true);
   await expect(warning).toHaveCount(0);
   const streams = () =>
@@ -84,8 +80,13 @@ test("clean pending setup stays in diagnostics and never flashes a warning durin
   });
 });
 
+const notice = (page) =>
+  page.getByRole("status", { name: "Reconnecting to relay…", exact: true });
+const retryNow = (page) =>
+  notice(page).getByRole("button", { name: "Retry now", exact: true });
+
 for (const target of ["alpha", "profiles"]) {
-  test(`quota recovery for ${target} stays quiet until attempts exhaust, and manual recovery waits for EOSE`, async ({
+  test(`quota recovery for ${target} stays quiet until attempts exhaust, then keeps retrying automatically until EOSE`, async ({
     page,
     app,
   }, testInfo) => {
@@ -99,11 +100,11 @@ for (const target of ["alpha", "profiles"]) {
       page.getByRole("textbox", { name: "Message #Alpha", exact: true }),
     ).toBeVisible();
     await expect.poll(() => app.relay.hasRoute("primary", target)).toBe(true);
-    const warning = page
-      .getByRole("status", { name: "Live updates need attention", exact: true })
-      .filter({
-        hasText: "Only currently accessible messages remain readable.",
-      });
+    // Recovery never falls back to the unrecoverable "limited" status.
+    const warning = page.getByRole("status", {
+      name: "Live updates limited",
+      exact: true,
+    });
     await expect(warning).toHaveCount(0);
     await openChannelDetails(page);
     await openDiagnostics(page);
@@ -127,17 +128,21 @@ for (const target of ["alpha", "profiles"]) {
       if (attempt < 3) {
         await expect(recovery).toBeVisible();
         await expect(warning).toHaveCount(0);
+        await expect(notice(page)).toHaveCount(0);
         await expect.poll(() => requests().length).toBeGreaterThan(before);
         // The new REQ exists, but fixture holds EOSE: no false healthy status.
         await expect(recovery).toBeVisible();
         await expect(warning).toHaveCount(0);
       } else {
-        await expect(warning).toBeVisible();
-        await expect(warning).toContainText("recovery needs attention");
-        await expect(warning).not.toContainText("retry in 0s");
+        // Exhausted stream recovery hands over to session recovery: one
+        // notice, and a new REQ with no click.
+        await expect(notice(page)).toBeVisible();
+        await expect(warning).toHaveCount(0);
+        await expect.poll(() => requests().length).toBeGreaterThan(before);
       }
     }
-    // Persistent feedback must not block the header, composer, or narrow navigation.
+    // The notice keeps showing while the retried REQ waits for EOSE, and it
+    // must not block the header, composer, or narrow navigation.
     for (const width of [390, 800, 1440]) {
       await page.setViewportSize({ width, height: 950 });
       await page
@@ -149,8 +154,12 @@ for (const target of ["alpha", "profiles"]) {
       await page
         .getByRole("textbox", { name: "Message #Alpha", exact: true })
         .fill("Unsent recovery draft");
-      await expect(warning).toHaveCount(1); // Diagnostics must not duplicate recovery.
-      await expect(warning).toHaveCSS("opacity", "1");
+      await expect(notice(page)).toHaveCount(1); // Diagnostics must not duplicate it.
+      await expect(warning).toHaveCount(0);
+      await expect(
+        page.getByRole("dialog", { name: "Reconnecting to relay…" }),
+      ).toHaveCount(0); // Nor a floating copy.
+      await expect(notice(page)).toHaveCSS("opacity", "1");
       const composer = page
         .getByRole("textbox", {
           name: "Message #Alpha",
@@ -159,9 +168,9 @@ for (const target of ["alpha", "profiles"]) {
         .locator("xpath=ancestor::form");
       await expect
         .poll(async () => {
-          const notice = await warning.boundingBox();
+          const box = await notice(page).boundingBox();
           const form = await composer.boundingBox();
-          return notice && form ? notice.y + notice.height <= form.y : false;
+          return box && form ? box.y + box.height <= form.y : false;
         })
         .toBe(true);
       await composer
@@ -175,26 +184,21 @@ for (const target of ["alpha", "profiles"]) {
       });
       await openChannelDetails(page);
       await openDiagnostics(page);
-      await expect(warning).toHaveCount(1);
+      await expect(notice(page)).toHaveCount(1);
     }
     const beforeManual = requests().length;
     await page
       .getByRole("button", { name: "Close Channel settings tab", exact: true })
       .click();
-    const retry = page.getByRole("button", {
-      name: "Retry live updates",
-      exact: true,
-    });
-    await retry.focus();
-    await retry.press("Enter");
+    // Retry now stays available to skip the wait.
+    await retryNow(page).focus();
+    await retryNow(page).press("Enter");
+    await expect.poll(() => requests().length).toBeGreaterThan(beforeManual);
+    await expect(notice(page)).toBeVisible();
+    app.relay.releaseEose(target);
+    await expect(notice(page)).toHaveCount(0);
     await openChannelDetails(page);
     await openDiagnostics(page);
-    await expect(recovery).toBeVisible();
-    await expect(warning).toHaveCount(0);
-    await expect.poll(() => requests().length).toBeGreaterThan(beforeManual);
-    await expect(recovery).toBeVisible();
-    app.relay.releaseEose(target);
-    await expect(recovery).toHaveCount(0);
     await expect(
       page.getByText("Live updates: stream established", { exact: true }),
     ).toBeVisible();
@@ -204,8 +208,9 @@ for (const target of ["alpha", "profiles"]) {
   });
 }
 
-// Browser layout: a long, unbroken relay reason must scroll inside recovery,
-// leaving the composer and keyboard retry reachable at enlarged text size.
+// Browser layout: a long, unbroken relay reason must scroll inside the inline
+// recovery notice, leaving the composer and keyboard Retry now reachable at
+// enlarged text size.
 test("long recovery stays bounded above the composer at enlarged text size", async ({
   page,
   app,
@@ -222,25 +227,24 @@ test("long recovery stays bounded above the composer at enlarged text size", asy
   await page.evaluate(() => {
     document.documentElement.style.fontSize = "20px";
   });
+  app.relay.holdEose("alpha");
   app.relay.failRoute(
     "primary",
     "alpha",
     `error: ${"Unavailable".repeat(160)}`,
   );
-  const warning = page.getByRole("status", {
-    name: "Live updates need attention",
-  });
+  const warning = notice(page);
   await expect(warning).toBeVisible();
   await input.fill("Unsent recovery draft");
   const form = input.locator("xpath=ancestor::form");
   await expect
     .poll(async () => {
-      const notice = await warning.boundingBox();
+      const box = await warning.boundingBox();
       const composer = await form.boundingBox();
       return (
-        !!notice &&
+        !!box &&
         !!composer &&
-        notice.y + notice.height <= composer.y &&
+        box.y + box.height <= composer.y &&
         composer.y + composer.height <= 600
       );
     })
@@ -251,21 +255,20 @@ test("long recovery stays bounded above the composer at enlarged text size", asy
   await form
     .getByRole("button", { name: "Send message", exact: true })
     .click({ trial: true });
-  const retry = warning.getByRole("button", { name: "Retry live updates" });
   await input.focus();
   await page.keyboard.press("Shift+Tab");
-  await expect(retry).toBeFocused();
-  await expect(retry).toBeInViewport();
+  await expect(retryNow(page)).toBeFocused();
+  await expect(retryNow(page)).toBeInViewport();
   await expect
     .poll(() => warning.evaluate((el) => el.scrollTop))
     .toBeGreaterThan(0);
   await page.screenshot({
     path: testInfo.outputPath("recovery-long-enlarged.png"),
   });
-  await retry.press("Enter");
-  await expect(warning).toHaveCount(0);
+  await retryNow(page).press("Enter");
+  app.relay.releaseEose("alpha");
+  await expect(notice(page)).toHaveCount(0);
   await expect(input).toHaveText("Unsent recovery draft");
-  await expect(input).toBeFocused();
 });
 
 async function openDiagnostics(page) {

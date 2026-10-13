@@ -209,3 +209,21 @@ it("presence starts alongside held ordinary work but retains its own flight, pac
   finish();
   await ordinary;
 });
+it.each([
+  [403, { error: "restricted: not a member" }, true],
+  [401, { error: "auth-required" }, true],
+  [403, undefined, undefined],
+  [403, { message: "Forbidden" }, undefined],
+  [500, { error: "boom" }, undefined],
+])("marks only relay-shaped %i refusals as denied", (status, body, denied) => {
+  expect(apiFailure(status, body).denied).toBe(denied);
+});
+it("reads an edge 403 page as unavailable, not as the relay's denial", async () => {
+  const page = new Response("<html><body>Forbidden</body></html>", {
+    status: 403,
+    headers: { "Content-Type": "text/html" },
+  });
+  await expect(readApiFailure(page)).resolves.toEqual({
+    error: "Relay request failed (403)",
+  });
+});

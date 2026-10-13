@@ -214,12 +214,7 @@ function LiveSessions({
     <PanelFrame companion={companion}>
       <section className={styles.empty}>
         {placement.status !== "ready" ? (
-          <div role="status">
-            <p>{placement.error ?? "Loading Me placement…"}</p>
-            <Button onClick={() => void session.mePlacement.refresh()}>
-              Retry Me
-            </Button>
-          </div>
+          <p role="status">{placement.error ?? "Loading Me placement…"}</p>
         ) : list.status === "loading" ? (
           <p role="status">Loading your conversation…</p>
         ) : (
@@ -475,12 +470,7 @@ function SessionWork({
             />
           )}
           {placement.status !== "ready" && (
-            <div role="status">
-              <p>{placement.error ?? "Loading Me placement…"}</p>
-              <Button onClick={() => void session.mePlacement.refresh()}>
-                Retry Me
-              </Button>
-            </div>
+            <p role="status">{placement.error ?? "Loading Me placement…"}</p>
           )}
           {!inMe && placement.status === "ready" && (
             <div role="status">

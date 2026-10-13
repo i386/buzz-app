@@ -176,7 +176,10 @@ test("profiles primary actions through production broker and built app", async (
   for (const channel of ["alpha", "beta"])
     await expect.poll(() => app.relay.hasRoute("primary", channel)).toBe(true);
   await expect(
-    page.getByRole("button", { name: "Retry live updates", exact: true }),
+    page.getByRole("status", {
+      name: "Reconnecting to relay…",
+      exact: true,
+    }),
   ).toHaveCount(0);
   await settle(page, app);
   // Warm barrier is positive signed catch-up, not a sleep/request-count snapshot.

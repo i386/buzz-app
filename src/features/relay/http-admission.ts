@@ -27,6 +27,9 @@ export type ApiFailure = Readonly<{
   paused?: true;
   retryAfterMs?: number;
   sent?: false;
+  /** A relay-shaped 401/403. An edge or proxy page (for example a VPN still
+   * reconnecting) has the same status but is not the relay's answer. */
+  denied?: true;
 }>;
 const MAX_ERROR_BYTES = 4096;
 /** Only a correlated relay quota reason becomes a shared API cooldown. Local
@@ -74,6 +77,7 @@ export function apiFailure(status: number, value: unknown): ApiFailure {
   return {
     error: known.includes(reason) ? reason : `Relay request failed (${status})`,
     ...(body.sent === false ? { sent: false } : {}),
+    ...((status === 401 || status === 403) && reason ? { denied: true } : {}),
   };
 }
 /** Consumes one bounded error body; success payloads remain their owner's concern.
@@ -256,7 +260,13 @@ export async function admittedApiRequest(
       const headers = new Headers(response.headers);
       headers.delete("content-length");
       headers.delete("content-encoding");
-      return Response.json(failure, { status: response.status, headers });
+      // A 401/403 page that is not the relay's own answer (an edge proxy
+      // while a VPN reconnects) is a gateway failure, not a denial.
+      const status =
+        (response.status === 401 || response.status === 403) && !failure.denied
+          ? 502
+          : response.status;
+      return Response.json(failure, { status, headers });
     },
     signal,
     priority,

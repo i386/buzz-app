@@ -2442,7 +2442,11 @@ export const test = base.extend({
         sidebarFailures.splice(match, 1);
         return true;
       };
-      const githubFailures = [...(report.githubFailures ?? [])];
+      // Edge 403 pages (e.g. a VPN reconnecting) injected on relay reads.
+      const githubFailures = [
+        ...(report.githubFailures ?? []),
+        ...(report.relayFailures ?? []),
+      ];
       const injectedGitHubFailure = (message, index) => {
         if (
           !/^Failed to load resource: the server responded with a status of 403/.test(

@@ -11,6 +11,7 @@ import {
 } from "./live";
 
 const MAX_FRAME = 1024 * 1024;
+const MAX_RETRY_MS = 30_000;
 /** A generation owns its stream, parser, retry and heartbeat. Interest changes
  * use the same host owner so they cannot interrupt pending publications. */
 export function subscribeBrokerTraffic(
@@ -252,14 +253,11 @@ export function subscribeBrokerTraffic(
           "retrying",
           error instanceof Error ? error.message : "Live broker interrupted",
         );
-        if (attempts >= 5) {
-          state(
-            "error",
-            "Live broker reconnect attempts exhausted; retry available",
-          );
-          return;
-        }
-        retryTimer = setTimeout(start, 500 * 2 ** attempts++);
+        // Never give up: a laptop can take minutes to get its network back.
+        retryTimer = setTimeout(
+          start,
+          Math.min(500 * 2 ** attempts++, MAX_RETRY_MS),
+        );
       } finally {
         if (current === generation) {
           streamId = undefined;

@@ -47,7 +47,7 @@ function setup() {
     connected,
   };
 }
-it("Retry live updates recovers roster catch-up refused after globals established", async () => {
+it("live retry recovers roster catch-up refused after globals established", async () => {
   const h = setup();
   try {
     h.connected();

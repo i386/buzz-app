@@ -1154,6 +1154,29 @@ test("each request mints fresh auth at dispatch after wall time advances", async
   }
 });
 
+test("query keeps relay 403 refusals but turns an edge 403 page into a gateway failure", async () => {
+  let edge = false;
+  const h = await harness(() =>
+    edge
+      ? new Response("<html><body>Forbidden</body></html>", {
+          status: 403,
+          headers: { "Content-Type": "text/html" },
+        })
+      : Response.json({ error: "restricted: not a member" }, { status: 403 }),
+  );
+  try {
+    const refused = await h.post("query", filters);
+    expect(refused.status).toBe(403);
+    expect(await refused.json()).toMatchObject({ denied: true });
+    edge = true;
+    const page = await h.post("query", filters);
+    expect(page.status).toBe(502);
+    expect(await page.json()).toEqual({ error: "Relay request failed (502)" });
+  } finally {
+    await h.close();
+  }
+});
+
 test("reaction sign and publish preserve kind 7 and reject malformed targets before upstream I/O", async () => {
   const h = await harness((call) =>
     Response.json({ accepted: true, event_id: call.body.id }),
@@ -2151,7 +2174,7 @@ test("memory reads use captured relay and owner, not submitted identity/filter a
     ]);
     expect(call.auth.pubkey).toBe(viewer);
     return forbidden
-      ? new Response("denied", { status: 403 })
+      ? Response.json({ error: "restricted: not the owner" }, { status: 403 })
       : Response.json([memory]);
   });
   try {

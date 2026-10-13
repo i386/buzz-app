@@ -16,8 +16,15 @@ test.use({
 });
 const history = (page) =>
   page.getByRole("region", { name: "Channel message history" });
+const notice = (page) =>
+  page.getByRole("status", { name: "Reconnecting to relay…", exact: true });
 const retry = (page) =>
-  page.getByRole("button", { name: "Retry live updates", exact: true });
+  notice(page).getByRole("button", { name: "Retry now", exact: true });
+/** Retry now if the notice still shows; automatic recovery may close it first. */
+const retryIfShown = (page) =>
+  retry(page)
+    .click({ timeout: 500 })
+    .catch(() => {});
 const heads = (app, channel) =>
   app.report.queries.filter(
     ({ filter }) =>
@@ -40,16 +47,15 @@ async function crossCooldown(page, app) {
  * refusal, after the broker paused its lane and the fixture stamped the
  * response, so the broker's reopening is the earliest useful moment and only
  * the page knows the last one. Clicks before it are ignored, as asserted
- * before the crossing, so click Retry until the catch-up reaches the relay.
- * The button leaves only once a request already counted there has answered,
- * so a click that finds it is one the app can still act on, and a click
- * while that request is in flight only promotes it. */
+ * before the crossing. Automatic recovery sends the catch-up on its own;
+ * Retry now only shortens the wait, and a click while that request is in
+ * flight only promotes it. */
 async function retryAfterCooldown(page, app, sent) {
   await expect.poll(() => app.relay.brokerCooldownOver()).toBe(true);
   await expect
     .poll(
       async () => {
-        if (!sent()) await retry(page).click();
+        if (!sent()) await retryIfShown(page);
         return sent();
       },
       { message: "Retry after the quota cooldown sends the catch-up" },
@@ -63,7 +69,7 @@ async function ready(page, app) {
   // initial read is not required. Recovery below has its own positive gap control.
   await expect.poll(() => heads(app, "alpha").length).toBeGreaterThanOrEqual(1);
   await expect.poll(() => app.relay.hasRoute("primary", "beta")).toBe(true);
-  await expect(retry(page)).toHaveCount(0);
+  await expect(notice(page)).toHaveCount(0);
   await settle(page);
 }
 
@@ -155,13 +161,9 @@ test("production WS → broker → mounted UI delivers messages and retries a pa
   });
   expect(previewStatus).toBe(200);
   expect(app.relay.rejected).toHaveLength(0);
-  await retry(page).click();
+  // No click: automatic recovery sends the head catch-up.
   await expect.poll(() => app.relay.rejected.length).toBe(1);
-  await expect(
-    page
-      .getByRole("status", { name: "Live updates need attention", exact: true })
-      .filter({ hasText: "rate-limited" }),
-  ).toBeVisible();
+  await expect(notice(page)).toBeVisible();
   const calls = heads(app, "alpha").length;
   await retry(page).click();
   await retry(page).click();
@@ -174,7 +176,7 @@ test("production WS → broker → mounted UI delivers messages and retries a pa
   ).toHaveLength(globalRequests);
   await expectAnchor(page, reading);
   await retryAfterCooldown(page, app, () => heads(app, "alpha").length > calls);
-  await expect(retry(page)).toHaveCount(0);
+  await expect(notice(page)).toHaveCount(0);
   await expect.poll(() => heads(app, "alpha").length).toBe(calls + 1);
   await settle(page);
   await expectAnchor(page, reading);
@@ -217,7 +219,7 @@ test("post-reconnect finite catch-up keeps paged history, cursor and reading pos
     false,
   );
   await expect.poll(() => heads(app, "alpha").length).toBeGreaterThan(calls);
-  await expect(retry(page)).toHaveCount(0);
+  await expect(notice(page)).toHaveCount(0);
   await settle(page);
   await expectAnchor(page, reading);
   await edge(page, -1);
@@ -231,7 +233,7 @@ test("post-reconnect finite catch-up keeps paged history, cursor and reading pos
   ).toBeInViewport();
 });
 
-test("Live retry recovers an empty paused roster without restarting healthy global subscriptions", async ({
+test("automatic recovery restores an empty paused roster without restarting healthy global subscriptions", async ({
   page,
   app,
 }) => {
@@ -248,11 +250,7 @@ test("Live retry recovers an empty paused roster without restarting healthy glob
   await page.goto(app.origin);
   await openPage(page, "Messages");
   await expect.poll(() => app.relay.rejected.length).toBe(1);
-  await expect(
-    page
-      .getByRole("status", { name: "Live updates need attention", exact: true })
-      .filter({ hasText: "rate-limited" }),
-  ).toBeVisible();
+  await expect(notice(page)).toBeVisible();
   await expect(
     page.getByRole("button", { name: "Alpha", exact: true }),
   ).toHaveCount(0);
@@ -300,11 +298,11 @@ test("Live retry recovers an empty paused roster without restarting healthy glob
       response.ok() &&
       response.request().postDataJSON().observer > previousGeneration,
   );
-  await retry(page).click();
+  await retryIfShown(page);
   await expect(
     page.getByText("No channels yet.", { exact: true }),
   ).toBeVisible();
-  await expect(retry(page)).toHaveCount(0);
+  await expect(notice(page)).toHaveCount(0);
   expect(rosters()).toHaveLength(calls + 1);
   expect(app.relay.sockets).toHaveLength(sockets);
   // The first authoritative (empty) roster resets the display generation, not

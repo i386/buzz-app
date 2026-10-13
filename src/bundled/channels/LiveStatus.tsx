@@ -1,6 +1,11 @@
-import { Button } from "../../shared/design-system/ui/Button";
 import { useSyncExternalStore } from "react";
 import type { RelaySession } from "../../features/relay/session";
+import {
+  RECOVERY_DESCRIPTION,
+  RECOVERY_TITLE,
+  RetryNowButton,
+  useInlineRecovery,
+} from "../../features/relay/RecoveryNotice";
 import styles from "./LiveStatus.module.css";
 
 export function LiveStatus({
@@ -8,14 +13,19 @@ export function LiveStatus({
   channelId,
   partialRoster,
   diagnostics = false,
-  onRetry,
+  recovery,
 }: {
   live: RelaySession["live"];
   channelId: string | undefined;
   partialRoster: boolean;
   diagnostics?: boolean;
-  onRetry?: (() => void) | undefined;
+  /** The session recovery owner. A mounted status shows its notice inline
+   * above the composer, in place of the floating fallback. */
+  recovery?: RelaySession["recovery"];
 }) {
+  const { recovering: retrying, shown } = useInlineRecovery(
+    diagnostics ? undefined : recovery,
+  );
   const snapshot = useSyncExternalStore(
     live.subscribe,
     live.snapshot,
@@ -84,32 +94,39 @@ export function LiveStatus({
       </>
     );
   }
-  // Startup and bounded automatic quota recovery do not need user attention.
-  if (!issue) return null;
+  if (recovery && shown)
+    return (
+      <section
+        role="status"
+        aria-label={RECOVERY_TITLE}
+        className={styles.recovery}
+      >
+        <div className={styles.message}>
+          <p className="text-label-sm text-warning">{RECOVERY_TITLE}</p>
+          <p className="text-body-sm text-subtle">
+            {issue ? `${reason} ` : ""}
+            {RECOVERY_DESCRIPTION}
+          </p>
+        </div>
+        <RetryNowButton recovery={recovery} />
+      </section>
+    );
+  // Startup, bounded automatic quota recovery and the first automatic retry do
+  // not need user attention.
+  if (!issue || retrying) return null;
+  // What automatic recovery cannot change (capacity, a partial roster).
   return (
     <section
       role="status"
-      aria-label="Live updates need attention"
+      aria-label="Live updates limited"
       className={styles.recovery}
     >
       <div className={styles.message}>
-        <p className="text-label-sm text-warning">
-          Live updates need attention
-        </p>
+        <p className="text-label-sm text-warning">Live updates limited</p>
         <p className="text-body-sm text-subtle">
           {reason} Only currently accessible messages remain readable.
         </p>
       </div>
-      <Button
-        type="button"
-        size="sm"
-        onClick={() => {
-          live.retry();
-          onRetry?.();
-        }}
-      >
-        Retry live updates
-      </Button>
     </section>
   );
 }

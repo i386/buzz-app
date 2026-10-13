@@ -1065,9 +1065,7 @@ export async function connectBrokerTransport(
         if (!result.ok) {
           const failure = await readApiFailure(result);
           throw new ReadError(
-            result.status === 401 || result.status === 403
-              ? "denied"
-              : "unavailable",
+            failure.denied ? "denied" : "unavailable",
             failure.error,
             result.status,
             failure.retryAfterMs,
@@ -1241,9 +1239,7 @@ export async function connectSignedTransport(
         if (!result.ok) {
           const failure = await readApiFailure(result);
           throw new ReadError(
-            result.status === 401 || result.status === 403
-              ? "denied"
-              : "unavailable",
+            failure.denied ? "denied" : "unavailable",
             failure.error,
             result.status,
             failure.retryAfterMs,

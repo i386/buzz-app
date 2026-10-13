@@ -121,7 +121,8 @@ it("times out a stalled connection and releases timers on app disposal", async (
   await vi.advanceTimersByTimeAsync(8_001);
   expect(data.snapshot().status).toBe("error");
   data.retry();
-  expect(vi.getTimerCount()).toBe(1);
+  // The connection deadline and the wake detector.
+  expect(vi.getTimerCount()).toBe(2);
   await ctx.fiber.dispose();
   expect(vi.getTimerCount()).toBe(0);
 });

@@ -914,10 +914,10 @@ test("Create new retains its draft when preferences fail before submission and r
     );
     held.resolve();
     await failed;
+    // The one recovery notice reports it; there is no separate preferences toast.
+    // The modal makes the page inert, so match the inline notice by attribute.
     await expect(
-      page.getByRole("dialog", {
-        name: "Saved sidebar preferences couldn’t refresh",
-      }),
+      page.locator('[role="status"][aria-label="Reconnecting to relay…"]'),
     ).toBeVisible();
     await dialog.getByRole("button", { name: "Create and move" }).click();
     await expect(dialog).toBeVisible();
@@ -939,6 +939,7 @@ test("Create new retains its draft when preferences fail before submission and r
     ).toBeEnabled();
     await expect(field).toHaveValue("Retained launch");
     await page.unroute("**/sidebar-preferences", failLegacy);
+    // The modal covers the recovery notice, so it keeps its own Retry.
     await dialog
       .getByRole("button", { name: "Retry preferences", exact: true })
       .click();
