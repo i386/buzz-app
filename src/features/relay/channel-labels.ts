@@ -9,7 +9,7 @@ const LABEL = /^[a-z0-9.:-]{1,64}$/;
  * `nip-cl`. Such a relay drops label tags, so nothing is sent. */
 export function channelIdentityUnsupported(): Error {
   return new Error(
-    "This community's relay does not support channel labels yet.",
+    "This community's relay does not support channel labels or system channels yet.",
   );
 }
 

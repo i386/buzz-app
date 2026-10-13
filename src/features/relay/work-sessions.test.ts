@@ -1719,37 +1719,43 @@ it("creates a stream with NIP-CL labels after about and ttl, and rejects bad lab
   expect(test.outbox.send).toHaveBeenCalledTimes(1);
 });
 
-it("refuses a new labeled channel without signing when the relay does not advertise NIP-CL", async () => {
-  const viewer = keypair(),
-    relay = keypair();
-  const sign = vi.fn();
-  const publish = vi.fn();
-  const owner = createRelaySession(
-    {
-      viewer: viewer.pubkey,
-      relayAuthor: relay.pubkey,
-      media: () => undefined,
-      query: async () => [],
-      writer: { kinds: [9, 9000, 9007], sign, publish },
-    },
-    { outboxStorage: { load: () => [], save() {} } },
-  );
-  try {
-    await expect(
-      owner.session.channelCreation.create({
-        name: "Records",
-        visibility: "open",
-        labels: ["for-you"],
-      }),
-    ).rejects.toThrow(/does not support channel labels/);
-    expect(sign).not.toHaveBeenCalled();
-    expect(publish).not.toHaveBeenCalled();
-    expect(owner.session.outbox?.snapshot() ?? []).toEqual([]);
-    expect(owner.session.channelCreation.snapshot()).toBeUndefined();
-  } finally {
-    owner.dispose();
-  }
-});
+it.each([
+  ["labeled", { labels: ["for-you"] }],
+  ["system", { system: true as const }],
+])(
+  "refuses a new %s channel without signing when the relay does not advertise NIP-CL",
+  async (_, extra) => {
+    const viewer = keypair(),
+      relay = keypair();
+    const sign = vi.fn();
+    const publish = vi.fn();
+    const owner = createRelaySession(
+      {
+        viewer: viewer.pubkey,
+        relayAuthor: relay.pubkey,
+        media: () => undefined,
+        query: async () => [],
+        writer: { kinds: [9, 9000, 9007], sign, publish },
+      },
+      { outboxStorage: { load: () => [], save() {} } },
+    );
+    try {
+      await expect(
+        owner.session.channelCreation.create({
+          name: "Records",
+          visibility: "private",
+          ...extra,
+        }),
+      ).rejects.toThrow(/does not support channel labels or system channels/);
+      expect(sign).not.toHaveBeenCalled();
+      expect(publish).not.toHaveBeenCalled();
+      expect(owner.session.outbox?.snapshot() ?? []).toEqual([]);
+      expect(owner.session.channelCreation.snapshot()).toBeUndefined();
+    } finally {
+      owner.dispose();
+    }
+  },
+);
 
 it("creates a NIP-CL system channel with its labels", () => {
   const test = setup();

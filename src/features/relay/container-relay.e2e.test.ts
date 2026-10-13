@@ -1,8 +1,11 @@
 // End-to-end checks against a real Buzz relay, for example the docker compose
 // stack. Skipped unless BUZZ_E2E_RELAY_URL names the relay's https origin.
+// BUZZ_E2E_OLD_RELAY_URL names a relay without NIP-CL (for example one built
+// from block/buzz main before NIP-CL) for the compatibility check.
 // For a relay behind a private CA, start vitest with NODE_EXTRA_CA_CERTS.
 //
 //   BUZZ_E2E_RELAY_URL=https://localhost:3443 \
+//   BUZZ_E2E_OLD_RELAY_URL=https://localhost:3444 \
 //   NODE_EXTRA_CA_CERTS=caddy-root.crt \
 //   pnpm exec vitest run src/features/relay/container-relay.e2e.test.ts
 import { createServer, type RequestListener } from "node:http";
@@ -15,6 +18,7 @@ import { createRelaySession } from "./session";
 import { keypair } from "./testing";
 
 const relayUrl = process.env.BUZZ_E2E_RELAY_URL;
+const oldRelayUrl = process.env.BUZZ_E2E_OLD_RELAY_URL;
 // Channel setup keeps local receipts; Node has no localStorage of its own.
 const stored = new Map<string, string>();
 vi.stubGlobal("localStorage", {
@@ -33,8 +37,8 @@ afterAll(async () => {
 });
 
 /** One viewer's real broker (real upstream fetch and socket) and session. */
-async function viewerSession(key = keypair()) {
-  assert.exists(relayUrl);
+async function viewerSession(key = keypair(), relay = relayUrl) {
+  assert.exists(relay);
   let handler: RequestListener | undefined;
   const server = createServer((req, res) => {
     req.headers.origin = `http://${req.headers.host}`;
@@ -42,7 +46,7 @@ async function viewerSession(key = keypair()) {
   });
   const plugin = relayBrokerPlugin({
     archiveFile: ":memory:",
-    relayUrl,
+    relayUrl: relay,
     identity: () => key.secret,
   });
   await (plugin.configureServer as (server: ViteDevServer) => Promise<void>)({
@@ -213,5 +217,81 @@ it.skipIf(!relayUrl)(
         label,
       }),
     ).toEqual([]);
+  },
+);
+
+it.skipIf(!oldRelayUrl)(
+  "keeps ordinary channel work and refuses NIP-CL calls on a relay without NIP-CL",
+  { timeout: 60_000 },
+  async () => {
+    const alice = await viewerSession(keypair(), oldRelayUrl);
+    const bob = await viewerSession(keypair(), oldRelayUrl);
+    const s = alice.session;
+    // Ordinary work: create, list, edit details, another user joins, archive.
+    const id = await s.channelCreation.create({
+      name: "plain",
+      visibility: "open",
+    });
+    s.channels.ensureList();
+    await vi.waitFor(
+      () => expect(s.channels.list().channels.map((c) => c.id)).toContain(id),
+      { timeout: 15_000 },
+    );
+    expect(s.channels.get?.(id)?.channelType).toBe("stream");
+    await vi.waitFor(() => s.channelDetails.load(id), { timeout: 10_000 });
+    const loaded = await s.channelDetails.load(id);
+    expect(loaded.labels).toEqual([]);
+    await s.channelDetails.save(loaded, {
+      ...loaded,
+      description: "edited on an old relay",
+    });
+    expect((await s.channelDetails.load(id)).description).toBe(
+      "edited on an old relay",
+    );
+    await bob.session.channelLifecycle.run("join", id);
+    await s.channelLifecycle.run("archive", id);
+
+    // NIP-CL calls refuse before anything is sent or saved for retry.
+    const sent = () => s.outbox?.snapshot().length ?? 0;
+    const queued = sent();
+    const unsupported = /does not support channel labels or system channels/;
+    await expect(
+      s.channelCreation.create({
+        name: "labeled",
+        visibility: "open",
+        labels: ["e2e-old"],
+      }),
+    ).rejects.toThrow(unsupported);
+    await expect(
+      s.channelCreation.create({
+        name: "records",
+        visibility: "private",
+        system: true,
+        labels: ["for-you"],
+      }),
+    ).rejects.toThrow(unsupported);
+    await expect(
+      bob.session.channels.findLabeled?.({
+        creator: alice.key.pubkey,
+        label: "e2e-old",
+      }),
+    ).rejects.toThrow(unsupported);
+    const details = await s.channelDetails.load(id);
+    await expect(
+      s.channelDetails.save(details, { ...details, labels: ["e2e-old"] }),
+    ).rejects.toThrow(unsupported);
+    expect(sent()).toBe(queued);
+    expect(s.channelCreation.snapshot()).toBeUndefined();
+
+    // The refusals left nothing stuck: the next ordinary create works.
+    const after = await s.channelCreation.create({
+      name: "plain after",
+      visibility: "open",
+    });
+    await vi.waitFor(
+      () =>
+        expect(s.channels.list().channels.map((c) => c.id)).toContain(after),
+      { timeout: 15_000 },
+    );
   },
 );

@@ -1493,9 +1493,12 @@ export function createRelaySession(
     async create(input: ChannelCreationInput) {
       input = { ...input, name: canonicalDetailsName(input.name) };
       if (!transport) throw new Error("The community connection changed.");
-      // A relay without NIP-CL drops label tags: refuse before any new write.
-      // A saved creation that was already signed may still be retried below.
-      const unsupported = !!input.labels?.length && !transport.channelIdentity;
+      // A relay without NIP-CL drops label tags and refuses system channels:
+      // refuse before any new write. A saved creation that was already signed
+      // may still be retried below.
+      const unsupported =
+        (!!input.labels?.length || input.system === true) &&
+        !transport.channelIdentity;
       await writes?.ready;
       if (channelSetup && !pendingCreation()) {
         if (unsupported) throw channelIdentityUnsupported();
