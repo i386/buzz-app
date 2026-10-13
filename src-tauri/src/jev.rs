@@ -1,8 +1,8 @@
 //! The optional Jev watch classifier. Native code owns the TypeSafe key: it is
-//! read from and written to the login Keychain item Janet uses
-//! (`typesafe-api-key`), and it never crosses into the webview or an agent
-//! process. The webview sends the questions and the event; native adds the key
-//! and the pinned model, calls Jev, and returns only Jev's answers.
+//! kept in Buzz's own login Keychain item, apart from Janet's, and it is never
+//! sent back to the webview or given to an agent process. The webview sends
+//! the questions and the event; native adds the key and the pinned model,
+//! calls Jev, and returns only Jev's answers.
 use serde::Serialize;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -10,7 +10,7 @@ use tokio::sync::{Mutex, Semaphore};
 use zeroize::Zeroizing;
 
 #[cfg(target_os = "macos")]
-pub(crate) const KEYCHAIN_SERVICE: &str = "typesafe-api-key";
+pub(crate) const KEYCHAIN_SERVICE: &str = "dev.local.buzz.foundation.jev-key";
 pub(crate) const MODEL: &str = "jev-1.13.0";
 const ENDPOINT: &str = "https://api.typesafe.ai/v1/systemone";
 const INPUT_LIMIT: usize = 128 * 1024;
@@ -43,8 +43,8 @@ pub(crate) enum Classified {
     },
 }
 
-/// Where the key lives. The OS store runs `/usr/bin/security`, as Janet does,
-/// so the item keeps the access list that lets Janet read it without a prompt.
+/// Where the key lives. The OS store runs `/usr/bin/security`, so the item's
+/// access list names that tool and reads need no prompt.
 pub(crate) trait KeyStore: Send + Sync {
     fn read(&self) -> Result<Option<Zeroizing<String>>, String>;
     fn replace(&self, key: &str) -> Result<(), String>;
@@ -249,7 +249,7 @@ fn client() -> Option<&'static reqwest::Client> {
         .as_ref()
 }
 
-/// The login Keychain through `/usr/bin/security`, as Janet reads it. Writes go
+/// The login Keychain through `/usr/bin/security`. Writes go
 /// through its interactive mode on stdin, so the key is never in a command line.
 struct OsKeyStore;
 
@@ -326,7 +326,8 @@ impl KeyStore for OsKeyStore {
         }
     }
     fn clear(&self) -> Result<(), String> {
-        // Removes every item of the service; bounded in case deletion is refused.
+        // Removes every item of Buzz's own service; bounded in case deletion
+        // is refused.
         for _ in 0..16 {
             let output =
                 Self::security(&["delete-generic-password", "-s", KEYCHAIN_SERVICE], None)?;

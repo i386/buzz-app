@@ -47,7 +47,7 @@ export function ClassifierSettings({
           An agent's watch can ask Jev whether an event is relevant before the
           agent wakes. Without a key, those watches still wake the agent, and
           the agent is told the classifier did not run. The key is kept in the
-          macOS Keychain item Janet uses, so Janet and Buzz share it.
+          macOS Keychain.
         </p>
       </div>
       {!desktop ? (
