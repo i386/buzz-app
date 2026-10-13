@@ -1107,41 +1107,56 @@ fn save_reports_cancellation_success_and_disk_errors() {
 }
 
 #[test]
-fn failed_save_keeps_existing_destination_and_leaves_no_temporary_file() {
+fn failed_mark_keeps_an_existing_destination_and_removes_only_a_new_file() {
     let dir = std::env::temp_dir().join(format!("relay-admin-replace-{}", uuid::Uuid::new_v4()));
     std::fs::create_dir(&dir).unwrap();
-    let file = dir.join("a.png");
-    std::fs::write(&file, b"previous").unwrap();
+    let fail = |_: &std::fs::File, _: &std::path::Path| Err(std::io::Error::other("no streams"));
     let entries = || std::fs::read_dir(&dir).unwrap().count();
 
-    let unmarkable = replace_with(&file, b"new", |_, _| {
-        Err(std::io::Error::other("no streams"))
-    });
-    assert!(unmarkable.is_err());
-    assert_eq!(std::fs::read(&file).unwrap(), b"previous");
-    assert_eq!(
-        entries(),
-        1,
-        "temporary file left behind after a mark failure"
-    );
+    let existing = dir.join("a.png");
+    std::fs::write(&existing, b"previous").unwrap();
+    assert!(replace_with(&existing, b"new", fail).is_err());
+    assert_eq!(std::fs::read(&existing).unwrap(), b"previous");
+    assert_eq!(entries(), 1, "a failed save added a file");
 
-    // A destination that cannot be replaced fails at the rename step.
-    let blocked = dir.join("blocked");
-    std::fs::create_dir_all(blocked.join("child")).unwrap();
-    assert!(replace_with(&blocked, b"new", |_, _| Ok(())).is_err());
-    assert!(blocked.join("child").is_dir());
-    assert_eq!(
-        entries(),
-        2,
-        "temporary file left behind after a rename failure"
-    );
+    let fresh = dir.join("b.png");
+    assert!(replace_with(&fresh, b"new", fail).is_err());
+    assert!(!fresh.exists(), "a failed save left the file it created");
+    assert_eq!(entries(), 1);
+    std::fs::remove_dir_all(dir).unwrap();
+}
 
+#[cfg(unix)]
+#[test]
+fn save_overwrites_in_place_keeping_permissions_and_symlinks() {
+    use std::os::unix::fs::PermissionsExt as _;
+    let dir = std::env::temp_dir().join(format!("relay-admin-inplace-{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir(&dir).unwrap();
+
+    let private = dir.join("private.png");
+    std::fs::write(&private, b"previous contents").unwrap();
+    std::fs::set_permissions(&private, std::fs::Permissions::from_mode(0o600)).unwrap();
     assert_eq!(
-        save_to(Some(Ok(file.clone())), b"replaced"),
+        save_to(Some(Ok(private.clone())), b"new"),
         json!({ "state": "saved" })
     );
-    assert_eq!(std::fs::read(&file).unwrap(), b"replaced");
-    assert_eq!(entries(), 2);
+    assert_eq!(std::fs::read(&private).unwrap(), b"new");
+    let mode = std::fs::metadata(&private).unwrap().permissions().mode() & 0o777;
+    assert_eq!(mode, 0o600);
+
+    let target = dir.join("target.png");
+    std::fs::write(&target, b"old").unwrap();
+    let link = dir.join("link.png");
+    std::os::unix::fs::symlink(&target, &link).unwrap();
+    assert_eq!(
+        save_to(Some(Ok(link.clone())), b"through"),
+        json!({ "state": "saved" })
+    );
+    assert!(std::fs::symlink_metadata(&link)
+        .unwrap()
+        .file_type()
+        .is_symlink());
+    assert_eq!(std::fs::read(&target).unwrap(), b"through");
     std::fs::remove_dir_all(dir).unwrap();
 }
 

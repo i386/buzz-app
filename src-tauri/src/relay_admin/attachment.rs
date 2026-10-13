@@ -213,35 +213,38 @@ fn write_marked(path: &std::path::Path, bytes: &[u8]) -> std::io::Result<()> {
     replace_with(path, bytes, crate::relay::mark_download)
 }
 
-/// Writes a marked sibling temporary file, then renames it over `path`, so the
-/// OS checks the saved file on open and a failed save never touches an existing
-/// destination. Only the temporary file is removed on failure.
+/// Overwrites `path` in place so it keeps its own permissions, ACLs, symlink
+/// and hard links. The file is marked as downloaded before it is truncated, so
+/// a failed mark leaves an existing file's contents intact. A failed mark or
+/// write removes the file only if this save created it; a write failure on an
+/// existing file can leave it truncated or partial, like any confirmed
+/// overwrite, and the save reports failure.
 pub(super) fn replace_with(
     path: &std::path::Path,
     bytes: &[u8],
     mark: impl FnOnce(&std::fs::File, &std::path::Path) -> std::io::Result<()>,
 ) -> std::io::Result<()> {
     use std::io::Write as _;
-    let name = path
-        .file_name()
-        .ok_or_else(|| std::io::Error::other("not a file path"))?;
-    let mut temp_name = std::ffi::OsString::from(".");
-    temp_name.push(name);
-    temp_name.push(format!(".{}.part", uuid::Uuid::new_v4()));
-    let temp = path.with_file_name(temp_name);
-    let mut file = std::fs::OpenOptions::new()
+    let (mut file, created) = match std::fs::OpenOptions::new()
         .write(true)
         .create_new(true)
-        .open(&temp)?;
-    let written = mark(&file, &temp)
+        .open(path)
+    {
+        Ok(file) => (file, true),
+        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+            (std::fs::OpenOptions::new().write(true).open(path)?, false)
+        }
+        Err(e) => return Err(e),
+    };
+    let written = mark(&file, path)
+        .and_then(|_| file.set_len(0))
         .and_then(|_| file.write_all(bytes))
         .and_then(|_| file.sync_all());
     drop(file);
-    let replaced = written.and_then(|_| std::fs::rename(&temp, path));
-    if replaced.is_err() {
-        let _ = std::fs::remove_file(&temp);
+    if written.is_err() && created {
+        let _ = std::fs::remove_file(path);
     }
-    replaced
+    written
 }
 
 /// `attachment-<hash prefix>.<ext>`; unknown types save as `.bin`.
