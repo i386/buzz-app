@@ -484,7 +484,7 @@ export function createTabs(
               }
               focusableWhenDisabled
             >
-              Save defaults
+              Save
             </Button>
           </div>
         </form>

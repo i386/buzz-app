@@ -451,7 +451,7 @@ it("keeps provider readiness quiet and shows recovery when needed", async () => 
   expect(model).toHaveAccessibleDescription("Model B description.");
   await user.click(model);
   expect(f.provider.resolve(defaults)).toEqual(defaults);
-  fireEvent.click(screen.getByRole("button", { name: "Save defaults" }));
+  fireEvent.click(screen.getByRole("button", { name: "Save" }));
   expect(f.provider.resolve(defaults)).toMatchObject({
     model: "model-b",
     effort: "",
@@ -470,7 +470,7 @@ it("keeps provider readiness quiet and shows recovery when needed", async () => 
     });
   await user.click(screen.getByRole("combobox", { name: "Default model" }));
   await user.click(await screen.findByRole("option", { name: "Model A" }));
-  fireEvent.click(screen.getByRole("button", { name: "Save defaults" }));
+  fireEvent.click(screen.getByRole("button", { name: "Save" }));
   expect(await screen.findByRole("alert")).toHaveTextContent("Storage full");
   expect(onClose).toHaveBeenCalledOnce();
   storageFailure.mockRestore();
@@ -585,7 +585,7 @@ it("keeps model-default provider thinking dynamic across save and reopen", async
   await user.click(
     await screen.findByRole("option", { name: "Codex default (Low)" }),
   );
-  await user.click(screen.getByRole("button", { name: "Save defaults" }));
+  await user.click(screen.getByRole("button", { name: "Save" }));
 
   expect(onClose).toHaveBeenCalledOnce();
   expect(

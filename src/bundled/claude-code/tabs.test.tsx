@@ -494,7 +494,7 @@ it("saves a provider model default explicitly and leaves blank agent config inhe
   const sonnet = await screen.findByRole("option", { name: "Sonnet 5.5" });
   expect(sonnet).toHaveAccessibleDescription("Efficient for routine tasks");
   await user.click(sonnet);
-  await user.click(screen.getByRole("button", { name: "Save defaults" }));
+  await user.click(screen.getByRole("button", { name: "Save" }));
   expect(onClose).toHaveBeenCalledOnce();
   cleanup();
 
