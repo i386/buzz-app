@@ -1,11 +1,9 @@
 import { useEffect, useMemo, useSyncExternalStore } from "react";
 import { Button } from "../../shared/design-system/ui/Button";
-import { EmptyState } from "../../shared/design-system/ui/EmptyState";
 import { Header } from "../../shared/design-system/ui/Header";
 import {
   CheckCircleIcon,
   CircleNotchIcon,
-  ShieldIcon,
   WarningCircleIcon,
 } from "../../shared/design-system/icons";
 import { Console, SCREENS, type Screen } from "./Console";
@@ -33,14 +31,6 @@ export function RelayStaff({
     if (context && active()) void staff.probe(context);
   }, [staff, contextKey]);
 
-  if (!staff.backend.available)
-    return (
-      <EmptyState
-        icon={<ShieldIcon />}
-        title={SCREENS[screen].title}
-        description="Relay admin needs the Buzz desktop app."
-      />
-    );
   if (!context) return null;
   return (
     <div className="flex flex-col gap-4">

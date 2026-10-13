@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { AlertDialog } from "../../shared/design-system/ui/AlertDialog";
 import { Button } from "../../shared/design-system/ui/Button";
+import { Field } from "../../shared/design-system/ui/Field";
 import { Input } from "../../shared/design-system/ui/Input";
 import { Select } from "../../shared/design-system/ui/Select";
 import type {
@@ -51,6 +52,8 @@ export function Operators() {
     if (change.pubkey === context.signer) staff.reprobe(context);
   });
   const working = write.busy ? (write.frozen?.pubkey ?? null) : null;
+  /** Every operator change shares one write, so all controls wait for it. */
+  const busy = write.busy;
   const [removing, setRemoving] = useState<OperatorDto | null>(null);
   const pubkey = publicKeyInput(input);
   const secret = containsSecretKey(input);
@@ -72,7 +75,7 @@ export function Operators() {
   };
 
   return (
-    <Loaded read={list}>
+    <Loaded read={list} onRetry={reload}>
       {(operators) => (
         <div className="flex flex-col gap-4">
           {canMutate && (
@@ -80,34 +83,39 @@ export function Operators() {
               <p className="text-caption font-medium text-secondary">
                 Add staff
               </p>
-              <div className="flex items-center gap-2">
-                <Input
-                  aria-label="Public key"
-                  placeholder="npub or 64-hex public key"
-                  value={input}
-                  onChange={(event) => setInput(event.target.value)}
-                />
+              <div className="flex items-end gap-2">
+                <Field
+                  label="Public key"
+                  error={
+                    secret
+                      ? "That looks like a private key. Never paste it here."
+                      : undefined
+                  }
+                >
+                  <Input
+                    placeholder="npub or 64-hex public key"
+                    value={input}
+                    disabled={busy}
+                    onChange={(event) => setInput(event.target.value)}
+                  />
+                </Field>
                 <Select
                   label="Role"
                   variant="compact"
                   value={role}
                   groups={ROLES}
+                  disabled={busy}
                   onValueChange={(value) => setRole(value as StaffRole)}
                 />
                 <Button
                   size="sm"
                   loading={working !== null && working === pubkey}
-                  disabled={!pubkey}
+                  disabled={!pubkey || busy}
                   onClick={() => add(operators)}
                 >
                   Add
                 </Button>
               </div>
-              {secret && (
-                <p className="text-caption text-danger">
-                  That looks like a private key. Never paste it here.
-                </p>
-              )}
             </div>
           )}
           {error && (
@@ -154,7 +162,7 @@ export function Operators() {
                           variant="compact"
                           value={operator.effectiveRole}
                           groups={ROLES}
-                          disabled={working === operator.pubkey}
+                          disabled={busy}
                           onValueChange={(value) =>
                             value !== operator.effectiveRole &&
                             after({
@@ -169,7 +177,7 @@ export function Operators() {
                         <Button
                           size="sm"
                           variant="ghost"
-                          disabled={fixed || working === operator.pubkey}
+                          disabled={fixed || busy}
                           title={
                             fixed
                               ? "Set in relay configuration; cannot be removed here"

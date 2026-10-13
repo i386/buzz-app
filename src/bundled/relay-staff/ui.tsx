@@ -1,8 +1,9 @@
-import { createContext, useContext, type ReactNode } from "react";
+import { createContext, useContext, useState, type ReactNode } from "react";
 import { nip19 } from "nostr-tools";
 import { formatPublicKey } from "../../shared/identity/public-key";
 import { relativeTimestamp } from "../../shared/relative-timestamp";
 import { CircleNotchIcon } from "../../shared/design-system/icons";
+import { Button } from "../../shared/design-system/ui/Button";
 import {
   unsupported,
   type StaffFailure,
@@ -77,33 +78,82 @@ export function Loading() {
 export function Failure({
   failure,
   unsupportedText,
+  onRetry,
+  retrying = false,
 }: {
   failure: StaffFailure;
   /** Copy for a relay that lacks the route (a complete, empty 404 or 405). */
   unsupportedText?: string | undefined;
+  /** Reruns the failed read; shown as Retry beside the error. */
+  onRetry?: (() => void) | undefined;
+  retrying?: boolean;
 }) {
   return (
-    <p className="text-body-sm text-danger" role="alert">
-      {unsupportedText && unsupported(failure)
-        ? unsupportedText
-        : describe(failure)}
-    </p>
+    <div className="flex flex-wrap items-center gap-2">
+      <p className="text-body-sm text-danger" role="alert">
+        {unsupportedText && unsupported(failure)
+          ? unsupportedText
+          : describe(failure)}
+      </p>
+      {onRetry && (
+        <Button size="sm" loading={retrying} onClick={onRetry}>
+          Retry
+        </Button>
+      )}
+    </div>
   );
+}
+
+/**
+ * Retry for a failed read. While the retry runs, the failure stays on screen
+ * with its Retry busy, so the focused control stays mounted; a new outcome
+ * replaces it.
+ */
+export function useRetry(
+  failure: StaffFailure | null,
+  loading: boolean,
+  run: () => void,
+) {
+  const [kept, setKept] = useState<StaffFailure | null>(null);
+  if (kept && !loading && failure !== kept) setKept(null);
+  return {
+    failure: failure ?? kept,
+    retrying: kept !== null,
+    retry: () => {
+      setKept(failure);
+      run();
+    },
+  };
 }
 
 /** Loading and failure states for a read; `children` renders the value. */
 export function Loaded<T>({
   read,
+  onRetry,
   unsupportedText,
   children,
 }: {
   read: Read<T>;
+  /** The read's reload, offered as Retry beside a failure. */
+  onRetry?: (() => void) | undefined;
   unsupportedText?: string | undefined;
   children(value: T): ReactNode;
 }) {
-  if (read.state === "loading") return <Loading />;
-  if (read.state === "failed")
-    return <Failure failure={read.failure} unsupportedText={unsupportedText} />;
+  const retry = useRetry(
+    read.state === "failed" ? read.failure : null,
+    read.state === "loading",
+    () => onRetry?.(),
+  );
+  if (retry.failure)
+    return (
+      <Failure
+        failure={retry.failure}
+        unsupportedText={unsupportedText}
+        onRetry={onRetry && retry.retry}
+        retrying={retry.retrying}
+      />
+    );
+  if (read.state !== "ok") return <Loading />;
   return <>{children(read.value)}</>;
 }
 

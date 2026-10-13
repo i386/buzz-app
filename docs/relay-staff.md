@@ -13,7 +13,9 @@ client in `src-tauri/src/relay_admin/` (contract in
 `src/features/relay-staff/contract.ts`). The webview names a route and supplies
 typed fields; native code discovers and validates the admin host, builds the
 URL, enforces the address policy and signs with NIP-98. See the "Packaged
-connection" section of [identity.md](identity.md) for the address rules.
+connection" section of [identity.md](identity.md) for the address rules. Only
+admin hosts that resolve to public addresses are supported: the native client
+refuses private, CGNAT and `.internal` addresses.
 
 ## Visibility and access
 
@@ -51,7 +53,6 @@ connection" section of [identity.md](identity.md) for the address rules.
    open entry is removed and the host's unavailable screen shows.
 5. A relay running with admin auth disabled is read-only: every write control is
    disabled (`canMutate` is `authMode === "nip98"`).
-6. Browser and dev-broker builds show that the console needs the desktop app.
 
 ## Screens
 
@@ -66,7 +67,7 @@ inside the current entry; Back returns to the list.
   reopens the report. The console asks for the relay's maximum of 200 reports;
   each card shows when the report was made.
 - **Feedback**: list, detail and status (new, reviewed, archived). At most five
-  attachments and 50 MiB are shown. Images preview inline and open in the
+  attachments, each at most 10 MiB and 50 MiB in total, are shown. Images preview inline and open in the
   shared media viewer on click; every attachment can
   be saved through the native Save dialog.
 - **Communities**: the directory searched by host prefix, with the connected
@@ -99,7 +100,7 @@ screen fetches its missing profiles in one batch.
 ## Writes
 
 Every write (resolve, reopen, cancelling a failed enforcement, direct actions,
-lifting a restriction and operator changes) is held in an in-memory store for
+lifting a restriction, operator changes and feedback status) is held in an in-memory store for
 the app session, keyed by the identity, admin host and relay it was made for.
 The store, not the screen, owns the request, whether it is sending and its last
 outcome. Screens subscribe to it, so a reply that arrives after a screen was
@@ -110,7 +111,9 @@ reloaded) by whichever screen is open when it lands, or by the next one to open.
 Report writes are handled by the report page, not the action form, because a
 form disappears once its action changes the report's status.
 A held write is never offered or sent under another identity or admin
-host. Nothing is saved to disk.
+host. Nothing is saved to disk. Feedback status changes are keyed by feedback
+ID, so a change still sending after Back stays locked in the reopened detail
+and its result lands there.
 
 Resolve, reopen and direct actions freeze the whole request, including a
 `requestId` minted once, and **Retry** resends it exactly, without reading the
@@ -119,7 +122,8 @@ current form. A write stays held while any attempt is unresolved (`unresolved()`
 an ambiguous response, or a `pending` direct action). Before any such attempt,
 anything else settles it, including a request native code never sent. After one,
 only the relay's own answer to a request that was sent settles it: a retry that
-was never sent, or was refused for authorization, leaves the write held with
+was never sent, was refused for authorization, or was answered with an empty
+404 or 405 (an old node mid-deploy), leaves the write held with
 the same `requestId`. A request native code refuses before sending, such as a reason too long for
 the relay's 4,096-byte body limit, is `notSent`, so the form stays editable. `request_id_conflict` is shown as an error and is never
 resent under a new ID without the user starting a new action.

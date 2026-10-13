@@ -1,5 +1,6 @@
 import {
   unresolved,
+  unsupported,
   type StaffOutcome,
   type StaffRequest,
 } from "../../features/relay-staff/contract";
@@ -24,13 +25,14 @@ export type Held<R extends StaffRequest = StaffRequest, M = unknown> = {
  * True when `outcome` settles a write. Before any uncertain attempt that is
  * anything `unresolved()` does not keep. After one, only the relay's own
  * answer to a request that was sent counts: a retry refused before sending,
- * or refused for authorization, says nothing about the earlier attempt.
+ * refused for authorization, or answered by something without the route (an
+ * old node mid-deploy) says nothing about the earlier attempt.
  */
 function settles(outcome: StaffOutcome<unknown>, uncertain: boolean) {
   if (unresolved(outcome)) return false;
   if (!uncertain || outcome.ok) return true;
-  const { notSent, authLost } = outcome.failure;
-  return !notSent && !authLost;
+  const { failure } = outcome;
+  return !failure.notSent && !failure.authLost && !unsupported(failure);
 }
 
 /**

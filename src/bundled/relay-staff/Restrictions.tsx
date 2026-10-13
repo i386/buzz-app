@@ -7,7 +7,7 @@ import type {
 } from "../../features/relay-staff/contract";
 import { describe, usePages, useSession, useWrite } from "./session";
 import { NamesSource, Person, PeopleScope, usePeople } from "./people";
-import { Failure, Loading, UNSUPPORTED_BROWSING } from "./ui";
+import { Failure, Loading, UNSUPPORTED_BROWSING, useRetry } from "./ui";
 
 type Lift = { pubkey: string; kind: "ban" | "timeout" };
 type LiftRequest = Extract<StaffRequest, { route: "liftRestriction" }>;
@@ -31,6 +31,12 @@ export function Restrictions({ communityHost }: { communityHost: string }) {
     }),
     [context, communityHost],
   );
+  // A failed later page retries that page; a failed first load starts over.
+  const retry = useRetry(
+    pages.failure,
+    pages.loading,
+    pages.next ? pages.more : pages.restart,
+  );
   const [lifting, setLifting] = useState<Lift | null>(null);
   const keys = pages.items.map((row) => row.pubkey);
   const names = usePeople(keys);
@@ -53,10 +59,12 @@ export function Restrictions({ communityHost }: { communityHost: string }) {
       <p className="text-caption font-medium text-secondary">
         Active restrictions
       </p>
-      {pages.failure && (
+      {retry.failure && (
         <Failure
-          failure={pages.failure}
+          failure={retry.failure}
           unsupportedText={UNSUPPORTED_BROWSING}
+          onRetry={retry.retry}
+          retrying={retry.retrying}
         />
       )}
       {error && (
@@ -91,7 +99,7 @@ export function Restrictions({ communityHost }: { communityHost: string }) {
                 {banned && (
                   <Button
                     size="sm"
-                    disabled={!canMutate}
+                    disabled={!canMutate || write.busy}
                     loading={working === row.pubkey}
                     onClick={() =>
                       setLifting({ pubkey: row.pubkey, kind: "ban" })
@@ -103,7 +111,7 @@ export function Restrictions({ communityHost }: { communityHost: string }) {
                 {timedOut && (
                   <Button
                     size="sm"
-                    disabled={!canMutate}
+                    disabled={!canMutate || write.busy}
                     loading={working === row.pubkey}
                     onClick={() =>
                       setLifting({ pubkey: row.pubkey, kind: "timeout" })
@@ -117,7 +125,7 @@ export function Restrictions({ communityHost }: { communityHost: string }) {
           })}
         </ul>
       </PeopleScope>
-      {pages.loading && <Loading />}
+      {pages.loading && !retry.retrying && <Loading />}
       {pages.next && !pages.loading && (
         <Button size="sm" onClick={pages.more}>
           Load more

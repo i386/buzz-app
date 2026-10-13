@@ -1,23 +1,22 @@
 import { expect, it } from "vitest";
 import type {
+  StaffFailure,
   StaffOutcome,
   StaffRequest,
 } from "../../features/relay-staff/contract";
 import { createWrites } from "./writes";
 
-const ambiguous: StaffOutcome<unknown> = {
-  ok: false,
-  failure: {
-    category: "ambiguous",
-    status: 502,
-    bodyComplete: true,
-    bodyEmpty: false,
-    code: null,
-    notSent: false,
-    authLost: false,
-    message: "",
-  },
+const unclear: StaffFailure = {
+  category: "ambiguous",
+  status: 502,
+  bodyComplete: true,
+  bodyEmpty: false,
+  code: null,
+  notSent: false,
+  authLost: false,
+  message: "",
 };
+const ambiguous: StaffOutcome<unknown> = { ok: false, failure: unclear };
 const lift = (pubkey: string): StaffRequest => ({
   route: "liftRestriction",
   communityHost: "team.example.com",
@@ -69,4 +68,34 @@ it("a held write with a request id is resent unchanged, whatever the form says",
   await writes.run("reopen", send, reopen("one"));
   await writes.run("reopen", send, reopen("two"));
   expect(sent).toEqual([reopen("one"), reopen("one")]);
+});
+
+it("an empty 404 on a retry keeps an uncertain write and its request id", async () => {
+  const writes = createWrites();
+  const sent: StaffRequest[] = [];
+  const reopen: StaffRequest = {
+    route: "reopenReport",
+    id: "r1",
+    requestId: "one",
+  };
+  await writes.run("reopen", record(sent), reopen);
+  const missing: StaffOutcome<unknown> = {
+    ok: false,
+    failure: {
+      ...unclear,
+      category: "unsupported",
+      status: 404,
+      bodyEmpty: true,
+    },
+  };
+  await writes.run("reopen", async (request) => {
+    sent.push(request);
+    return missing;
+  });
+  expect(writes.get("reopen")).toMatchObject({
+    request: reopen,
+    uncertain: true,
+  });
+  await writes.run("reopen", record(sent), { ...reopen, requestId: "two" });
+  expect(sent).toEqual([reopen, reopen, reopen]);
 });

@@ -1,14 +1,16 @@
 import {
   createContext,
   useContext,
-  useDeferredValue,
   useEffect,
   useRef,
   useState,
   type ReactNode,
 } from "react";
 import { Button } from "../../shared/design-system/ui/Button";
+import { Combobox } from "../../shared/design-system/ui/Combobox";
+import { Field } from "../../shared/design-system/ui/Field";
 import { Input } from "../../shared/design-system/ui/Input";
+import { Radio, RadioGroup } from "../../shared/design-system/ui/RadioGroup";
 import { useToastNotification } from "../../shared/design-system/ui/Toast";
 import {
   unresolved,
@@ -309,27 +311,26 @@ export function ActionsSection({ community }: { community: CommunityRef }) {
 
   return (
     <div className="flex flex-col gap-3">
-      <div className="flex flex-wrap gap-1.5">
-        {(Object.keys(LABELS) as Action[]).map((action) => (
-          <Button
-            key={action}
-            size="sm"
-            variant={action === draft.action ? "prominent" : "outline"}
-            disabled={locked}
-            onClick={() => set({ action })}
-          >
-            {LABELS[action]}
-          </Button>
-        ))}
-      </div>
-      {draft.action === "delete" ? (
-        <Input
-          aria-label="Event id"
-          placeholder="Event id (hex), note1… or nevent1…"
+      <Field label="Action" nativeLabel={false}>
+        <RadioGroup<Action>
+          name={`direct-action-${host}`}
+          value={c.frozen?.intent.action ?? draft.action}
           disabled={locked}
-          value={draft.target}
-          onChange={(event) => set({ target: event.target.value })}
-        />
+          onValueChange={(action) => set({ action })}
+        >
+          {(Object.keys(LABELS) as Action[]).map((action) => (
+            <Radio key={action} value={action} label={LABELS[action]} />
+          ))}
+        </RadioGroup>
+      </Field>
+      {draft.action === "delete" ? (
+        <Field label="Event id" description="Hex, note1… or nevent1…">
+          <Input
+            disabled={locked}
+            value={draft.target}
+            onChange={(event) => set({ target: event.target.value })}
+          />
+        </Field>
       ) : (
         <MemberPicker
           communityHost={host}
@@ -350,25 +351,25 @@ export function ActionsSection({ community }: { community: CommunityRef }) {
         </p>
       )}
       {draft.action === "timeout" && (
-        <Input
-          aria-label="Duration (seconds)"
-          placeholder="Duration (seconds)"
-          type="number"
-          disabled={locked}
-          value={draft.secs}
-          onChange={(event) => set({ secs: event.target.value })}
-        />
+        <Field label="Duration (seconds)">
+          <Input
+            type="number"
+            disabled={locked}
+            value={draft.secs}
+            onChange={(event) => set({ secs: event.target.value })}
+          />
+        </Field>
       )}
-      <Input
-        aria-label="Reason"
-        placeholder="Reason (optional)"
-        disabled={locked}
-        value={draft.reason}
-        onChange={(event) => set({ reason: event.target.value })}
-      />
-      <p className="text-caption text-secondary">
-        {reasonAudience(c.frozen?.intent.action ?? draft.action)}
-      </p>
+      <Field
+        label="Reason (optional)"
+        description={reasonAudience(c.frozen?.intent.action ?? draft.action)}
+      >
+        <Input
+          disabled={locked}
+          value={draft.reason}
+          onChange={(event) => set({ reason: event.target.value })}
+        />
+      </Field>
       {error && (
         <p className="text-body-sm text-danger" role="alert">
           {error}
@@ -457,6 +458,19 @@ function ConfirmStep({ readOnly = false }: { readOnly?: boolean }) {
 
 const label = (m: MemberSearchDto) => m.displayName || m.nip05 || null;
 
+/** How long typing must pause before a search request is signed and sent. */
+export const SEARCH_DEBOUNCE_MS = 250;
+
+/** `value` once it has stopped changing for `ms`. */
+function useDebounced<T>(value: T, ms: number) {
+  const [settled, setSettled] = useState(value);
+  useEffect(() => {
+    const timer = setTimeout(() => setSettled(value), ms);
+    return () => clearTimeout(timer);
+  }, [value, ms]);
+  return settled;
+}
+
 /**
  * Search the community's profiles (including former members), or paste an
  * npub or hex key. A pasted secret key never leaves the device.
@@ -474,10 +488,13 @@ export function MemberPicker({
 }) {
   const { context } = useSession();
   const [query, setQuery] = useState("");
-  const q = useDeferredValue(query.trim());
-  const secret = containsSecretKey(query) || containsSecretKey(q);
-  const pasted = publicKeyInput(q);
-  const searching = !!q && !secret && !pasted;
+  /** Results open as they arrive; Escape or a click away closes them. */
+  const [dismissed, setDismissed] = useState(false);
+  const typed = query.trim();
+  const q = useDebounced(typed, SEARCH_DEBOUNCE_MS);
+  const secret = containsSecretKey(query);
+  const pasted = publicKeyInput(typed);
+  const searching = !!q && q === typed && !secret && !pasted;
   const [results] = useRead(
     searching ? { route: "searchMembers", communityHost, q } : null,
     [context, communityHost, searching ? q : null],
@@ -509,54 +526,61 @@ export function MemberPicker({
       </div>
     );
   return (
-    <div className="flex flex-col gap-1">
-      <Input
-        aria-label="Member"
-        placeholder="Search by name, or paste an npub or hex key"
+    <PeopleScope people={people}>
+      <Combobox.Root<Member>
         disabled={disabled}
-        value={query}
-        onChange={(event) => setQuery(event.target.value)}
-      />
-      {secret && (
-        <p className="text-body-sm text-danger" role="alert">
-          {SECRET_SEARCH}
-        </p>
-      )}
-      {searching && results.state === "failed" && (
-        <p className="text-body-sm text-danger" role="alert">
-          {lookupFailure(results.failure)}
-        </p>
-      )}
-      {candidates.length > 0 && (
-        <PeopleScope people={people}>
-          <ul className="flex flex-col rounded-md border" aria-label="Members">
-            {candidates.map((candidate) => (
-              <li key={candidate.pubkey}>
-                <button
-                  type="button"
-                  className="flex w-full items-center gap-2 px-3 py-2 text-left text-body-sm hover:bg-secondary"
-                  onClick={() => {
-                    onChange({
-                      ...candidate,
-                      keyLabel: people.label(candidate.pubkey),
-                    });
-                    setQuery("");
-                  }}
-                >
-                  <span className="flex-1 truncate">
-                    <PersonName
-                      pubkey={candidate.pubkey}
-                      name={candidate.name}
-                      label={people.label(candidate.pubkey)}
-                    />
-                  </span>
-                </button>
-              </li>
-            ))}
-          </ul>
-        </PeopleScope>
-      )}
-    </div>
+        items={candidates}
+        filteredItems={candidates}
+        value={null}
+        open={candidates.length > 0 && !dismissed}
+        onOpenChange={(open) => setDismissed(!open)}
+        inputValue={query}
+        modal={false}
+        itemToStringLabel={(candidate) => people.text(candidate.pubkey)}
+        isItemEqualToValue={(a, b) => a.pubkey === b.pubkey}
+        onInputValueChange={(next, details) => {
+          if (
+            details.reason === "input-change" ||
+            details.reason === "input-clear"
+          ) {
+            setQuery(next);
+            setDismissed(false);
+          }
+        }}
+        onValueChange={(picked) => {
+          if (!picked) return;
+          onChange({ ...picked, keyLabel: people.label(picked.pubkey) });
+          setQuery("");
+        }}
+      >
+        <Combobox.Control
+          label="Member"
+          triggerLabel="Show members"
+          loading={searching && results.state === "loading"}
+          placeholder="Search by name, or paste an npub or hex key"
+          error={
+            secret
+              ? SECRET_SEARCH
+              : searching && results.state === "failed"
+                ? lookupFailure(results.failure)
+                : undefined
+          }
+        />
+        <Combobox.Popup empty="No members found.">
+          <Combobox.List>
+            {(candidate: Member) => (
+              <Combobox.Item key={candidate.pubkey} value={candidate}>
+                <PersonName
+                  pubkey={candidate.pubkey}
+                  name={candidate.name}
+                  label={people.label(candidate.pubkey)}
+                />
+              </Combobox.Item>
+            )}
+          </Combobox.List>
+        </Combobox.Popup>
+      </Combobox.Root>
+    </PeopleScope>
   );
 }
 

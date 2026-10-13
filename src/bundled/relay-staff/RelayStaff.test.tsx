@@ -184,7 +184,7 @@ async function openCommunityActions() {
   fireEvent.change(screen.getByLabelText("Member"), {
     target: { value: "Bob" },
   });
-  fireEvent.click(await screen.findByRole("button", { name: /Bob/ }));
+  fireEvent.click(await screen.findByRole("option", { name: /Bob/ }));
   await screen.findByText("Role: member");
   fireEvent.click(screen.getByRole("button", { name: "Review" }));
 }
@@ -373,7 +373,7 @@ it("refuses to review a staff target", async () => {
   fireEvent.change(screen.getByLabelText("Member"), {
     target: { value: "Bob" },
   });
-  fireEvent.click(await screen.findByRole("button", { name: /Bob/ }));
+  fireEvent.click(await screen.findByRole("option", { name: /Bob/ }));
   expect(
     await screen.findByText(/Relay staff can't be banned/),
   ).toBeInTheDocument();
@@ -427,7 +427,7 @@ it("an ambiguous resolve is retried with the same request id", async () => {
     });
   };
   await openReport();
-  fireEvent.click(await screen.findByRole("button", { name: "Ban" }));
+  fireEvent.click(await screen.findByRole("radio", { name: "Ban" }));
   expect(
     screen.getByText("Sent verbatim to the affected user."),
   ).toBeInTheDocument();
@@ -444,7 +444,7 @@ it("a definite rejection releases the frozen resolve", async () => {
   routes.getReport = () => ok(report);
   routes.resolveReport = () => fail({ status: 422, code: "invalid" });
   await openReport();
-  fireEvent.click(await screen.findByRole("button", { name: "Dismiss" }));
+  fireEvent.click(await screen.findByRole("radio", { name: "Dismiss" }));
   expect(
     screen.getByText("Sent verbatim to the reporter."),
   ).toBeInTheDocument();
@@ -464,11 +464,11 @@ it("offers only the actions a target kind allows", async () => {
     ok([{ ...report, targetKind: "blob", target: "x" }]);
   routes.getReport = () => ok({ ...report, targetKind: "blob", target: "x" });
   await openReport();
-  await screen.findByRole("button", { name: "Dismiss" });
-  expect(screen.getByRole("button", { name: "Escalate" })).toBeInTheDocument();
-  expect(screen.queryByRole("button", { name: "Ban" })).not.toBeInTheDocument();
+  await screen.findByRole("radio", { name: "Dismiss" });
+  expect(screen.getByRole("radio", { name: "Escalate" })).toBeInTheDocument();
+  expect(screen.queryByRole("radio", { name: "Ban" })).not.toBeInTheDocument();
   expect(
-    screen.queryByRole("button", { name: "Delete" }),
+    screen.queryByRole("radio", { name: "Delete" }),
   ).not.toBeInTheDocument();
 });
 
@@ -770,7 +770,7 @@ it("a report Retry after leaving the report resends the frozen request", async (
   routes.getReport = () => ok(report);
   routes.resolveReport = () => fail({ category: "ambiguous", status: 502 });
   await openReport();
-  fireEvent.click(await screen.findByRole("button", { name: "Ban" }));
+  fireEvent.click(await screen.findByRole("radio", { name: "Ban" }));
   fireEvent.click(screen.getByRole("button", { name: /Confirm: Ban/ }));
   await screen.findByRole("button", { name: /Retry: Ban/ });
   fireEvent.click(screen.getByRole("button", { name: "Back to reports" }));
@@ -981,9 +981,9 @@ it("a late member search for an earlier query is dropped", async () => {
   fireEvent.change(input, { target: { value: "Old" } });
   await waitFor(() => expect(release).toBeTypeOf("function"));
   fireEvent.change(input, { target: { value: "New" } });
-  await screen.findByRole("button", { name: /Newbie/ });
+  await screen.findByRole("option", { name: /Newbie/ });
   await act(async () => release(result("Oldie", "c".repeat(64))));
-  expect(screen.queryByRole("button", { name: /Oldie/ })).toBeNull();
+  expect(screen.queryByRole("option", { name: /Oldie/ })).toBeNull();
 });
 
 /**
@@ -1084,7 +1084,7 @@ it("an in-flight resolve rejected after reopening the report releases the form",
     fail({ code: "invalid_action" }),
   );
   await openReport();
-  fireEvent.click(await screen.findByRole("button", { name: "Ban" }));
+  fireEvent.click(await screen.findByRole("radio", { name: "Ban" }));
   fireEvent.click(screen.getByRole("button", { name: /Confirm: Ban/ }));
   await late.started();
   fireEvent.click(screen.getByRole("button", { name: "Back to reports" }));
@@ -1092,7 +1092,7 @@ it("an in-flight resolve rejected after reopening the report releases the form",
   await screen.findByRole("button", { name: /Retry: Ban/ });
   await late.release(fail({ code: "invalid_action" }));
   expect(screen.queryByRole("button", { name: /Retry: Ban/ })).toBeNull();
-  expect(screen.getByRole("button", { name: "Ban" })).toBeEnabled();
+  expect(screen.getByRole("radio", { name: "Ban" })).toBeEnabled();
 });
 
 it("an in-flight direct action can't be discarded or replaced after reopening", async () => {
@@ -1163,7 +1163,7 @@ it.each([
   routes.getReport = () => ok(report);
   routes.resolveReport = () => fail({ category: "ambiguous", status: 502 });
   await openReport();
-  fireEvent.click(await screen.findByRole("button", { name: "Ban" }));
+  fireEvent.click(await screen.findByRole("radio", { name: "Ban" }));
   fireEvent.click(screen.getByRole("button", { name: /Confirm: Ban/ }));
   await screen.findByRole("button", { name: /Retry: Ban/ });
   routes.resolveReport = () => retry;
@@ -1205,9 +1205,15 @@ it("a gateway 401 on a write re-probes once, even when the probe is refused too"
     fail({ category: "ambiguous", status: 401, authLost: true });
   fireEvent.click(await screen.findByRole("button", { name: "Confirm" }));
   await noEntries();
-  await new Promise((resolve) => setTimeout(resolve, 50));
-  expect(sent("probe")).toHaveLength(2);
   const context = staff.context();
+  // The re-probe has answered once access is denied; any further re-probe
+  // would already have been sent by the write's 401.
+  await waitFor(() =>
+    expect(context && staff.access(context)?.state).toBe("denied"),
+  );
+  // Flush the renders and effects the denial causes before counting.
+  await act(async () => {});
+  expect(sent("probe")).toHaveLength(2);
   expect(
     context && staff.writes(context).get("direct action")?.request,
   ).toEqual(sent("directAction")[0]);
@@ -1336,7 +1342,7 @@ it("a cancel completed after reopening refreshes the active report", async () =>
       screen.queryByRole("button", { name: "Cancel and reopen" }),
     ).toBeNull(),
   );
-  expect(screen.getByRole("button", { name: "Ban" })).toBeEnabled();
+  expect(screen.getByRole("radio", { name: "Ban" })).toBeEnabled();
 });
 
 it("an operator rejection after reopening reaches the active view", async () => {
@@ -1430,7 +1436,7 @@ it("a reason refused before sending shows and can be edited", async () => {
       message: "Reason is too long",
     });
   await openReport();
-  fireEvent.click(await screen.findByRole("button", { name: "Ban" }));
+  fireEvent.click(await screen.findByRole("radio", { name: "Ban" }));
   fireEvent.change(screen.getByLabelText("Reason (optional)"), {
     target: { value: "x".repeat(20) },
   });
@@ -1541,7 +1547,7 @@ it("resolve finished off-screen is delivered on reopening, not a later lifecycle
   );
   const { staff, reopen } = mountSwitchable();
   fireEvent.click(await screen.findByRole("button", { name: /spam/ }));
-  fireEvent.click(await screen.findByRole("button", { name: "Ban" }));
+  fireEvent.click(await screen.findByRole("radio", { name: "Ban" }));
   fireEvent.click(screen.getByRole("button", { name: /Confirm: Ban/ }));
   await late.started();
   cleanup();
@@ -1563,7 +1569,7 @@ it("resolve finished off-screen is delivered on reopening, not a later lifecycle
   resolved = false;
   reopen();
   fireEvent.click(await screen.findByRole("button", { name: /spam/ }));
-  await screen.findByRole("button", { name: "Ban" });
+  await screen.findByRole("radio", { name: "Ban" });
   expect(screen.queryByText("Report resolved: resolved")).toBeNull();
 });
 
@@ -1594,7 +1600,7 @@ it("enforcement error finished while closed reaches reopened detail", async () =
   );
   const { reopen } = mountSwitchable();
   fireEvent.click(await screen.findByRole("button", { name: /spam/ }));
-  fireEvent.click(await screen.findByRole("button", { name: "Ban" }));
+  fireEvent.click(await screen.findByRole("radio", { name: "Ban" }));
   fireEvent.click(screen.getByRole("button", { name: /Confirm: Ban/ }));
   await late.started();
   cleanup();
@@ -1627,11 +1633,11 @@ it("a reopen finished while closed is announced on the reopened detail, once", a
   await late.release(ok({ ...report, status: "open" }));
   reopen();
   fireEvent.click(await screen.findByRole("button", { name: /spam/ }));
-  await screen.findByRole("button", { name: "Ban" });
+  await screen.findByRole("radio", { name: "Ban" });
   expect(await screen.findByText("Report reopened")).toBeInTheDocument();
   reopen();
   fireEvent.click(await screen.findByRole("button", { name: /spam/ }));
-  await screen.findByRole("button", { name: "Ban" });
+  await screen.findByRole("radio", { name: "Ban" });
   expect(screen.queryByText("Report reopened")).toBeNull();
 });
 
@@ -1673,13 +1679,13 @@ it("a cancel finished while closed is announced on the reopened detail, once", a
   );
   reopen();
   fireEvent.click(await screen.findByRole("button", { name: /spam/ }));
-  await screen.findByRole("button", { name: "Ban" });
+  await screen.findByRole("radio", { name: "Ban" });
   expect(
     await screen.findByText("Enforcement cancelled. The report is open again."),
   ).toBeInTheDocument();
   reopen();
   fireEvent.click(await screen.findByRole("button", { name: /spam/ }));
-  await screen.findByRole("button", { name: "Ban" });
+  await screen.findByRole("radio", { name: "Ban" });
   expect(
     screen.queryByText("Enforcement cancelled. The report is open again."),
   ).toBeNull();
@@ -1884,9 +1890,9 @@ it("two people with the same name and short key stay distinct everywhere", async
   fireEvent.change(screen.getByLabelText("Member"), {
     target: { value: "Bob" },
   });
-  const results = within(await screen.findByRole("list", { name: "Members" }));
-  expect(results.getByRole("button", { name: `Bob (${longA})` })).toBeVisible();
-  fireEvent.click(results.getByRole("button", { name: `Bob (${longB})` }));
+  const results = within(await screen.findByRole("listbox"));
+  expect(results.getByRole("option", { name: `Bob (${longA})` })).toBeVisible();
+  fireEvent.click(results.getByRole("option", { name: `Bob (${longB})` }));
   await screen.findByText("Role: member");
   expect(screen.getByText(`(${longB})`)).toBeVisible();
   fireEvent.click(screen.getByRole("button", { name: "Review" }));
@@ -2032,7 +2038,7 @@ it("member search fetches every unknown result profile in one batch", async () =
   fireEvent.change(screen.getByLabelText("Member"), {
     target: { value: "x" },
   });
-  await screen.findByRole("list", { name: "Members" });
+  await screen.findByRole("listbox");
   await waitFor(() =>
     expect(ensured.some((ids) => ids.includes(keys[0] as string))).toBe(true),
   );
@@ -2338,4 +2344,278 @@ it("a 401 or 403 for a context that is no longer selected starts no role check f
   expect(
     contexts.filter((_, i) => calls[i]?.route === "probe").map((c) => c.signer),
   ).toEqual([signer, member]);
+});
+
+const other = "d".repeat(64);
+const restricted = (pubkey: string) => ({
+  pubkey,
+  banned: true,
+  banExpiresAt: null,
+  mutedUntil: null,
+});
+async function openRestrictions() {
+  fireEvent.click(await screen.findByRole("tab", { name: "Communities" }));
+  fireEvent.click(
+    await screen.findByRole("button", { name: /team\.example\.com/ }),
+  );
+  fireEvent.click(screen.getByRole("tab", { name: "Restrictions" }));
+}
+
+it("while one lift is sending, every row's lift waits for it", async () => {
+  routes.listRestrictions = () =>
+    ok({ items: [restricted(member), restricted(other)], nextCursor: null });
+  const lift = holdNext("liftRestriction", () => ok(null));
+  mount();
+  await openRestrictions();
+  await waitFor(() =>
+    expect(screen.getAllByRole("button", { name: "Lift ban" })).toHaveLength(2),
+  );
+  fireEvent.click(
+    screen.getAllByRole("button", { name: "Lift ban" })[0] as HTMLElement,
+  );
+  fireEvent.click(
+    within(screen.getByRole("alertdialog")).getByRole("button", {
+      name: "Lift ban",
+    }),
+  );
+  await lift.started();
+  for (const button of screen.getAllByRole("button", { name: "Lift ban" }))
+    expect(button).toBeDisabled();
+  await lift.release(ok(null));
+  await waitFor(() => {
+    for (const button of screen.getAllByRole("button", { name: "Lift ban" }))
+      expect(button).toBeEnabled();
+  });
+});
+
+it("while one operator change is sending, every staff control waits for it", async () => {
+  routes.probe = () => probe({ role: "operator", canStaff: true });
+  routes.listOperators = () =>
+    ok(
+      [member, other].map((pubkey) => ({
+        pubkey,
+        effectiveRole: "moderator",
+        sources: ["db"],
+      })),
+    );
+  const put = holdNext("putOperator", () => ok(null));
+  mount();
+  fireEvent.click(await screen.findByRole("tab", { name: "Staff" }));
+  fireEvent.change(await screen.findByLabelText("Public key"), {
+    target: { value: signer },
+  });
+  fireEvent.click(screen.getByRole("button", { name: "Add" }));
+  await put.started();
+  const controls = () => [
+    ...screen.getAllByRole("button", { name: "Remove" }),
+    ...screen.getAllByRole("combobox", { name: /Role/ }),
+    screen.getByLabelText("Public key"),
+  ];
+  for (const control of controls()) expect(control).toBeDisabled();
+  await put.release(ok(null));
+  await waitFor(() => {
+    for (const control of controls()) expect(control).toBeEnabled();
+  });
+});
+
+it("a held resolve is released once the report has moved on, and a reopened report offers a fresh choice", async () => {
+  let current: typeof report & { status: string } = report;
+  routes.listReports = () => ok([current]);
+  routes.getReport = () => ok(current);
+  routes.resolveReport = () => fail({ category: "ambiguous", status: 502 });
+  const { staff } = await (async () => {
+    const mounted = mount();
+    fireEvent.click(await screen.findByRole("button", { name: /spam/ }));
+    return mounted;
+  })();
+  fireEvent.click(await screen.findByRole("radio", { name: "Ban" }));
+  fireEvent.click(screen.getByRole("button", { name: /Confirm: Ban/ }));
+  await screen.findByRole("button", { name: /Retry: Ban/ });
+  const first = sent("resolveReport")[0] as { requestId: string };
+  const held = () => {
+    const context = staff.context();
+    return context && staff.writes(context).get("resolve r1");
+  };
+  // The ban landed after all: the reloaded report reads resolved.
+  current = { ...report, status: "resolved" };
+  fireEvent.click(screen.getByRole("button", { name: "Back to reports" }));
+  fireEvent.click(await screen.findByRole("button", { name: /spam/ }));
+  await screen.findByRole("button", { name: "Reopen report" });
+  await waitFor(() => expect(held()).toBeNull());
+  // Someone reopens it: the form starts over under a new request id.
+  current = report;
+  routes.resolveReport = () => ok({ status: "resolved", activeAction: null });
+  fireEvent.click(screen.getByRole("button", { name: "Back to reports" }));
+  fireEvent.click(await screen.findByRole("button", { name: /spam/ }));
+  const ban = await screen.findByRole("radio", { name: "Ban" });
+  expect(ban).not.toBeChecked();
+  expect(screen.queryByRole("button", { name: /Retry/ })).toBeNull();
+  fireEvent.click(ban);
+  fireEvent.click(screen.getByRole("button", { name: /Confirm: Ban/ }));
+  await waitFor(() => expect(sent("resolveReport")).toHaveLength(2));
+  const second = sent("resolveReport")[1] as { requestId: string };
+  expect(second.requestId).not.toBe(first.requestId);
+});
+
+it("an uncertain resolve can be discarded for a fresh choice", async () => {
+  routes.listReports = () => ok([report]);
+  routes.getReport = () => ok(report);
+  routes.resolveReport = () => fail({ category: "ambiguous", status: 502 });
+  await openReport();
+  fireEvent.click(await screen.findByRole("radio", { name: "Ban" }));
+  fireEvent.click(screen.getByRole("button", { name: /Confirm: Ban/ }));
+  fireEvent.click(await screen.findByRole("button", { name: "Discard" }));
+  expect(screen.queryByRole("button", { name: /Retry/ })).toBeNull();
+  expect(screen.getByRole("radio", { name: "Dismiss" })).toBeEnabled();
+});
+
+it("member search waits for typing to pause before sending one request", async () => {
+  mount();
+  await reopenActions();
+  const input = await screen.findByLabelText("Member");
+  vi.useFakeTimers();
+  try {
+    for (const value of ["B", "Bo", "Bob"])
+      fireEvent.change(input, { target: { value } });
+    await act(async () => {
+      vi.advanceTimersByTime(SEARCH_DEBOUNCE_MS - 1);
+    });
+    expect(sent("searchMembers")).toHaveLength(0);
+    await act(async () => {
+      vi.advanceTimersByTime(1);
+    });
+  } finally {
+    vi.useRealTimers();
+  }
+  await screen.findByRole("option", { name: /Bob/ });
+  expect(sent("searchMembers")).toEqual([
+    { route: "searchMembers", communityHost: "team.example.com", q: "Bob" },
+  ]);
+});
+
+it("Load more appends the next restrictions page, and a late page after a restart is dropped", async () => {
+  let late: ((outcome: StaffOutcome<unknown>) => void) | null = null;
+  routes.listRestrictions = (request) =>
+    (request as { cursor?: string }).cursor
+      ? new Promise((resolve) => {
+          late = resolve;
+        })
+      : ok({ items: [restricted(member)], nextCursor: "p2" });
+  routes.liftRestriction = () => ok(null);
+  mount();
+  await openRestrictions();
+  fireEvent.click(await screen.findByRole("button", { name: "Load more" }));
+  await waitFor(() => expect(late).toBeTypeOf("function"));
+  await act(async () =>
+    late?.(ok({ items: [restricted(other)], nextCursor: null })),
+  );
+  await waitFor(() =>
+    expect(screen.getAllByRole("button", { name: "Lift ban" })).toHaveLength(2),
+  );
+  expect(screen.queryByRole("button", { name: "Load more" })).toBeNull();
+
+  // Lifting restarts the list; the page asked for before it must not land.
+  cleanup();
+  calls = [];
+  late = null;
+  mount();
+  await openRestrictions();
+  fireEvent.click(await screen.findByRole("button", { name: "Load more" }));
+  await waitFor(() => expect(late).toBeTypeOf("function"));
+  fireEvent.click(screen.getByRole("button", { name: "Lift ban" }));
+  fireEvent.click(
+    within(screen.getByRole("alertdialog")).getByRole("button", {
+      name: "Lift ban",
+    }),
+  );
+  await waitFor(() =>
+    expect(
+      sent("listRestrictions").filter((r) => !("cursor" in r)),
+    ).toHaveLength(2),
+  );
+  await screen.findByRole("button", { name: "Load more" });
+  await act(async () =>
+    late?.(ok({ items: [restricted(other)], nextCursor: null })),
+  );
+  expect(screen.getAllByRole("button", { name: "Lift ban" })).toHaveLength(1);
+  expect(screen.getByRole("button", { name: "Load more" })).toBeVisible();
+});
+
+it("Load more appends the next directory page, and a late page after a new search is dropped", async () => {
+  const community = (host: string) => ({ id: host, host, icon: null });
+  let late: ((outcome: StaffOutcome<unknown>) => void) | null = null;
+  routes.listCommunities = (request) => {
+    const { q, cursor } = request as { q?: string; cursor?: string };
+    if (cursor)
+      return new Promise((resolve) => {
+        late = resolve;
+      });
+    if (q === "x")
+      return ok({ items: [community("x.example.com")], nextCursor: null });
+    return ok({ items: [community("one.example.com")], nextCursor: "p2" });
+  };
+  mount();
+  fireEvent.click(await screen.findByRole("tab", { name: "Communities" }));
+  fireEvent.click(await screen.findByRole("button", { name: "Load more" }));
+  await waitFor(() => expect(late).toBeTypeOf("function"));
+  await act(async () =>
+    late?.(ok({ items: [community("two.example.com")], nextCursor: null })),
+  );
+  expect(
+    await screen.findByRole("button", { name: "two.example.com" }),
+  ).toBeVisible();
+  expect(screen.getByRole("button", { name: "one.example.com" })).toBeVisible();
+
+  late = null;
+  fireEvent.change(screen.getByLabelText("Search communities"), {
+    target: { value: "" },
+  });
+  cleanup();
+  mount();
+  fireEvent.click(await screen.findByRole("tab", { name: "Communities" }));
+  fireEvent.click(await screen.findByRole("button", { name: "Load more" }));
+  await waitFor(() => expect(late).toBeTypeOf("function"));
+  fireEvent.change(screen.getByLabelText("Search communities"), {
+    target: { value: "x" },
+  });
+  await screen.findByRole("button", { name: "x.example.com" });
+  await act(async () =>
+    late?.(ok({ items: [community("two.example.com")], nextCursor: null })),
+  );
+  expect(screen.queryByRole("button", { name: "two.example.com" })).toBeNull();
+});
+
+it("a failed read offers Retry beside the error, keeps focus on it, and recovers in place", async () => {
+  routes.probe = () => probe({ role: "operator", canStaff: true });
+  routes.listOperators = () => fail({ message: "Staff list failed" });
+  mount();
+  fireEvent.click(await screen.findByRole("tab", { name: "Staff" }));
+  await screen.findByText("Staff list failed");
+  const again = holdNext("listOperators", () => ok([]));
+  const retry = screen.getByRole("button", { name: "Retry" });
+  retry.focus();
+  fireEvent.click(retry);
+  await again.started();
+  expect(screen.getByRole("button", { name: "Retry" })).toBe(retry);
+  expect(retry).toHaveFocus();
+  await again.release(fail({ message: "Still failing" }));
+  await screen.findByText("Still failing");
+  expect(screen.getByRole("button", { name: "Retry" })).toHaveFocus();
+  fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+  expect(await screen.findByText("No staff configured.")).toBeVisible();
+});
+
+it("a failed restrictions load can be retried in place", async () => {
+  let failing = true;
+  routes.listRestrictions = () =>
+    failing
+      ? fail({ message: "Restrictions failed" })
+      : ok({ items: [restricted(member)], nextCursor: null });
+  mount();
+  await openRestrictions();
+  await screen.findByText("Restrictions failed");
+  failing = false;
+  fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+  expect(await screen.findByRole("button", { name: "Lift ban" })).toBeVisible();
+  expect(screen.queryByText("Restrictions failed")).toBeNull();
 });

@@ -1,6 +1,8 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Button } from "../../shared/design-system/ui/Button";
+import { Field } from "../../shared/design-system/ui/Field";
 import { Input } from "../../shared/design-system/ui/Input";
+import { Radio, RadioGroup } from "../../shared/design-system/ui/RadioGroup";
 import { Select } from "../../shared/design-system/ui/Select";
 import { useToastNotification } from "../../shared/design-system/ui/Toast";
 import {
@@ -89,7 +91,7 @@ function Target({ report }: { report: ReportDto }) {
   return kind === "pubkey" ? (
     <PersonName pubkey={report.target} />
   ) : (
-    <>{report.target}</>
+    report.target
   );
 }
 
@@ -154,7 +156,7 @@ export function Reports({ communityId }: { communityId?: string }) {
         ]}
         onValueChange={setStatus}
       />
-      <Loaded read={list}>
+      <Loaded read={list} onRetry={reload}>
         {(reports) =>
           reports.length === 0 ? (
             <p className="text-body-sm text-secondary">No reports found.</p>
@@ -222,7 +224,7 @@ function ReportDetail({
   };
   // The detail, not the action forms, handles finished writes: a form is
   // gone once its action changes the report's status.
-  useWrite<ResolveRequest>(`resolve ${id}`, (outcome) => {
+  const resolve = useWrite<ResolveRequest>(`resolve ${id}`, (outcome) => {
     if (outcome.ok) {
       notify(`Report resolved: ${resolutionLabel(outcome.value)}`, "success");
       return changed();
@@ -247,12 +249,27 @@ function ReportDetail({
     );
     changed();
   });
+  // A held resolve whose report has moved on can only conflict: release it so
+  // a reopened report offers a fresh choice. While processing, the relay still
+  // replays the same request id, so the held write stays.
+  const status = detail.state === "ok" ? detail.value.status : null;
+  const { frozen, busy, discard } = resolve;
+  useEffect(() => {
+    if (
+      frozen &&
+      !busy &&
+      status &&
+      status !== "open" &&
+      status !== "processing"
+    )
+      discard();
+  }, [frozen, busy, status, discard]);
   return (
     <div className="flex flex-col gap-4">
       <Button size="sm" variant="ghost" onClick={onBack}>
         <ArrowLeftIcon /> Back to reports
       </Button>
-      <Loaded read={detail}>
+      <Loaded read={detail} onRetry={reload}>
         {(report) => (
           <>
             <ReportFields report={report} />
@@ -421,49 +438,43 @@ function Resolve({ report }: { report: ReportDto }) {
 
   return (
     <div className="flex flex-col gap-3 rounded-md border px-3 py-2.5">
-      <p className="text-caption font-medium text-secondary">Resolve report</p>
-      <div className="flex flex-wrap gap-1.5">
-        {allowedActions(report).map((option) => (
-          <Button
-            key={option}
-            size="sm"
-            variant={
-              option === shown
-                ? "prominent"
-                : option === "delete" || option === "ban"
-                  ? "destructive"
-                  : "outline"
-            }
-            disabled={locked}
-            aria-pressed={option === shown}
-            onClick={() => setAction(option === action ? null : option)}
-          >
-            {LABELS[option]}
-          </Button>
-        ))}
-      </div>
-      {shown === "timeout" && (
-        <Input
-          aria-label="Duration (seconds)"
-          placeholder="Duration in seconds, e.g. 3600"
-          type="number"
-          min={1}
+      <Field label="Resolve report" nativeLabel={false}>
+        <RadioGroup<ReportAction | null>
+          name={`resolve-${report.id}`}
+          value={shown}
           disabled={locked}
-          value={write.frozen?.expirationSecs?.toString() ?? secs}
-          onChange={(event) => setSecs(event.target.value)}
-        />
+          onValueChange={setAction}
+        >
+          {allowedActions(report).map((option) => (
+            <Radio key={option} value={option} label={LABELS[option]} />
+          ))}
+        </RadioGroup>
+      </Field>
+      {shown === "timeout" && (
+        <Field label="Duration (seconds)">
+          <Input
+            placeholder="e.g. 3600"
+            type="number"
+            min={1}
+            disabled={locked}
+            value={write.frozen?.expirationSecs?.toString() ?? secs}
+            onChange={(event) => setSecs(event.target.value)}
+          />
+        </Field>
       )}
-      <Input
-        aria-label="Reason (optional)"
-        placeholder="Reason (optional)"
-        disabled={locked}
-        value={write.frozen?.reason ?? reason}
-        onChange={(event) => setReason(event.target.value)}
-      />
-      {secret && <p className="text-caption text-danger">{SECRET_REASON}</p>}
+      <Field
+        label="Reason (optional)"
+        description={shown ? reasonAudience(shown) : undefined}
+        error={secret ? SECRET_REASON : undefined}
+      >
+        <Input
+          disabled={locked}
+          value={write.frozen?.reason ?? reason}
+          onChange={(event) => setReason(event.target.value)}
+        />
+      </Field>
       {shown && (
         <>
-          <p className="text-caption text-secondary">{reasonAudience(shown)}</p>
           <p className="flex flex-wrap items-center gap-1.5 text-caption text-secondary">
             In{" "}
             <CommunityBadge
@@ -482,6 +493,11 @@ function Resolve({ report }: { report: ReportDto }) {
             {write.frozen ? "Retry" : "Confirm"}: {LABELS[shown]} in{" "}
             {report.communityHost}
           </Button>
+          {write.frozen && !write.busy && (
+            <Button size="sm" variant="ghost" onClick={write.discard}>
+              Discard
+            </Button>
+          )}
         </>
       )}
     </div>
@@ -509,14 +525,16 @@ function Reopen({ report }: { report: ReportDto }) {
           ? "The enforcement action already taken is not reversed: reopening does not un-ban, un-timeout, or restore a deleted message."
           : "Reopening does not reverse any enforcement action."}
       </p>
-      <Input
-        aria-label="Reopen reason (optional)"
-        placeholder="Reason (optional)"
-        disabled={write.frozen !== null}
-        value={write.frozen?.reason ?? reason}
-        onChange={(event) => setReason(event.target.value)}
-      />
-      {secret && <p className="text-caption text-danger">{SECRET_REASON}</p>}
+      <Field
+        label="Reopen reason (optional)"
+        error={secret ? SECRET_REASON : undefined}
+      >
+        <Input
+          disabled={write.frozen !== null}
+          value={write.frozen?.reason ?? reason}
+          onChange={(event) => setReason(event.target.value)}
+        />
+      </Field>
       <Button
         size="sm"
         loading={write.busy}
