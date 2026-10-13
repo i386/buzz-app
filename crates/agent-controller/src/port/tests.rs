@@ -453,13 +453,13 @@ fn attaches_each_old_buzz_agents_live_team() {
     old_buzz(dir.path(), LegacySource::Installed);
     let found = stores(dir.path()).list();
     assert!(found.warnings.is_empty());
-    let sietch = OldTeam {
+    let night_shift = OldTeam {
         id: "6f9c2d1e-4b7a-4e8f-9a3c-2d5e8f1b7c40".into(),
-        name: "Sietch Tabr".into(),
+        name: "Night Shift".into(),
         instructions: "Ship small, verified changes.\nReport in the originating thread.".into(),
     };
-    assert_eq!(team_of(&found.agents, "Stilgar"), Some(sietch.clone()));
-    assert_eq!(team_of(&found.agents, "Chani"), Some(sietch));
+    assert_eq!(team_of(&found.agents, "Alder"), Some(night_shift.clone()));
+    assert_eq!(team_of(&found.agents, "Birch"), Some(night_shift));
     // Built in to old Buzz, by its flag: never brought over.
     assert_eq!(team_of(&found.agents, "Fizz"), None);
     // A user's own team with the built-in one's name still comes.
@@ -477,7 +477,7 @@ fn attaches_each_old_buzz_agents_live_team() {
     );
     // The list shows it on the card; the definition is not an agent.
     let json = serde_json::to_value(&found).unwrap();
-    assert_eq!(json["agents"][0]["team"]["name"], "Sietch Tabr");
+    assert_eq!(json["agents"][0]["team"]["name"], "Night Shift");
     assert!(json["agents"][4].get("team").is_none());
     assert_eq!(found.agents.len(), 7);
 
@@ -486,7 +486,7 @@ fn attaches_each_old_buzz_agents_live_team() {
     let (dev, teams) = stores(dir.path()).read(PortSource::Development).unwrap();
     assert!(teams.is_ok());
     let dev: Vec<Portable> = dev.into_iter().map(|(agent, _)| agent).collect();
-    assert_eq!(team_of(&dev, "Chani"), team_of(&found.agents, "Chani"));
+    assert_eq!(team_of(&dev, "Birch"), team_of(&found.agents, "Birch"));
 }
 
 #[test]
@@ -496,7 +496,7 @@ fn unreadable_teams_warn_and_leave_every_agent_importable() {
             .join(LegacySource::Installed.app_directory())
             .join("agents/teams.json")
     };
-    let member = json!([{"pubkey": "1".repeat(64), "name": "Stilgar", "team_id": "t"}]);
+    let member = json!([{"pubkey": "1".repeat(64), "name": "Alder", "team_id": "t"}]);
     // A missing file: no teams and nothing to report.
     let dir = tempfile::tempdir().unwrap();
     legacy(dir.path(), LegacySource::Installed, member.clone());
@@ -528,7 +528,7 @@ fn unreadable_teams_warn_and_leave_every_agent_importable() {
 
 #[test]
 fn team_names_are_trimmed_bounded_and_never_blank() {
-    assert_eq!(team_name("  Sietch  "), "Sietch");
+    assert_eq!(team_name("  Night  "), "Night");
     assert_eq!(team_name(" \n "), "Team from old Buzz");
     assert_eq!(team_name(&"a".repeat(130)), "a".repeat(120));
     // 119 units, then a two-unit character that would cross 120: dropped whole.
@@ -546,7 +546,7 @@ fn taking_an_agent_rereads_its_team() {
     legacy(
         dir.path(),
         LegacySource::Installed,
-        json!([{"pubkey": agent.pubkey(), "name": "Stilgar", "team_id": "t",
+        json!([{"pubkey": agent.pubkey(), "name": "Alder", "team_id": "t",
                 "private_key_nsec": agent.hex().to_string()}]),
     );
     let path = dir

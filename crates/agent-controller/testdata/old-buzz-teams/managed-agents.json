@@ -2,17 +2,17 @@
   {
     "id": "b2c4e6f8-0000-4000-8000-000000000001",
     "slug": "b2c4e6f8-0000-4000-8000-000000000001",
-    "name": "Fremen",
+    "name": "Helpers",
     "pubkey": "",
     "description": "A definition, not an agent."
   },
   {
-    "id": "inst-stilgar",
-    "name": "Stilgar",
+    "id": "inst-alder",
+    "name": "Alder",
     "pubkey": "1111111111111111111111111111111111111111111111111111111111111111",
     "relay_url": "wss://old.example",
     "persona_id": null,
-    "system_prompt": "You are Stilgar.",
+    "system_prompt": "You are Alder.",
     "model": "default",
     "provider": "goose",
     "parallelism": 1,
@@ -22,12 +22,12 @@
     "team_id": "6f9c2d1e-4b7a-4e8f-9a3c-2d5e8f1b7c40"
   },
   {
-    "id": "inst-chani",
-    "name": "Chani",
+    "id": "inst-birch",
+    "name": "Birch",
     "pubkey": "2222222222222222222222222222222222222222222222222222222222222222",
     "relay_url": "wss://old.example",
     "persona_id": null,
-    "system_prompt": "You are Chani.",
+    "system_prompt": "You are Birch.",
     "model": "default",
     "provider": "goose",
     "parallelism": 1,

@@ -239,13 +239,13 @@ function fakeNative(identities: AgentIdentity[] = []) {
       async (
         _: string,
         pubkey: string,
+        destination: string,
         __: string,
-        ___: string,
         type: string,
       ) => {
         const identity = {
           pubkey,
-          relay: "wss://relay.example.test",
+          relay: destination.replace(/^https:/, "wss:"),
           owner: viewer,
           type,
           name: "Older",
@@ -534,9 +534,9 @@ it("imports a shared agent as a new identity with its name and picture, adopting
 /** The imported copy of old Buzz team `id` in `community`. */
 const betaTeam = (id: string, community = "https://relay.example.test") =>
   `beta-${createHash("sha256").update(`${id}\n${community}`).digest("hex")}`;
-const sietch = {
-  id: "old-sietch",
-  name: "Sietch Tabr",
+const nightShift = {
+  id: "old-night-shift",
+  name: "Night Shift",
   instructions: "Ship small.",
 };
 /** Native's import reports `team` as the old store has it then. */
@@ -555,15 +555,15 @@ const importOld = (service: AgentsService, pubkey: string) =>
 
 it("puts an imported agent on its old Buzz team, created by its first member and joined by the rest", async () => {
   const { service, native, storage } = await setup();
-  portsOnTeam(native, sietch);
+  portsOnTeam(native, nightShift);
   const first = await importOld(service, bot);
   expect(first.teamError).toBeUndefined();
   expect(service.snapshot().teams).toEqual([
-    { ...sietch, id: betaTeam("old-sietch"), members: [bot] },
+    { ...nightShift, id: betaTeam("old-night-shift"), members: [bot] },
   ]);
   // Edited here since: a teammate joins, and the edits stay.
   await service.saveTeam({
-    id: betaTeam("old-sietch"),
+    id: betaTeam("old-night-shift"),
     name: "Renamed",
     instructions: "Mine.",
     members: [bot],
@@ -571,22 +571,49 @@ it("puts an imported agent on its old Buzz team, created by its first member and
   await importOld(service, sibling);
   // A same-name team of the owner's is never matched.
   await service.saveTeam({
-    name: "Sietch Tabr",
+    name: "Night Shift",
     instructions: "",
     members: [],
   });
   await importOld(service, "e".repeat(64));
-  // Imported again (as after deleting it here): never a duplicate member.
+  // Imported again: never a duplicate member.
   await importOld(service, bot);
   const [imported, own] = service.snapshot().teams;
   expect(imported).toEqual({
-    id: betaTeam("old-sietch"),
+    id: betaTeam("old-night-shift"),
     name: "Renamed",
     instructions: "Mine.",
     members: [bot, sibling, "e".repeat(64)],
   });
-  expect(own).toMatchObject({ name: "Sietch Tabr", members: [] });
+  expect(own).toMatchObject({ name: "Night Shift", members: [] });
   expect(storage.getItem("buzz.agents.teams.v1")).toContain("e".repeat(64));
+});
+
+it("never takes over a same-name team the owner made before importing", async () => {
+  const { service, native } = await setup();
+  await service.create({ type: "example/echo", name: "Echo" });
+  const own = await service.saveTeam({
+    name: "Night Shift",
+    instructions: "Mine.",
+    members: [bot],
+  });
+  portsOnTeam(native, nightShift);
+  await importOld(service, sibling);
+  expect(service.snapshot().teams).toEqual([
+    own,
+    { ...nightShift, id: betaTeam("old-night-shift"), members: [sibling] },
+  ]);
+});
+
+it("recreates a deleted imported team with the next member imported", async () => {
+  const { service, native } = await setup();
+  portsOnTeam(native, nightShift);
+  await importOld(service, bot);
+  await service.removeTeam(betaTeam("old-night-shift"));
+  await importOld(service, sibling);
+  expect(service.snapshot().teams).toEqual([
+    { ...nightShift, id: betaTeam("old-night-shift"), members: [sibling] },
+  ]);
 });
 
 it("creates a team with no instructions as one with none, and writes no team for an agent on none", async () => {
@@ -614,22 +641,22 @@ it("saves the team as import read it, not as the list showed it", async () => {
         pubkey: bot,
         name: "Older",
         relay: "",
-        team: { id: "old-sietch", name: "Listed", instructions: "Stale." },
+        team: { id: "old-night-shift", name: "Listed", instructions: "Stale." },
       },
     ],
     warnings: [],
   });
   await service.portable();
-  portsOnTeam(native, sietch);
+  portsOnTeam(native, nightShift);
   await importOld(service, bot);
   expect(service.snapshot().teams).toEqual([
-    { ...sietch, id: betaTeam("old-sietch"), members: [bot] },
+    { ...nightShift, id: betaTeam("old-night-shift"), members: [bot] },
   ]);
 });
 
 it("keys an imported team to the community its agent was made in, even if another is opened meanwhile", async () => {
   const { service, native, second, select } = await setup();
-  portsOnTeam(native, sietch);
+  portsOnTeam(native, nightShift);
   const port = native.port.getMockImplementation() as NonNullable<
     ReturnType<typeof native.port.getMockImplementation>
   >;
@@ -639,7 +666,7 @@ it("keys an imported team to the community its agent was made in, even if anothe
   });
   await importOld(service, bot);
   expect(service.snapshot().teams.map((team) => team.id)).toEqual([
-    betaTeam("old-sietch"),
+    betaTeam("old-night-shift"),
   ]);
   // Its teammate made in the other community gets that community's copy.
   // Once the other community is connected.
@@ -654,12 +681,19 @@ it("keys an imported team to the community its agent was made in, even if anothe
     "example/echo",
   );
   expect(service.snapshot().teams).toEqual([
-    { ...sietch, id: betaTeam("old-sietch"), members: [bot] },
+    { ...nightShift, id: betaTeam("old-night-shift"), members: [bot] },
     {
-      ...sietch,
-      id: betaTeam("old-sietch", second.origin),
+      ...nightShift,
+      id: betaTeam("old-night-shift", second.origin),
       members: [sibling],
     },
+  ]);
+  const relays = new Map(
+    (await native.list()).map((identity) => [identity.pubkey, identity.relay]),
+  );
+  expect([relays.get(bot), relays.get(sibling)]).toEqual([
+    "wss://relay.example.test",
+    second.origin.replace(/^https:/, "wss:"),
   ]);
 });
 
@@ -675,11 +709,11 @@ it("keeps an imported agent whose team cannot be saved, and changes no team", as
     if (key === "buzz.agents.teams.v1") throw new Error("Quota exceeded");
     setItem(key, value);
   };
-  portsOnTeam(native, sietch);
+  portsOnTeam(native, nightShift);
   const agent = await importOld(service, sibling);
   expect(agent).toMatchObject({
     pubkey: sibling,
-    teamError: { name: "Sietch Tabr" },
+    teamError: { name: "Night Shift" },
   });
   expect(service.find(sibling)).toBeDefined();
   expect(storage.getItem("buzz.agents.teams.v1")).toBe(stored);

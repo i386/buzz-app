@@ -904,19 +904,19 @@ it("says which old Buzz team an agent joins, and stays on Import when it could n
       portable[0] as PortableAgent,
       {
         ...(portable[1] as PortableAgent),
-        team: { id: "old", name: "Sietch Tabr", instructions: "Ship small." },
+        team: { id: "old", name: "Night Shift", instructions: "Ship small." },
       },
     ],
     warnings: [],
   });
   agents.port.mockResolvedValueOnce({
     ...agent("Bea", 2),
-    teamError: { name: "Sietch Tabr" },
+    teamError: { name: "Night Shift" },
   });
   await user.click(screen.getByRole("tab", { name: "Import" }));
   const list = await screen.findByRole("region", { name: "Agents to import" });
   expect(
-    within(list).getByText("Buzz 0.X · Joins team Sietch Tabr"),
+    within(list).getByText("Buzz 0.X · Joins team Night Shift"),
   ).toBeInTheDocument();
   expect(within(list).getByText("Buzz 1.0 harness agent")).toBeInTheDocument();
   await user.click(screen.getByRole("button", { name: "Import Bea" }));
@@ -928,7 +928,7 @@ it("says which old Buzz team an agent joins, and stays on Import when it could n
     screen.queryByRole("button", { name: "Import Bea" }),
   ).not.toBeInTheDocument();
   expect(screen.getByRole("alert")).toHaveTextContent(
-    "Imported Bea, but couldn't add it to team Sietch Tabr. Add it in Teams.",
+    "Imported Bea, but couldn't add it to team Night Shift. Add it in Teams.",
   );
 });
 
