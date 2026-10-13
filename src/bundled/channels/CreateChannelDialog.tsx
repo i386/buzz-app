@@ -8,7 +8,10 @@ import {
 import { Select } from "../../shared/design-system/ui/Select";
 import { useTeams } from "../../features/agents/react";
 import { useAgentChoices } from "../../features/agents/use-choices";
-import { templateAgentChoices } from "../../features/agents/choices";
+import {
+  templateAgentChoices,
+  type AgentChoicesSnapshot,
+} from "../../features/agents/choices";
 import {
   useEffect,
   useId,
@@ -58,6 +61,20 @@ type Props = {
 export function CreateChannelDialog(props: Props) {
   // Each opening owns its callbacks. Closing/reopening cannot revive an old editor.
   return props.open ? <OpenCreateChannelDialog {...props} /> : null;
+}
+/** Templates add members only from ready inventory and archive evidence. */
+function templateEvidence(choices: AgentChoicesSnapshot) {
+  const ready =
+    choices.templates.status === "ready" && choices.archives.status === "ready";
+  return {
+    ready,
+    // Still being read, as opposed to failed or unavailable.
+    checking:
+      !ready &&
+      (choices.templates.pending ||
+        choices.archives.status === "idle" ||
+        choices.archives.status === "loading"),
+  };
 }
 function OpenCreateChannelDialog({
   open,
@@ -124,21 +141,39 @@ function OpenCreateChannelDialog({
     session.channels.list,
     session.channels.list,
   );
-  const agentsReady =
-    choices.templates.status === "ready" && choices.archives.status === "ready";
+  const evidence = templateEvidence(choices);
   const agentNames = new Map(
-    (agentsReady ? templateAgentChoices(choices, roster) : []).map((agent) => [
-      agent.pubkey,
-      agent.name,
-    ]),
+    (evidence.ready ? templateAgentChoices(choices, roster) : []).map(
+      (agent) => [agent.pubkey, agent.name],
+    ),
   );
   // Members not yet checked are neither added nor dropped: creation waits.
-  const unresolved = needsAgents && !agentsReady;
-  const checkingAgents =
-    unresolved &&
-    (choices.templates.pending ||
-      choices.archives.status === "idle" ||
-      choices.archives.status === "loading");
+  const unresolved = needsAgents && !evidence.ready;
+  const checkingAgents = unresolved && evidence.checking;
+  // A failed read offers the same refresh the session preflight applies. Its
+  // Retry stays mounted while the read runs so focus keeps a home.
+  const [retrying, setRetrying] = useState(false);
+  const templateField = useRef<HTMLDivElement>(null);
+  const retryButton = useRef<HTMLButtonElement>(null);
+  const retryAgents = async () => {
+    setRetrying(true);
+    try {
+      await session.agentChoices.refresh("templates");
+    } finally {
+      if (mounted.current) {
+        // A resolved field unmounts Retry with its error; hand focus back.
+        const after = templateEvidence(session.agentChoices.snapshot());
+        if (
+          (after.ready || after.checking) &&
+          document.activeElement === retryButton.current
+        )
+          templateField.current
+            ?.querySelector<HTMLElement>('[role="combobox"]')
+            ?.focus();
+        setRetrying(false);
+      }
+    }
+  };
   const templateSetup = template && {
     agents: templateAgents(template, teams, new Set(agentNames.keys())),
     canvas: template.canvas,
@@ -453,38 +488,54 @@ function OpenCreateChannelDialog({
               }}
             />
             {!pending && templates.length > 0 && (
-              <Select
-                label="Template"
-                variant="field"
-                value={templateId}
-                description={
-                  checkingAgents
-                    ? "Checking which of its agents are in this community…"
-                    : templateNote
-                }
-                error={
-                  unresolved && !checkingAgents
-                    ? "Its agents can’t be checked right now, so they can’t be added. Choose None to create the channel without them."
-                    : undefined
-                }
-                groups={[
-                  {
-                    label: "",
-                    options: [
-                      { value: "", label: "None" },
-                      ...templates.map((item) => ({
-                        value: item.id,
-                        label: item.name,
-                      })),
-                    ],
-                  },
-                ]}
-                onValueChange={(value) => {
-                  if (!editing.current) return;
-                  setTemplateId(value);
-                  setError("");
-                }}
-              />
+              <div ref={templateField} style={{ display: "contents" }}>
+                <Select
+                  label="Template"
+                  variant="field"
+                  value={templateId}
+                  description={
+                    checkingAgents
+                      ? "Checking which of its agents are in this community…"
+                      : templateNote
+                  }
+                  error={
+                    (unresolved && !checkingAgents) ||
+                    (needsAgents && retrying) ? (
+                      <>
+                        Its agents can’t be checked right now, so they can’t be
+                        added. Retry, or choose None to create the channel
+                        without them.{" "}
+                        <Button
+                          ref={retryButton}
+                          size="xs"
+                          variant="outline"
+                          loading={retrying}
+                          onClick={() => void retryAgents()}
+                        >
+                          Retry
+                        </Button>
+                      </>
+                    ) : undefined
+                  }
+                  groups={[
+                    {
+                      label: "",
+                      options: [
+                        { value: "", label: "None" },
+                        ...templates.map((item) => ({
+                          value: item.id,
+                          label: item.name,
+                        })),
+                      ],
+                    },
+                  ]}
+                  onValueChange={(value) => {
+                    if (!editing.current) return;
+                    setTemplateId(value);
+                    setError("");
+                  }}
+                />
+              </div>
             )}
             <ChannelDurationField
               temporary={lifetime === "temporary"}

@@ -870,7 +870,7 @@ const listingFailed = "Agents could not be listed";
 function agentChoices(state: {
   status: "loading" | "ready" | "error";
   agents?: readonly { pubkey: string; name: string }[];
-  archives?: "idle" | "ready";
+  archives?: "idle" | "loading" | "ready" | "error";
   archived?: readonly string[];
 }): AgentChoicesSnapshot {
   const identities = (state.agents ?? []).map((agent) => ({
@@ -906,6 +906,7 @@ function sessionWithChoices(initial: AgentChoicesSnapshot) {
   let snapshot = initial;
   const listeners = new Set<() => void>();
   const ensure = vi.fn();
+  const refresh = vi.fn(async () => {});
   const session = {
     ...store.session,
     agentChoices: {
@@ -918,11 +919,13 @@ function sessionWithChoices(initial: AgentChoicesSnapshot) {
         };
       },
       ensure,
+      refresh,
     },
   } as RelaySession;
   return {
     session,
     ensure,
+    refresh,
     update(next: AgentChoicesSnapshot) {
       snapshot = next;
       act(() => {
@@ -1085,7 +1088,7 @@ it("reports a failed agent list and creates without the template only on request
   await user.click(screen.getByRole("combobox", { name: "Template" }));
   await user.click(await screen.findByRole("option", { name: "Launch" }));
   expect(screen.getByRole("alert")).toHaveTextContent(
-    "Its agents can’t be checked right now, so they can’t be added. Choose None to create the channel without them.",
+    "Its agents can’t be checked right now, so they can’t be added. Retry, or choose None to create the channel without them.",
   );
   expect(
     screen.queryByText(/None of its agents are in this community/),
@@ -1102,6 +1105,91 @@ it("reports a failed agent list and creates without the template only on request
     expect(onCreate).toHaveBeenCalledExactlyOnceWith({
       name: "launch",
       visibility: "open",
+    }),
+  );
+});
+
+it("retries a failed archive read without dropping the template", async () => {
+  const user = userEvent.setup();
+  const here = [
+    { pubkey: ada, name: "Ada" },
+    { pubkey: bo, name: "Bo" },
+  ];
+  const choices = sessionWithChoices(
+    agentChoices({ status: "ready", agents: here, archives: "error" }),
+  );
+  // Each refresh reads anew: the read is held open until released.
+  let release = () => {};
+  choices.refresh.mockImplementation(() => {
+    choices.update(
+      agentChoices({ status: "ready", agents: here, archives: "loading" }),
+    );
+    return new Promise<void>((resolve) => {
+      release = resolve;
+    });
+  });
+  const template = launchTemplate();
+  const onCreate = vi.fn(async () => {});
+  render(
+    <CreateChannelDialog
+      {...setupProps()}
+      session={choices.session}
+      agents={teamAgents}
+      open
+      onOpenChange={() => {}}
+      onCreate={onCreate}
+    />,
+  );
+  await user.type(screen.getByRole("textbox", { name: "Name" }), "launch");
+  await user.click(screen.getByRole("combobox", { name: "Template" }));
+  await user.click(await screen.findByRole("option", { name: "Launch" }));
+  const create = screen.getByRole("button", { name: "Create channel" });
+  expect(create).toBeDisabled();
+  const retry = screen.getByRole("button", { name: "Retry" });
+  expect(screen.getByRole("alert")).toContainElement(retry);
+
+  // A retry that fails again keeps the error, the draft and the control.
+  await user.click(retry);
+  expect(choices.refresh).toHaveBeenCalledExactlyOnceWith("templates");
+  expect(retry).toHaveAttribute("aria-busy", "true");
+  expect(retry).toHaveFocus();
+  expect(
+    screen.queryByText("Checking which of its agents are in this community…"),
+  ).not.toBeInTheDocument();
+  choices.update(
+    agentChoices({ status: "ready", agents: here, archives: "error" }),
+  );
+  release();
+  await waitFor(() => expect(retry).not.toHaveAttribute("aria-busy"));
+  expect(retry).toHaveFocus();
+  expect(screen.getByRole("alert")).toHaveTextContent(/can’t be checked/);
+  expect(create).toBeDisabled();
+
+  // A retry that reads the evidence resolves the field and hands focus back.
+  await user.click(retry);
+  expect(choices.refresh).toHaveBeenCalledTimes(2);
+  choices.update(agentChoices({ status: "ready", agents: here }));
+  expect(retry).toHaveFocus();
+  release();
+  await waitFor(() => expect(screen.queryByRole("alert")).toBeNull());
+  expect(screen.getByRole("combobox", { name: "Template" })).toHaveFocus();
+  expect(screen.getByRole("combobox", { name: "Template" })).toHaveTextContent(
+    "Launch",
+  );
+  expect(screen.getByRole("textbox", { name: "Name" })).toHaveValue("launch");
+  expect(screen.getByText("Adds Bo, Ada · Starts the Canvas")).toBeVisible();
+  expect(create).toBeEnabled();
+  await user.click(create);
+  await waitFor(() =>
+    expect(onCreate).toHaveBeenCalledExactlyOnceWith({
+      name: "launch",
+      visibility: "open",
+      setup: {
+        agents: [bo, ada],
+        canvas: "# Goal",
+        groupId: "",
+        templateId: template.id,
+      },
     }),
   );
 });
