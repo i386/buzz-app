@@ -453,6 +453,14 @@ const SEEN_LIMIT = 2_048;
 /** Watched events each agent keeps while their channel's roster is only the one
  * saved on disk, until the relay confirms it. */
 const HELD_LIMIT = 256;
+/** Replayed events each agent keeps until it has room for them. A replay sends
+ * minutes of traffic at once, which the queue and rate limit would otherwise
+ * drop; past this, one is left unseen, so a later replay or catch-up can still
+ * deliver it. */
+const BACKLOG_LIMIT = 512;
+/** Channels whose recent ids each agent keeps for replay dedup, the most
+ * recently active first. */
+const SEEN_CHANNELS = 128;
 /** Bounds one cleanup attempt, whose relay steps otherwise wait on the outbox. */
 const CLEANUP_TIMEOUT_MS = 60_000;
 /** Runs per agent per minute; bounds two agents that answer each other. */
@@ -680,8 +688,12 @@ type Runner = {
   /** Events seen, and events it wrote (so reactions to them reach no watch). */
   readonly seen: Set<string>;
   /** Events seen in each channel, as many as a reconnect replays of it, so
-   * other channels' traffic cannot push out one a replay sends again. */
+   * other channels' traffic cannot push out one a replay sends again. Only the
+   * `SEEN_CHANNELS` most recently active channels are kept. */
   readonly seenIn: Map<string, Set<string>>;
+  /** Replayed events waiting, oldest first, until the agent has room for the
+   * jobs each makes. */
+  readonly backlog: { event: RelayEvent; channelId?: string }[];
   readonly wrote: Set<string>;
   /** Watched events whose channel roster is not confirmed yet, by id: they are
    * matched again once it is (see `member()`). */
@@ -789,7 +801,10 @@ export class AgentsService extends Service implements Agents {
         });
       // Wakes each runner, which starts any timer that is due.
       const tick = setInterval(() => {
-        for (const runner of this.runners.values()) void this.drain(runner);
+        for (const runner of this.runners.values()) {
+          this.admit(runner);
+          void this.drain(runner);
+        }
         this.reconnect();
       }, TIMER_TICK_MS);
       return () => {
@@ -1898,6 +1913,7 @@ export class AgentsService extends Service implements Agents {
       admitted: 0,
       seen: new Set(),
       seenIn: new Map(),
+      backlog: [],
       wrote: new Set(),
       held: new Map(),
       mayHold: true,
@@ -1910,6 +1926,7 @@ export class AgentsService extends Service implements Agents {
     this.localActivity.clear(undefined, runner.pubkey);
     runner.queue.length = 0;
     runner.held.clear();
+    runner.backlog.length = 0;
     runner.controller.abort();
   }
   /** The runner's event watches for the agent's current attention. */
@@ -1939,25 +1956,90 @@ export class AgentsService extends Service implements Agents {
       const agent = this.ready(runner.pubkey);
       if (!agent || originOf(agent.relay) !== origin || !runner.type?.run)
         continue;
+      let overflow = 0;
       for (const event of batch.events) {
         if (batch.replay && event.created_at < since) continue;
         const channel = event.tags.find((tag) => tag[0] === "h")?.[1];
         const seenIn = channel ? runner.seenIn.get(channel) : undefined;
         if (runner.seen.has(event.id) || seenIn?.has(event.id)) continue;
-        bounded(runner.seen, event.id);
-        if (channel) {
-          const ids = seenIn ?? new Set<string>();
-          if (!seenIn) runner.seenIn.set(channel, ids);
-          bounded(ids, event.id, LIVE_REPLAY_LIMIT);
+        // Left unseen, so a later replay or catch-up can still deliver it.
+        if (batch.replay && runner.backlog.length >= BACKLOG_LIMIT) {
+          overflow++;
+          continue;
         }
+        this.markSeen(runner, event.id, channel);
         // An agent never hears itself; its own events keep reactions to them
         // from its watches.
         if (event.pubkey === agent.pubkey) {
           bounded(runner.wrote, event.id);
           continue;
         }
-        this.deliver(runner, agent, event, batch.channelId);
+        // A replay waits for room rather than take the drops a burst of
+        // live traffic would.
+        if (batch.replay)
+          runner.backlog.push({
+            event,
+            ...(batch.channelId ? { channelId: batch.channelId } : {}),
+          });
+        else this.deliver(runner, agent, event, batch.channelId);
       }
+      if (overflow)
+        console.warn(
+          `Agent ${agent.name} left ${overflow} replayed events for later`,
+        );
+      if (batch.replay) this.admit(runner);
+    }
+  }
+  private markSeen(runner: Runner, id: string, channel: string | undefined) {
+    bounded(runner.seen, id);
+    if (!channel) return;
+    const ids = runner.seenIn.get(channel) ?? new Set<string>();
+    // Moved to the newest end, so the quietest channel is forgotten first.
+    runner.seenIn.delete(channel);
+    runner.seenIn.set(channel, ids);
+    bounded(ids, id, LIVE_REPLAY_LIMIT);
+    if (runner.seenIn.size > SEEN_CHANNELS)
+      runner.seenIn.delete(runner.seenIn.keys().next().value as string);
+  }
+  /** Whether the agent can take `jobs` more jobs, `classified` of them first
+   * through the classifier, without dropping any. Events still being
+   * classified will take queue and rate room too. */
+  private fits(runner: Runner, jobs: number, classified: number) {
+    const admitted =
+      Date.now() - runner.windowStart >= RATE_WINDOW_MS ? 0 : runner.admitted;
+    return (
+      runner.queue.length + runner.classifying + jobs <= QUEUE_LIMIT &&
+      runner.classifying + classified <= CLASSIFY_LIMIT &&
+      admitted + runner.classifying + jobs <= RATE_LIMIT
+    );
+  }
+  /** Delivers backlogged events, oldest first, while the agent has room for
+   * every job each makes; the rest wait for a later tick. Each is matched
+   * against the agent's attention as it is when it is delivered. */
+  private admit(runner: Runner) {
+    const agent = this.ready(runner.pubkey);
+    if (!agent || !runner.type?.run) return;
+    while (runner.backlog.length) {
+      const { event, channelId } = runner.backlog[0] as Runner["backlog"][0];
+      const triggers = this.heard(runner, agent, event);
+      if (
+        triggers === "held"
+          ? runner.held.size >= HELD_LIMIT
+          : // One that makes more jobs than an idle agent takes goes when
+            // it is idle, and loses the excess as live delivery would.
+            !this.fits(
+              runner,
+              Math.min(triggers.length, QUEUE_LIMIT),
+              Math.min(
+                triggers.filter((t) => t.type === "watch" && t.watch.classifier)
+                  .length,
+                CLASSIFY_LIMIT,
+              ),
+            )
+      )
+        return;
+      runner.backlog.shift();
+      this.deliver(runner, agent, event, channelId, triggers);
     }
   }
   /** Matches the held events of a community's agents again, as its rosters
@@ -1978,8 +2060,8 @@ export class AgentsService extends Service implements Agents {
     agent: Agent,
     event: RelayEvent,
     channelId: string | undefined,
+    triggers = this.heard(runner, agent, event),
   ) {
-    const triggers = this.heard(runner, agent, event);
     if (triggers === "held") {
       runner.held.set(event.id, { event, ...(channelId ? { channelId } : {}) });
       if (runner.held.size > HELD_LIMIT) {

@@ -2070,6 +2070,64 @@ it("still knows a quiet channel's event when a reconnect replays it after busy t
   expect(woke(run)).toEqual(["quiet", "after"]);
 });
 
+it("delivers a replay of more matching events than the rate limit takes at once, each once", async () => {
+  vi.useFakeTimers({ now: 1_000_000_000 });
+  try {
+    const { service, run, emit } = await setup();
+    await service.create({ type: "example/echo", name: "Echo" });
+    await service.save(bot, { attentionEnabled: true, attention: everything });
+    const now = Math.floor(Date.now() / 1000);
+    const ids = Array.from({ length: 80 }, (_, index) => `m${index}x`);
+    // A three-minute drop: live, these would have spread over three windows.
+    emit({
+      replay: true,
+      events: ids.map((id, index) =>
+        event(id, { created_at: now + 1 + Math.floor(index / 30) }),
+      ),
+    });
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(run.mock.calls.length).toBeLessThanOrEqual(60);
+    expect(run.mock.calls.length).toBeGreaterThan(0);
+    // The rest wait for the next rate window, and a second replay of the
+    // same history wakes nothing again.
+    emit({
+      replay: true,
+      events: ids.map((id) => event(id, { created_at: now + 1 })),
+    });
+    await vi.advanceTimersByTimeAsync(70_000);
+    expect(woke(run).sort()).toEqual(
+      ids.map((id) => id.replace(/0+$/, "")).sort(),
+    );
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+it("leaves a replay past its backlog unseen, so a later replay delivers it", async () => {
+  vi.useFakeTimers({ now: 1_000_000_000 });
+  try {
+    const { service, run, emit } = await setup();
+    await service.create({ type: "example/echo", name: "Echo" });
+    await service.save(bot, { attentionEnabled: true, attention: everything });
+    const now = Math.floor(Date.now() / 1000);
+    const ids = Array.from({ length: 520 }, (_, index) => `b${index}x`);
+    const replay = () =>
+      emit({
+        replay: true,
+        events: ids.map((id) => event(id, { created_at: now + 1 })),
+      });
+    replay();
+    await vi.advanceTimersByTimeAsync(10 * 60_000);
+    expect(run.mock.calls.length).toBe(512);
+    replay();
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(new Set(woke(run)).size).toBe(520);
+    expect(run.mock.calls.length).toBe(520);
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
 it("holds a watched event until the relay confirms its channel's saved roster", async () => {
   const { service, run, emit, confirm } = await setup();
   await service.create({ type: "example/echo", name: "Echo" });
