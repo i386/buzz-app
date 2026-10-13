@@ -19,7 +19,8 @@ const REASON_MAX: usize = 1000;
 pub(super) const BODY_MAX: usize = 4096;
 const QUERY_MAX: usize = 255;
 const CURSOR_MAX: usize = 1024;
-const MAX_EXPIRATION_SECS: u64 = 10 * 365 * 24 * 60 * 60;
+/// The relay caps timeouts at 365 days.
+const MAX_EXPIRATION_SECS: u64 = 365 * 24 * 60 * 60;
 
 #[derive(Debug, Deserialize, Serialize, Clone, Copy, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
@@ -310,7 +311,7 @@ impl StaffRequest {
                 }
                 put("communityId", q.community_id.clone());
                 put("status", q.status.map(|s| enum_text(&s)));
-                put("limit", bounded(q.limit, 500)?.map(|n| n.to_string()));
+                put("limit", bounded(q.limit, 200)?.map(|n| n.to_string()));
                 put("scope", q.scope.map(|_| "all".into()));
                 ("GET", "/reports".into(), None, SUCCESS_CAP)
             }
@@ -422,6 +423,7 @@ impl StaffRequest {
                     (DirectAction::Delete, Some(_)) => {
                         return Err("A delete takes no duration".into())
                     }
+                    (DirectAction::Ban, Some(_)) => return Err("A ban takes no duration".into()),
                     _ => {}
                 }
                 put("communityHost", Some(community_host(host)?.into()));

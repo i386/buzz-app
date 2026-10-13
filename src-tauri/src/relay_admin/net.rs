@@ -75,11 +75,13 @@ impl Net {
             Host::Ipv6(ip) if (self.allowed)(ip.into()) => {}
             Host::Ipv4(_) | Host::Ipv6(_) => return Err(REFUSED.into()),
             Host::Domain(name) => {
-                let answers = self
-                    .resolver
-                    .lookup(name, port)
-                    .await
-                    .map_err(|_| "The admin host could not be resolved")?;
+                // reqwest's timeouts start only after this lookup.
+                let answers =
+                    tokio::time::timeout(LOOKUP_TIMEOUT, self.resolver.lookup(name, port))
+                        .await
+                        .ok()
+                        .and_then(Result::ok)
+                        .ok_or("The admin host could not be resolved")?;
                 if answers.is_empty() {
                     return Err("The admin host could not be resolved".into());
                 }
@@ -99,6 +101,7 @@ impl Net {
     }
 }
 
+const LOOKUP_TIMEOUT: Duration = Duration::from_secs(10);
 const REFUSED: &str = "The admin host resolves to a private or local address";
 
 /// Syntactic admin-origin rule, checked before any lookup: an HTTPS origin

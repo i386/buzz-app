@@ -42,6 +42,13 @@ export type ActionRecordDto = {
   updatedAt: string;
 };
 
+export type ReportStatus =
+  | "open"
+  | "processing"
+  | "resolved"
+  | "dismissed"
+  | "escalated";
+
 export type ReportDto = {
   id: string;
   communityId: string;
@@ -54,7 +61,7 @@ export type ReportDto = {
   channelId?: string | null;
   reportType: string;
   note?: string | null;
-  status: "open" | "processing" | "resolved" | "dismissed" | "escalated";
+  status: ReportStatus;
   resolvedBy?: string | null;
   resolvedAt?: string | null;
   actionId?: string | null;
@@ -72,7 +79,7 @@ export type ReportDetailDto = ReportDto & {
 };
 
 export type ReportResolution = {
-  status: string;
+  status: ReportStatus;
   activeAction: ActionRecordDto | null;
 };
 
@@ -159,7 +166,7 @@ export type EventPreviewDto = {
 /** `pending`: the relay accepted the action but has not finished it. */
 export type DirectActionDto =
   | { state: "succeeded"; actionId: string; replayed: boolean }
-  | { state: "pending" };
+  | { state: "pending"; actionId: string; replayed: boolean };
 
 /**
  * What a request is bound to. Native code refuses to send (`notSent`) unless
@@ -229,7 +236,7 @@ export type StaffRequest =
       target: string;
       requestId: string;
       reason?: string;
-      /** Required for timeout; optional for ban; absent for delete. */
+      /** Timeout only: required for timeout, absent for ban and delete. */
       expirationSecs?: number;
     }
   | { route: "listCommunities"; q?: string; cursor?: string; limit?: number }
@@ -249,7 +256,7 @@ export type StaffResults = {
   listReports: ReportDto[];
   getReport: ReportDetailDto;
   resolveReport: ReportResolution;
-  reopenReport: { status: string };
+  reopenReport: { status: "open" };
   cancelReport: ReportResolution;
   listFeedback: FeedbackSummaryDto[];
   getFeedback: FeedbackDto;

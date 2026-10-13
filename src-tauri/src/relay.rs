@@ -1307,7 +1307,7 @@ fn download_name<'a>(name: &'a str, url: &'a Url) -> &'a str {
 
 /// Fail closed if the OS cannot mark the file as untrusted internet content.
 #[cfg(target_os = "macos")]
-fn mark_download(file: &std::fs::File, _path: &std::path::Path) -> std::io::Result<()> {
+pub(crate) fn mark_download(file: &std::fs::File, _path: &std::path::Path) -> std::io::Result<()> {
     use std::os::fd::AsRawFd;
     let timestamp = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -1332,7 +1332,7 @@ fn mark_download(file: &std::fs::File, _path: &std::path::Path) -> std::io::Resu
 }
 
 #[cfg(target_os = "windows")]
-fn mark_download(_file: &std::fs::File, path: &std::path::Path) -> std::io::Result<()> {
+pub(crate) fn mark_download(_file: &std::fs::File, path: &std::path::Path) -> std::io::Result<()> {
     // Alternate data streams are attached to the same NTFS file, not a sibling.
     let mut stream = path.as_os_str().to_owned();
     stream.push(":Zone.Identifier");
@@ -1340,7 +1340,7 @@ fn mark_download(_file: &std::fs::File, path: &std::path::Path) -> std::io::Resu
 }
 
 #[cfg(not(any(target_os = "macos", target_os = "windows")))]
-fn mark_download(_file: &std::fs::File, _path: &std::path::Path) -> std::io::Result<()> {
+pub(crate) fn mark_download(_file: &std::fs::File, _path: &std::path::Path) -> std::io::Result<()> {
     Ok(())
 }
 

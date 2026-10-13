@@ -2,8 +2,7 @@
 //! save (blob downloads do not work in WKWebView).
 
 use super::{
-    classify, dispatch, expected_origin, outcome, read_capped, route, Category, Context, Failure,
-    Net, Read,
+    classify, dispatch, expected_origin, read_capped, route, Category, Context, Failure, Net, Read,
 };
 use crate::identity::IdentityHost;
 use serde::Deserialize;
@@ -12,6 +11,8 @@ use sha2::{Digest, Sha256};
 use tauri_plugin_dialog::DialogExt;
 
 pub(super) const ATTACHMENT_CAP: usize = 10 * 1024 * 1024;
+/// The raster types the relay serves sniffed; never SVG, like other media.
+const PREVIEW_TYPES: [&str; 4] = ["image/png", "image/jpeg", "image/gif", "image/webp"];
 
 /// See `AttachmentRef` in `contract.ts`; the values come from the feedback's `imeta`.
 #[derive(Debug, Deserialize)]
@@ -68,7 +69,7 @@ pub(super) async fn fetch(
     if expected.is_empty() || expected.len() > 127 || expected.chars().any(char::is_control) {
         return Err(Failure::not_sent("The attachment type is invalid"));
     }
-    if purpose == Use::Preview && !expected.starts_with("image/") {
+    if purpose == Use::Preview && !PREVIEW_TYPES.contains(&expected.as_str()) {
         return Err(Failure::not_sent("Only images can be previewed"));
     }
     let origin = expected_origin(host, context, discovered).await?;
@@ -134,14 +135,15 @@ pub(super) async fn fetch(
     Ok(bytes)
 }
 
+/// Raw bytes (an `ArrayBuffer` in the webview), not a JSON number array.
 #[tauri::command]
 pub(crate) async fn relay_admin_attachment(
     host: tauri::State<'_, IdentityHost>,
     context: Context,
     attachment: AttachmentRef,
-) -> Result<Value, String> {
+) -> Result<tauri::ipc::Response, Value> {
     let discovered = super::discover(&context.relay).await.ok().flatten();
-    let result = fetch(
+    fetch(
         &Net::system(),
         host.inner(),
         &context,
@@ -150,8 +152,8 @@ pub(crate) async fn relay_admin_attachment(
         Use::Preview,
     )
     .await
-    .map(Value::from);
-    Ok(outcome(result))
+    .map(tauri::ipc::Response::new)
+    .map_err(|failure| json!({ "failure": failure }))
 }
 
 /// Fetches first so failures surface before a dialog, then writes the bytes
@@ -198,13 +200,28 @@ pub(super) fn save_to(chosen: Option<Result<std::path::PathBuf, String>>, bytes:
     let Some(path) = chosen else {
         return json!({ "state": "cancelled" });
     };
-    match path.and_then(|path| std::fs::write(path, bytes).map_err(|e| e.to_string())) {
+    match path.and_then(|path| write_marked(&path, bytes).map_err(|e| e.to_string())) {
         Ok(()) => json!({ "state": "saved" }),
         Err(message) => json!({
             "state": "failed",
             "failure": Failure::not_sent(format!("Could not save the attachment: {message}")),
         }),
     }
+}
+
+/// Marks the file as downloaded before any byte lands, like `save_download`,
+/// so the OS checks it on open; a failed save leaves no file behind.
+fn write_marked(path: &std::path::Path, bytes: &[u8]) -> std::io::Result<()> {
+    use std::io::Write as _;
+    let mut file = std::fs::File::create(path)?;
+    let written = crate::relay::mark_download(&file, path)
+        .and_then(|_| file.write_all(bytes))
+        .and_then(|_| file.sync_all());
+    if written.is_err() {
+        drop(file);
+        let _ = std::fs::remove_file(path);
+    }
+    written
 }
 
 /// `attachment-<hash prefix>.<ext>`; unknown types save as `.bin`.

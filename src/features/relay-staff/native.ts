@@ -24,6 +24,16 @@ function notSent(error: unknown): StaffFailure {
   };
 }
 
+function rejectedFailure(error: unknown): StaffFailure {
+  const failure =
+    typeof error === "object" && error !== null && "failure" in error
+      ? error.failure
+      : null;
+  return typeof failure === "object" && failure !== null
+    ? (failure as StaffFailure)
+    : notSent(error);
+}
+
 /** The native commands return outcomes; a rejected invoke never reached the network. */
 async function outcome<T>(
   command: string,
@@ -47,13 +57,16 @@ export function nativeRelayStaff(): RelayStaffBackend {
         request,
       }),
     attachment: async (context: StaffContext, ref: AttachmentRef) => {
-      const result = await outcome<number[]>("relay_admin_attachment", {
-        context,
-        attachment: ref,
-      });
-      return result.ok
-        ? { ok: true, value: Uint8Array.from(result.value) }
-        : result;
+      // Raw bytes on success; the command rejects with `{ failure }`.
+      try {
+        const bytes = await invoke<ArrayBuffer>("relay_admin_attachment", {
+          context,
+          attachment: ref,
+        });
+        return { ok: true, value: new Uint8Array(bytes) };
+      } catch (error) {
+        return { ok: false, failure: rejectedFailure(error) };
+      }
     },
     saveAttachment: async (context, ref) => {
       try {

@@ -660,6 +660,11 @@ fn routes_build_exact_urls_and_bodies() {
         json!({ "route": "searchMembers", "communityHost": "c.example", "q": "" }),
         json!({ "route": "directAction", "communityHost": "c.example", "action": "timeout", "target": "ab".repeat(32), "requestId": ID }),
         json!({ "route": "directAction", "communityHost": "c.example", "action": "delete", "target": "ab".repeat(32), "requestId": ID, "expirationSecs": 5 }),
+        // The relay answers 400 to a ban with a duration.
+        json!({ "route": "directAction", "communityHost": "c.example", "action": "ban", "target": "ab".repeat(32), "requestId": ID, "expirationSecs": 5 }),
+        // The relay caps timeouts at 365 days and report pages at 200.
+        json!({ "route": "directAction", "communityHost": "c.example", "action": "timeout", "target": "ab".repeat(32), "requestId": ID, "expirationSecs": 365 * 86400 + 1 }),
+        json!({ "route": "listReports", "query": { "limit": 201 } }),
     ] {
         assert!(built(bad.clone()).is_err(), "{bad}");
     }
@@ -1019,6 +1024,52 @@ async fn attachment_size_limit_is_enforced_before_and_while_reading() {
     assert_eq!(fixture.seen.lock().unwrap().len(), 1);
 }
 
+#[tokio::test]
+async fn previews_are_only_raster_images() {
+    let fixture = fixture(vec![]).await;
+    let net = net(&fixture, vec![]);
+    let host = IdentityHost::fixture();
+    let ctx = context(&host, &fixture).await;
+    for mime in ["image/svg+xml", "application/pdf"] {
+        let attachment = AttachmentRef {
+            feedback_id: ID.into(),
+            sha256: "0".repeat(64),
+            mime: mime.into(),
+            size: 4,
+        };
+        let f = fetch(
+            &net,
+            &host,
+            &ctx,
+            Some(origin(&fixture)),
+            &attachment,
+            Use::Preview,
+        )
+        .await;
+        assert!(f.unwrap_err().not_sent, "{mime}");
+    }
+    assert!(fixture.seen.lock().unwrap().is_empty());
+}
+
+/// Never answers, like a stalled resolver.
+struct Stalled;
+
+impl Resolve for Stalled {
+    fn lookup<'a>(&'a self, _host: &'a str, _port: u16) -> Lookup<'a> {
+        Box::pin(std::future::pending())
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_stalled_lookup_times_out_as_unresolved() {
+    let net = Net::custom(Arc::new(Stalled), loopback_only);
+    let origin = Url::parse("https://admin.example").unwrap();
+    assert_eq!(
+        net.client(&origin).await.unwrap_err(),
+        "The admin host could not be resolved"
+    );
+}
+
 #[test]
 fn save_reports_cancellation_success_and_disk_errors() {
     assert_eq!(save_to(None, b"x"), json!({ "state": "cancelled" }));
@@ -1033,6 +1084,23 @@ fn save_reports_cancellation_success_and_disk_errors() {
     let missing = save_to(Some(Ok(dir.join("no/such/dir/a.png"))), b"x");
     assert_eq!(missing["state"], "failed");
     assert_eq!(missing["failure"]["notSent"], true);
+    #[cfg(target_os = "macos")]
+    {
+        // Gatekeeper checks the saved file because it carries the quarantine flag.
+        let mut value = [0u8; 256];
+        let path = std::ffi::CString::new(file.to_str().unwrap()).unwrap();
+        let size = unsafe {
+            libc::getxattr(
+                path.as_ptr(),
+                c"com.apple.quarantine".as_ptr(),
+                value.as_mut_ptr().cast(),
+                value.len(),
+                0,
+                0,
+            )
+        };
+        assert!(size > 0, "saved attachment has no quarantine flag");
+    }
     let not_a_path = save_to(Some(Err("not a file path".into())), b"x");
     assert_eq!(not_a_path["state"], "failed");
     std::fs::remove_dir_all(dir).unwrap();
@@ -1563,7 +1631,7 @@ fn write_bodies_are_capped_at_betas_limit_in_bytes() {
     let widest = "😀".repeat(1000);
     for v in [
         json!({"route":"reopenReport","id":ID,"requestId":ID,"reason":widest}),
-        json!({"route":"directAction","communityHost":"c.example","action":"timeout","target":PK,"requestId":ID,"expirationSecs":315_360_000,"reason":widest}),
+        json!({"route":"directAction","communityHost":"c.example","action":"timeout","target":PK,"requestId":ID,"expirationSecs":31_536_000,"reason":widest}),
         json!({"route":"cancelReport","id":ID,"actionId":ID}),
         json!({"route":"setFeedbackStatus","id":ID,"status":"archived"}),
         json!({"route":"putOperator","pubkey":PK,"role":"moderator"}),
