@@ -211,8 +211,14 @@ and NIP-98. That client ignores system proxies and follows no redirects. The
 webview names a closed route; native code builds the URL, checks the request's
 expected relay, admin origin and signer before signing, and caps each response.
 NIP-11 `self` establishes relay authority; the operator-contact `pubkey` is not
-a substitute. The existing live owner handles WSS/NIP-42 authentication and
-signature verification. IPC permissions remain limited to the main WebView.
+a substitute. Opening Settings sends one signed `probe` (`GET
+/api/admin/v1/probe`, empty body) to the advertised admin host, without a
+further click, so the Relay admin entries show only to staff. It proves the
+active key to that host, which can differ from the community's connection
+host; no private key, login token or community data is sent. It repeats each
+time Settings opens and when the identity or relay changes while it is open.
+The existing live owner handles WSS/NIP-42 authentication and signature
+verification. IPC permissions remain limited to the main WebView.
 
 Channel lifecycle/details and identity archive commands, channel recipe preparation/decoding,
 and opening direct messages use purpose-bound native commands. Creation kind 9007 is

@@ -27,7 +27,7 @@ export function RelayStaff({
   const access = useSyncExternalStore(staff.subscribe, () =>
     context ? staff.access(context) : null,
   );
-  // Opening the card is what sends the first signed request.
+  // Settings has usually probed already; this covers an entry opened without it.
   // biome-ignore lint/correctness/useExhaustiveDependencies: keyed by identity, host and relay
   useEffect(() => {
     if (context && active()) void staff.probe(context);

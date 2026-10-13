@@ -17,25 +17,27 @@ connection" section of [identity.md](identity.md) for the address rules.
 
 ## Visibility and access
 
-1. Reports, Feedback and Communities appear only when the selected relay's
-   NIP-11 advertises an `admin_api` host. Discovery is unsigned. Staff also
-   needs a remembered `operator` role, so it appears once an open entry's
-   probe has run.
-2. Opening an entry sends the first signed request, `probe`. Its result is
-   remembered per (identity, admin host): opening another entry does not probe
-   again. The entries follow the selected community's relay and the signed-in
-   identity; changing either one, including an identity switch on the same
-   relay, replaces the open screen and probes for the new identity unless its role
-   is already remembered. An open Staff entry is the exception: unless the new
-   identity has a remembered `operator` role, Settings removes the entry before
-   it can probe, and Staff reappears once another entry's probe finds one.
+1. Discovery is unsigned: the entries are considered only when the selected
+   relay's NIP-11 advertises an `admin_api` host. Without one, nothing is
+   probed and no entry appears.
+2. Opening Settings sends the first signed request, `probe`, to that admin host
+   for the current identity, before any entry is opened. Settings shows the
+   group as pending while discovering and probing. Reports, Feedback and
+   Communities appear only for an authorized result; Staff also needs the
+   `operator` role. Access denied or no admin API hides every entry, and an
+   unreachable host reports an error, as Membership does for its own failures.
+   While Settings stays open, each (identity, admin host, relay) is probed
+   once: switching identity or relay probes the new one, and opening an entry
+   reuses the result instead of probing again. Closing and reopening Settings
+   probes again, so a demotion elsewhere removes the entries (or just Staff)
+   the next time Settings opens. Closed Settings sends nothing.
 3. A 401 or 403, from the relay or a gateway in front of it, on any signed request the console sends (reads, writes,
    attachment previews and Save) re-probes in the background. An unchanged
    result keeps the current session so open views do not reload and the
    re-probe cannot repeat itself.
-4. Probe outcomes: authorized, access denied (shows the key to give an
-   operator), no admin API on the advertised host, or unreachable
-   (network, TLS, DNS, or a VPN or SSO gateway).
+4. Probe outcomes: authorized, access denied, no admin API on the advertised
+   host, or unreachable (network, TLS, DNS, or a VPN or SSO gateway). A
+   re-probe from an open entry that ends denied removes the entries.
 5. A relay running with admin auth disabled is read-only: every write control is
    disabled (`canMutate` is `authMode === "nip98"`).
 6. Browser and dev-broker builds show that the console needs the desktop app.

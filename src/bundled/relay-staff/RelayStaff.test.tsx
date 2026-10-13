@@ -188,11 +188,19 @@ async function openCommunityActions() {
   fireEvent.click(screen.getByRole("button", { name: "Review" }));
 }
 
-it("denied staff see their key and nothing else is requested", async () => {
+const noEntries = () =>
+  waitFor(() =>
+    expect(
+      within(screen.getByRole("tablist", { name: "Settings" })).queryAllByRole(
+        "tab",
+      ),
+    ).toHaveLength(0),
+  );
+
+it("a key that isn't staff sees no entries and nothing else is requested", async () => {
   routes.probe = () => fail({ category: "forbidden", status: 403 });
   mount();
-  expect(await screen.findByText("Access denied")).toBeInTheDocument();
-  expect(screen.getByText(signer)).toBeInTheDocument();
+  await noEntries();
   expect(calls.map((c) => c.route)).toEqual(["probe"]);
 });
 
@@ -666,13 +674,15 @@ it("an unresolved direct action survives losing and regaining access", async () 
   const { staff } = mountSwitchable();
   await freezeDirectBan();
   routes.probe = () => fail({ category: "forbidden", status: 403 });
-  await act(async () => {
-    const context = staff.context();
-    if (context) await staff.probe(context, true);
-  });
-  await screen.findByText("Access denied");
+  const reprobe = () =>
+    act(async () => {
+      const context = staff.context();
+      if (context) await staff.probe(context, true);
+    });
+  await reprobe();
+  await noEntries();
   routes.probe = () => probe();
-  fireEvent.click(screen.getByRole("button", { name: "Check again" }));
+  await reprobe();
   await reopenActions();
   fireEvent.click(await screen.findByRole("button", { name: "Retry" }));
   await expectIdenticalRetry("directAction");
@@ -696,8 +706,7 @@ it("switching identity on the same relay probes as the new identity", async () =
   await screen.findByText(/Connected as moderator/);
   routes.probe = () => fail({ category: "forbidden", status: 403 });
   await select({ signer: member });
-  await screen.findByText("Access denied");
-  expect(screen.getByText(member)).toBeInTheDocument();
+  await noEntries();
   expect(sent("probe")).toHaveLength(2);
   expect(contexts.at(-1)?.signer).toBe(member);
 });
@@ -1077,7 +1086,7 @@ it("a gateway 401 on a write re-probes once, even when the probe is refused too"
   routes.probe = () =>
     fail({ category: "ambiguous", status: 401, authLost: true });
   fireEvent.click(await screen.findByRole("button", { name: "Confirm" }));
-  await screen.findByText("Access denied");
+  await noEntries();
   await new Promise((resolve) => setTimeout(resolve, 50));
   expect(sent("probe")).toHaveLength(2);
   const context = staff.context();
@@ -1964,47 +1973,124 @@ it("feedback list fetches every unknown submitter in one batch", async () => {
   expect(new Set(batch[0])).toEqual(new Set(keys));
 });
 
-it("operators get four entries, moderators three, and relays without an admin host none", async () => {
-  const titles = async (staff: Staff) => {
-    await waitFor(() => expect(staff.visible()).toBe(true));
-    const context = staff.context();
-    if (context) await staff.probe(context);
-    return cards(staff, (node) => node)
-      .filter((card) => card.visibility?.snapshot() === true)
-      .map((card) => card.title);
-  };
+/** The titles Settings would list, before any entry has opened. */
+async function settingsTitles(staff: Staff) {
+  await waitFor(() => expect(staff.visible()).not.toBe("pending"));
+  return cards(staff, (node) => node)
+    .filter((card) => card.visibility?.snapshot() === true)
+    .map((card) => card.title);
+}
+
+it("opening Settings sends one probe and shows each role its entries before any entry opens", async () => {
   routes.probe = () => probe({ role: "operator", canStaff: true });
   const operator = createStaff(backend, () => ({ relay, signer }));
   operator.ensure();
-  expect(await titles(operator)).toEqual([
+  expect(await settingsTitles(operator)).toEqual([
     "Reports",
     "Feedback",
     "Communities",
     "Staff",
   ]);
+  expect(sent("probe")).toHaveLength(1);
   for (const card of cards(operator, (node) => node))
     expect(card.group).toBe("Relay admin");
 
   routes.probe = () => probe();
   const moderator = createStaff(backend, () => ({ relay, signer }));
   moderator.ensure();
-  expect(await titles(moderator)).toEqual([
+  expect(await settingsTitles(moderator)).toEqual([
     "Reports",
     "Feedback",
     "Communities",
   ]);
 
+  routes.probe = () => fail({ category: "forbidden", status: 403 });
+  const outsider = createStaff(backend, () => ({ relay, signer }));
+  outsider.ensure();
+  expect(await settingsTitles(outsider)).toEqual([]);
+  expect(sent("probe")).toHaveLength(3);
+});
+
+it("every entry retaining visibility still sends a single probe", async () => {
+  const staff = createStaff(backend, () => ({ relay, signer }));
+  for (const card of cards(staff, (node) => node)) card.visibility?.ensure();
+  await settingsTitles(staff);
+  expect(sent("probe")).toHaveLength(1);
+  // A relay update with the same identity and host is not a new check.
+  staff.refresh();
+  await settingsTitles(staff);
+  expect(sent("probe")).toHaveLength(1);
+});
+
+it("a read-only relay shows the read-only entries but not Staff", async () => {
+  routes.probe = () => probe({ authMode: "disabled", role: null });
+  const staff = createStaff(backend, () => ({ relay, signer }));
+  staff.ensure();
+  expect(await settingsTitles(staff)).toEqual([
+    "Reports",
+    "Feedback",
+    "Communities",
+  ]);
+});
+
+it("a probe that fails reports an error, not hidden or shown", async () => {
+  routes.probe = () =>
+    fail({ category: "notSent", status: null, notSent: true });
+  const staff = createStaff(backend, () => ({ relay, signer }));
+  staff.ensure();
+  await waitFor(() => expect(staff.visible()).toBe("error"));
+  expect(staff.operatorVisible()).toBe("error");
+});
+
+it("no advertised admin host sends no probe and shows no entries", async () => {
   const none = createStaff({ ...backend, discover: async () => null }, () => ({
     relay,
     signer,
   }));
   none.ensure();
   await waitFor(() => expect(none.visible()).toBe(false));
-  expect(
-    cards(none, (node) => node).filter(
-      (card) => card.visibility?.snapshot() === true,
-    ),
-  ).toEqual([]);
+  expect(await settingsTitles(none)).toEqual([]);
+  expect(sent("probe")).toHaveLength(0);
+});
+
+it("opening Settings again re-probes, and a demotion removes the entries", async () => {
+  routes.probe = () => probe({ role: "operator", canStaff: true });
+  const selection = { relay, signer };
+  const staff = createStaff(backend, () => ({ ...selection }));
+  const release = staff.ensure();
+  expect(await settingsTitles(staff)).toContain("Staff");
+  release();
+  // Closed Settings sends nothing, even for another identity.
+  selection.signer = member;
+  staff.refresh();
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  expect(sent("probe")).toHaveLength(1);
+  selection.signer = signer;
+
+  routes.probe = () => probe();
+  const releaseAgain = staff.ensure();
+  await waitFor(() => expect(staff.operatorVisible()).toBe(false));
+  expect(sent("probe")).toHaveLength(2);
+  expect(await settingsTitles(staff)).toEqual([
+    "Reports",
+    "Feedback",
+    "Communities",
+  ]);
+  releaseAgain();
+
+  routes.probe = () => fail({ category: "forbidden", status: 403 });
+  staff.ensure();
+  await waitFor(() => expect(staff.visible()).toBe(false));
+  expect(sent("probe")).toHaveLength(3);
+});
+
+it("opening an entry after the Settings check sends no second probe", async () => {
+  mount();
+  await screen.findByText(/Connected as moderator/);
+  fireEvent.click(await screen.findByRole("tab", { name: "Feedback" }));
+  fireEvent.click(await screen.findByRole("tab", { name: "Communities" }));
+  await screen.findByRole("button", { name: /team\.example\.com/ });
+  expect(sent("probe")).toHaveLength(1);
 });
 
 it("a report's community badge opens that community in the same entry, and Back returns", async () => {
