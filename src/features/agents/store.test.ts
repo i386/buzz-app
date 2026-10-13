@@ -2,10 +2,14 @@ import { expect, it } from "vitest";
 import {
   STORAGE_KEY,
   TEAMS_KEY,
+  readOne,
   readRecords,
+  recordKey,
   readTeams,
   setAttention,
-  writeRecords,
+  removeRecord,
+  splitLegacyRecords,
+  writeRecord,
   writeTeams,
   type AgentRecord,
 } from "./store";
@@ -26,16 +30,16 @@ it("round-trips records and drops attention objects a reader would ignore", () =
     { type: "interest", instructions: "Be brief." },
     7,
   );
-  writeRecords(storage, { [pubkey]: saved });
+  writeRecord(storage, saved);
   expect(readRecords(storage)).toEqual({ [pubkey]: saved });
-  const stored = JSON.parse(storage.getItem(STORAGE_KEY) as string);
-  stored.agents[pubkey].attention["watch/bad"] = {
+  const stored = JSON.parse(storage.getItem(recordKey(pubkey)) as string);
+  stored.attention["watch/bad"] = {
     slug: "watch/bad",
     value: { type: "event" },
     modifiedAt: 1,
   };
-  stored.agents.nonsense = record;
-  storage.setItem(STORAGE_KEY, JSON.stringify(stored));
+  storage.setItem(recordKey(pubkey), JSON.stringify(stored));
+  storage.setItem(recordKey("nonsense"), JSON.stringify(record));
   const read = readRecords(storage);
   expect(read[pubkey]?.attention).toEqual(saved.attention);
   expect(read).not.toHaveProperty("nonsense");
@@ -44,9 +48,9 @@ it("round-trips records and drops attention objects a reader would ignore", () =
     value: { type: "event" },
     problem: expect.stringMatching(/Missing/),
   });
-  writeRecords(storage, read);
+  writeRecord(storage, read[pubkey] as AgentRecord);
   expect(
-    JSON.parse(storage.getItem(STORAGE_KEY) as string).agents[pubkey].attention[
+    JSON.parse(storage.getItem(recordKey(pubkey)) as string).attention[
       "watch/bad"
     ],
   ).toEqual({ slug: "watch/bad", value: { type: "event" }, modifiedAt: 1 });
@@ -55,17 +59,51 @@ it("round-trips records and drops attention objects a reader would ignore", () =
   expect(fixed.skipped).toEqual({});
 });
 
-it("saves attention only as on; absent or anything else reads as off", () => {
+it("keeps each agent's record under its own key and moves the old shared value", () => {
   const storage = memoryStorage();
-  writeRecords(storage, {
-    [pubkey]: { ...record, attentionEnabled: true },
-    ["b".repeat(64)]: { ...record, pubkey: "b".repeat(64) },
-    ["c".repeat(64)]: {
-      ...record,
-      pubkey: "c".repeat(64),
-      attentionEnabled: false,
+  const other = "b".repeat(64);
+  storage.setItem(
+    STORAGE_KEY,
+    JSON.stringify({
+      version: 1,
+      agents: { [pubkey]: record, [other]: { ...record, pubkey: other } },
+    }),
+  );
+  expect(Object.keys(readRecords(storage)).sort()).toEqual([pubkey, other]);
+  expect(readOne(storage, other)?.pubkey).toBe(other);
+  // Saved records win over the old shared value.
+  writeRecord(storage, { ...record, config: { word: "new" } });
+  expect(readRecords(storage)[pubkey]?.config).toEqual({ word: "new" });
+  splitLegacyRecords(storage, readRecords(storage));
+  expect(storage.getItem(STORAGE_KEY)).toBeNull();
+  expect(readOne(storage, other)?.pubkey).toBe(other);
+  // Writing one record leaves another program's record alone.
+  storage.setItem(recordKey(other), "sentinel");
+  writeRecord(storage, { ...record, config: { word: "newer" } });
+  expect(storage.getItem(recordKey(other))).toBe("sentinel");
+  // A record that did not change is not written again.
+  const writes: string[] = [];
+  const watched = Object.assign(Object.create(storage), {
+    setItem: (key: string, value: string) => {
+      writes.push(key);
+      storage.setItem(key, value);
     },
   });
+  writeRecord(watched, { ...record, config: { word: "newer" } });
+  expect(writes).toEqual([]);
+  // A removed record is gone.
+  removeRecord(storage, other);
+  expect(storage.getItem(recordKey(other))).toBeNull();
+});
+
+it("saves attention only as on; absent or anything else reads as off", () => {
+  const storage = memoryStorage();
+  for (const saved of [
+    { ...record, attentionEnabled: true },
+    { ...record, pubkey: "b".repeat(64) },
+    { ...record, pubkey: "c".repeat(64), attentionEnabled: false },
+  ] as AgentRecord[])
+    writeRecord(storage, saved);
   const read = readRecords(storage);
   expect(read[pubkey]?.attentionEnabled).toBe(true);
   expect(read["b".repeat(64)]).not.toHaveProperty("attentionEnabled");
@@ -206,7 +244,9 @@ it("reads nothing from missing or malformed storage", () => {
   const storage = memoryStorage();
   expect(readRecords(storage)).toEqual({});
   storage.setItem(STORAGE_KEY, "{");
+  storage.setItem(recordKey(pubkey), "{");
   expect(readRecords(storage)).toEqual({});
+  expect(readOne(storage, pubkey)).toBeUndefined();
 });
 
 it("round-trips teams and skips any that is not one", () => {

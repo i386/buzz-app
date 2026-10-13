@@ -116,6 +116,8 @@ fn main() {
             "app_agent_remember",
             "app_agent_claim",
             "app_agent_release",
+            "app_agent_state_load",
+            "app_agent_state_set",
             "title_bar_double_click",
             "notification_show",
             "notification_permission_state",

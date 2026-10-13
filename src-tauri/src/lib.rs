@@ -14,6 +14,7 @@ use browser::{
     browser_action, browser_attach, browser_detach, browser_navigate, browser_set_bounds,
     browser_status,
 };
+mod agent_state;
 mod app_agents;
 mod deep_links;
 mod dock;
@@ -484,6 +485,8 @@ fn commands<R: tauri::Runtime>() -> impl Fn(tauri::ipc::Invoke<R>) -> bool + Sen
         app_agents::app_agent_remember,
         app_agents::app_agent_claim,
         app_agents::app_agent_release,
+        agent_state::app_agent_state_load,
+        agent_state::app_agent_state_set,
         title_bar_double_click,
         notification_show,
         #[cfg(target_os = "macos")]
@@ -603,6 +606,12 @@ pub fn run() {
                     .map_err(|_| "Could not resolve legacy library directory")?;
                 Ok((root, legacy))
             })();
+            app.manage(agent_state::AgentState::new(
+                paths
+                    .as_ref()
+                    .map(|(root, _)| root.with_file_name(sign_out::AGENTS).join("state"))
+                    .map_err(Clone::clone),
+            ));
             app.manage(app_agents::AppAgentHost::new(
                 paths
                     .as_ref()

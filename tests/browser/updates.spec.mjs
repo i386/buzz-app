@@ -56,6 +56,9 @@ async function nativeUpdater(
               },
             };
           if (command === "plugin_module") return "export function apply() {}";
+          // Agent storage starts empty; the app saves agent state there.
+          if (command === "app_agent_state_load") return {};
+          if (command === "app_agent_state_set") return;
           const plugin = /^plugin:(updater|resources)\|(\w+)$/.exec(command);
           if (!plugin && command !== "update_restart")
             throw new Error(`Unexpected command ${command}`);

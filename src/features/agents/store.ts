@@ -40,7 +40,12 @@ export type AgentRecord = Readonly<{
 }>;
 type Stored = { version: 1; agents: Record<string, AgentRecord> };
 
+/** Where records were kept, all in one value, before each had its own key. */
 export const STORAGE_KEY = "buzz.agents.v1";
+/** Each agent's record has its own key, so programs that run different
+ * agents and share this storage never write over each other's records. */
+export const RECORD_PREFIX = "buzz.agent.v1:";
+export const recordKey = (pubkey: string) => `${RECORD_PREFIX}${pubkey}`;
 const PUBKEY = /^[0-9a-f]{64}$/;
 const group = (value: AttentionValue) =>
   value.type === "interest" ? "Interests" : "watches and timers";
@@ -48,12 +53,42 @@ const group = (value: AttentionValue) =>
 /** Reads every record. An attention object a reader would not apply is skipped
  * and reported, never dropped. */
 export function readRecords(storage: Storage): Record<string, AgentRecord> {
-  let stored: unknown;
-  try {
-    stored = JSON.parse(storage.getItem(STORAGE_KEY) ?? "null");
-  } catch {
-    return {};
+  const stored: Record<string, AgentRecord> = { ...legacyRecords(storage) };
+  for (let index = 0; index < storage.length; index++) {
+    const key = storage.key(index);
+    if (!key?.startsWith(RECORD_PREFIX)) continue;
+    const record = parsed(storage.getItem(key));
+    if (record) stored[key.slice(RECORD_PREFIX.length)] = record as AgentRecord;
   }
+  const records: Record<string, AgentRecord> = {};
+  for (const [pubkey, record] of Object.entries(stored)) {
+    const read = readRecord(pubkey, record);
+    if (read) records[pubkey] = read;
+  }
+  return records;
+}
+
+/** The agent's record as now stored, or undefined when it has none. */
+export function readOne(
+  storage: Storage,
+  pubkey: string,
+): AgentRecord | undefined {
+  const record =
+    parsed(storage.getItem(recordKey(pubkey))) ??
+    legacyRecords(storage)[pubkey];
+  return record ? readRecord(pubkey, record as AgentRecord) : undefined;
+}
+
+function parsed(text: string | null): unknown {
+  try {
+    return JSON.parse(text ?? "null");
+  } catch {
+    return undefined;
+  }
+}
+
+function legacyRecords(storage: Storage): Record<string, AgentRecord> {
+  const stored = parsed(storage.getItem(STORAGE_KEY));
   if (
     !stored ||
     typeof stored !== "object" ||
@@ -61,80 +96,93 @@ export function readRecords(storage: Storage): Record<string, AgentRecord> {
     typeof (stored as Stored).agents !== "object"
   )
     return {};
-  const records: Record<string, AgentRecord> = {};
-  for (const [pubkey, record] of Object.entries((stored as Stored).agents)) {
-    if (!PUBKEY.test(pubkey) || record?.pubkey !== pubkey) continue;
-    const attention: Record<string, AttentionObject> = {};
-    const skipped: Record<string, SkippedObject> = {};
-    const counts = { Interests: 0, "watches and timers": 0 };
-    const entries = Object.entries(record.attention ?? {}).sort(([a], [b]) =>
-      a < b ? -1 : a > b ? 1 : 0,
-    );
-    for (const [slug, object] of entries) {
-      const modifiedAt = Number.isSafeInteger(object?.modifiedAt)
-        ? object.modifiedAt
-        : 0;
-      let problem =
-        object?.slug === slug
-          ? validateObject(slug, object.value)
-          : "Stored under another slug";
-      if (!problem) {
-        const kind = group(object.value);
-        if (++counts[kind] > OBJECT_LIMIT)
-          problem = `Over the limit of ${OBJECT_LIMIT} ${kind}`;
-      }
-      if (problem)
-        skipped[slug] = { slug, value: object?.value, modifiedAt, problem };
-      else attention[slug] = { slug, value: object.value, modifiedAt };
-    }
-    const timers: Record<string, TimerState> = {};
-    for (const [slug, state] of Object.entries(record.timers ?? {}))
-      if (
-        attention[slug]?.value.type === "timer" &&
-        [state?.armedAt, state?.nextDue, state?.used].every(
-          Number.isSafeInteger,
-        )
-      )
-        timers[slug] = state;
-    records[pubkey] = {
-      pubkey,
-      attention,
-      skipped,
-      config: record.config,
-      timers,
-      ...(record.attentionEnabled === true ? { attentionEnabled: true } : {}),
-    };
-  }
-  return records;
+  return (stored as Stored).agents;
 }
 
-export function writeRecords(
+function readRecord(
+  pubkey: string,
+  record: AgentRecord | undefined,
+): AgentRecord | undefined {
+  if (!PUBKEY.test(pubkey) || record?.pubkey !== pubkey) return undefined;
+  const attention: Record<string, AttentionObject> = {};
+  const skipped: Record<string, SkippedObject> = {};
+  const counts = { Interests: 0, "watches and timers": 0 };
+  const entries = Object.entries(record.attention ?? {}).sort(([a], [b]) =>
+    a < b ? -1 : a > b ? 1 : 0,
+  );
+  for (const [slug, object] of entries) {
+    const modifiedAt = Number.isSafeInteger(object?.modifiedAt)
+      ? object.modifiedAt
+      : 0;
+    let problem =
+      object?.slug === slug
+        ? validateObject(slug, object.value)
+        : "Stored under another slug";
+    if (!problem) {
+      const kind = group(object.value);
+      if (++counts[kind] > OBJECT_LIMIT)
+        problem = `Over the limit of ${OBJECT_LIMIT} ${kind}`;
+    }
+    if (problem)
+      skipped[slug] = { slug, value: object?.value, modifiedAt, problem };
+    else attention[slug] = { slug, value: object.value, modifiedAt };
+  }
+  const timers: Record<string, TimerState> = {};
+  for (const [slug, state] of Object.entries(record.timers ?? {}))
+    if (
+      attention[slug]?.value.type === "timer" &&
+      [state?.armedAt, state?.nextDue, state?.used].every(Number.isSafeInteger)
+    )
+      timers[slug] = state;
+  return {
+    pubkey,
+    attention,
+    skipped,
+    config: record.config,
+    timers,
+    ...(record.attentionEnabled === true ? { attentionEnabled: true } : {}),
+  };
+}
+
+/** Moves records from the old value that held every agent into one key per
+ * agent, then removes it. Only that move writes many records at once: after
+ * it, each save writes only its own agent's key, so a program that runs
+ * other agents from the same storage keeps its changes. */
+export function splitLegacyRecords(
   storage: Storage,
   records: Readonly<Record<string, AgentRecord>>,
 ) {
+  if (storage.getItem(STORAGE_KEY) === null) return;
+  for (const record of Object.values(records)) writeRecord(storage, record);
+  storage.removeItem(STORAGE_KEY);
+}
+
+/** Removes an agent's record. */
+export function removeRecord(storage: Storage, pubkey: string) {
+  storage.removeItem(recordKey(pubkey));
+}
+
+/** Saves one record, when it changed. */
+export function writeRecord(
+  storage: Storage,
+  { skipped, ...record }: AgentRecord,
+) {
   // Skipped objects go back where they were read from, so a later reader that
   // can apply them still finds them.
-  const agents = Object.fromEntries(
-    Object.entries(records).map(([pubkey, { skipped, ...record }]) => [
-      pubkey,
-      {
-        ...record,
-        attention: {
-          ...Object.fromEntries(
-            Object.values(skipped ?? {}).map(({ problem: _, ...object }) => [
-              object.slug,
-              object,
-            ]),
-          ),
-          ...record.attention,
-        },
-      },
-    ]),
-  );
-  storage.setItem(
-    STORAGE_KEY,
-    JSON.stringify({ version: 1, agents } as Stored),
-  );
+  const text = JSON.stringify({
+    ...record,
+    attention: {
+      ...Object.fromEntries(
+        Object.values(skipped ?? {}).map(({ problem: _, ...object }) => [
+          object.slug,
+          object,
+        ]),
+      ),
+      ...record.attention,
+    },
+  });
+  const key = recordKey(record.pubkey);
+  if (storage.getItem(key) !== text) storage.setItem(key, text);
 }
 
 /** Replaces or deletes (`value: null`) one attention object, after validating it

@@ -96,6 +96,7 @@ function setup(
   const storage = {
     getItem: (key: string) => data.get(key) ?? null,
     setItem: (key: string, value: string) => void data.set(key, value),
+    removeItem: (key: string) => void data.delete(key),
   } as Storage;
   const runtime = new ClaudeRuntime(
     host,
@@ -907,7 +908,7 @@ it("runs a timer as a one-off turn that is never saved", async () => {
   expect(prompt).toMatch(/<attention>\nHandle the work that caused this turn/);
   // Its process stops once the turn is done, and no session is kept for it.
   expect(claude?.killed).toBe(true);
-  expect(data.get("buzz.claude-code.sessions.v1") ?? "{}").toBe("{}");
+  expect(data.get(`buzz.claude-code.sessions.v1:${self}`) ?? "{}").toBe("{}");
   expect(runtime.sessions(self)).toEqual([]);
 });
 

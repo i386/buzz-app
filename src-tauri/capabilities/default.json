@@ -86,6 +86,8 @@
     "allow-app-agent-remember",
     "allow-app-agent-claim",
     "allow-app-agent-release",
+    "allow-app-agent-state-load",
+    "allow-app-agent-state-set",
 
     "allow-title-bar-double-click",
     "allow-notification-show",

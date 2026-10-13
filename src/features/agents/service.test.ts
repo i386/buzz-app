@@ -1308,7 +1308,7 @@ it("shows an agent whose settings could not be saved with its type's defaults", 
   const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
   await service.create({ type: "example/echo", name: "Echo" });
   warn.mockRestore();
-  expect(storage.getItem("buzz.agents.v1") ?? "").not.toContain(bot);
+  expect(storage.getItem(`buzz.agent.v1:${bot}`)).toBeNull();
   expect(service.find(bot)).toMatchObject({ config: { reply: "ok" } });
   expect(Object.keys(service.find(bot)?.attention ?? {})).toEqual([
     "interest/default",
@@ -1316,7 +1316,7 @@ it("shows an agent whose settings could not be saved with its type's defaults", 
   ]);
   // The next save stores them.
   await service.save(bot, { config: { reply: "saved" } });
-  expect(storage.getItem("buzz.agents.v1")).toContain(bot);
+  expect(storage.getItem(`buzz.agent.v1:${bot}`)).toContain(bot);
 });
 
 it("saves nothing when native create fails", async () => {
@@ -1358,7 +1358,7 @@ it("creates an agent with the config it was given, not its type's defaults, and 
     "interest/default",
     "watch/channel",
   ]);
-  expect(storage.getItem("buzz.agents.v1")).toContain("chosen");
+  expect(storage.getItem(`buzz.agent.v1:${bot}`)).toContain("chosen");
 });
 
 it("keeps a new agent whose picture could not be set", async () => {
@@ -1445,7 +1445,41 @@ it("forgets records whose key is gone when identities load", async () => {
   expect(service.snapshot().agents.map((agent) => agent.name)).toEqual([
     "Echo",
   ]);
-  expect(storage.getItem("buzz.agents.v1")).not.toContain(sibling);
+  expect(storage.getItem("buzz.agents.v1")).toBeNull();
+  expect(storage.getItem(`buzz.agent.v1:${sibling}`)).toBeNull();
+  expect(storage.getItem(`buzz.agent.v1:${bot}`)).toContain(bot);
+});
+
+it("saving one agent leaves another program's changes to other agents", async () => {
+  const storage = memoryStorage();
+  for (const pubkey of [bot, sibling])
+    storage.setItem(
+      `buzz.agent.v1:${pubkey}`,
+      JSON.stringify({ pubkey, attention: {}, config: { reply: "start" } }),
+    );
+  const identity = (pubkey: string, name: string): AgentIdentity => ({
+    pubkey,
+    relay: "wss://relay.example.test",
+    owner: viewer,
+    type: "example/echo",
+    name,
+    deleted: false,
+  });
+  const { service } = await setup({
+    storage,
+    identities: [identity(bot, "Echo"), identity(sibling, "Other")],
+  });
+  await vi.waitFor(() => expect(service.find(sibling)).toBeDefined());
+  // The standalone host runs the sibling and saves its progress.
+  const hosted = JSON.stringify({
+    pubkey: sibling,
+    attention: {},
+    config: { reply: "from the host" },
+  });
+  storage.setItem(`buzz.agent.v1:${sibling}`, hosted);
+  await service.save(bot, { config: { reply: "edited" } });
+  expect(storage.getItem(`buzz.agent.v1:${bot}`)).toContain("edited");
+  expect(storage.getItem(`buzz.agent.v1:${sibling}`)).toBe(hosted);
 });
 
 it("keeps an agent created while identities are still loading", async () => {
@@ -1478,7 +1512,7 @@ it("keeps an agent created while identities are still loading", async () => {
   release([]);
   await vi.waitFor(() => expect(service.snapshot().status).toBe("ready"));
   expect(service.find(bot)?.name).toBe("Echo");
-  expect(storage.getItem("buzz.agents.v1")).toContain(bot);
+  expect(storage.getItem(`buzz.agent.v1:${bot}`)).toContain(bot);
 });
 
 it("reads the list again on refresh and clears the error a failed read left", async () => {
@@ -1581,7 +1615,7 @@ it("fires a due timer once, then again an interval after it ran", async () => {
   expect(run).toHaveBeenCalledTimes(2);
   // Its run state lives in the agent's record and goes when the timer does.
   const stored = () =>
-    JSON.parse(storage.getItem("buzz.agents.v1") ?? "{}").agents[bot];
+    JSON.parse(storage.getItem(`buzz.agent.v1:${bot}`) ?? "{}");
   expect(stored().timers["watch/tick"]).toMatchObject({ used: 2 });
   expect(stored().timers["watch/stale"]).toMatchObject({ used: 16 });
   await service.save(bot, { attention: { "watch/tick": null } });
@@ -1700,7 +1734,7 @@ it("deletes the key at once, then leaves its channels and archives it before for
   await service.create({ type: "example/echo", name: "Echo" });
   await service.remove(bot);
   expect(service.snapshot().agents).toEqual([]);
-  expect(storage.getItem("buzz.agents.v1")).not.toContain(bot);
+  expect(storage.getItem(`buzz.agent.v1:${bot}`)).toBeNull();
   await vi.waitFor(() =>
     expect(steps).toEqual(["key", "channels", "archive", "record", "forget"]),
   );

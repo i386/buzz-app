@@ -475,53 +475,70 @@ export class Spare {
   }
 }
 
-/** Sessions saved in local storage, by agent and then conversation. */
+/** Where sessions were kept for every agent in one value, before each agent's
+ * had its own key. */
+export const LEGACY_SESSIONS = "buzz.claude-code.sessions.v1";
+
+/** Sessions saved in agent storage, one key per agent, by conversation. Each
+ * agent's own key lets programs that run different agents share the storage. */
 export function localSessions(
   storage: Storage,
   agent: string,
-  name = "buzz.claude-code.sessions.v1",
+  name = LEGACY_SESSIONS,
 ): SessionStore & {
   /** Saved sessions, most recently used first. */
   list(): [string, SavedSession][];
 } {
-  const readAll = (): Record<string, Record<string, SavedSession>> => {
+  const key = `${name}:${agent}`;
+  const object = (text: string | null) => {
     try {
-      const value = JSON.parse(storage.getItem(name) ?? "{}");
+      const value = JSON.parse(text ?? "{}");
       return value && typeof value === "object" ? value : {};
     } catch {
       return {};
     }
   };
+  const read = (): Record<string, SavedSession> => {
+    const own = storage.getItem(key);
+    return own === null
+      ? (object(storage.getItem(name))[agent] ?? {})
+      : object(own);
+  };
   const update = (change: (sessions: Record<string, SavedSession>) => void) => {
-    const all = readAll();
-    const sessions = { ...(all[agent] ?? {}) };
+    const sessions = { ...read() };
     change(sessions);
     const kept = Object.entries(sessions)
       .sort(([, a], [, b]) => b.at - a.at)
       .slice(0, SAVED_LIMIT);
-    all[agent] = Object.fromEntries(kept);
     try {
-      storage.setItem(name, JSON.stringify(all));
+      storage.setItem(key, JSON.stringify(Object.fromEntries(kept)));
+      const legacy = object(storage.getItem(name));
+      if (agent in legacy) {
+        delete legacy[agent];
+        if (Object.keys(legacy).length)
+          storage.setItem(name, JSON.stringify(legacy));
+        else storage.removeItem(name);
+      }
     } catch (error) {
       console.warn("Claude sessions were not saved", error);
     }
   };
   return {
     list: () =>
-      Object.entries(readAll()[agent] ?? {})
+      Object.entries(read())
         .filter(([, saved]) => typeof saved?.id === "string")
         .sort(([, a], [, b]) => b.at - a.at),
-    get: (key) => {
-      const saved = readAll()[agent]?.[key];
+    get: (conversation) => {
+      const saved = read()[conversation];
       return saved && typeof saved.id === "string" ? saved : undefined;
     },
-    set: (key, session) =>
+    set: (conversation, session) =>
       update((sessions) => {
-        sessions[key] = session;
+        sessions[conversation] = session;
       }),
-    delete: (key) =>
+    delete: (conversation) =>
       update((sessions) => {
-        delete sessions[key];
+        delete sessions[conversation];
       }),
   };
 }

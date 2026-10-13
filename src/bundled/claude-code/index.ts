@@ -24,11 +24,11 @@ export const apply: PluginModule["apply"] = (ctx) => {
   const typeKey = `${ctx.pluginOwner?.id ?? "buzz.claude-code"}/${TYPE_ID}`;
   const spawn = host.spawn && withScript(host.spawn.bind(host));
   const setup = new ClaudeSetup(spawn, (input) => host.request(input));
-  const providerDefaults = new ClaudeDefaults();
+  const providerDefaults = new ClaudeDefaults(agents.storage);
   const runtime = new ClaudeRuntime(
     spawn ? { spawn } : {},
     (pubkey) => ownerReads(agents.relay(pubkey), pubkey),
-    localStorage,
+    agents.storage,
     (raw) => providerDefaults.resolve(raw),
   );
   /** A Claude agent is running, so Buzz's copy is needed; unknown until the

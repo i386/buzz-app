@@ -468,6 +468,7 @@ it("keeps saved sessions per agent in storage", () => {
   const storage = {
     getItem: (key: string) => data.get(key) ?? null,
     setItem: (key: string, value: string) => void data.set(key, value),
+    removeItem: (key: string) => void data.delete(key),
   } as Storage;
   const one = localSessions(storage, "one");
   const two = localSessions(storage, "two");
@@ -478,8 +479,37 @@ it("keeps saved sessions per agent in storage", () => {
   one.delete("c/root");
   expect(one.get("c/root")).toBeUndefined();
   expect(two.get("c/root")?.id).toBe("s2");
-  data.set("buzz.claude-code.sessions.v1", "not json");
+  expect([...data.keys()].sort()).toEqual([
+    "buzz.claude-code.sessions.v1:one",
+    "buzz.claude-code.sessions.v1:two",
+  ]);
+  data.set("buzz.claude-code.sessions.v1:one", "not json");
   expect(one.get("c/root")).toBeUndefined();
+});
+
+it("reads an agent's sessions from the shared value until it saves its own", () => {
+  const data = new Map<string, string>([
+    [
+      "buzz.claude-code.sessions.v1",
+      JSON.stringify({
+        one: { "c/root": { id: "s1", seen: 3, at: 1 } },
+        two: { "c/root": { id: "s2", seen: 4, at: 2 } },
+      }),
+    ],
+  ]);
+  const storage = {
+    getItem: (key: string) => data.get(key) ?? null,
+    setItem: (key: string, value: string) => void data.set(key, value),
+    removeItem: (key: string) => void data.delete(key),
+  } as Storage;
+  const one = localSessions(storage, "one");
+  expect(one.get("c/root")?.id).toBe("s1");
+  one.delete("c/root");
+  expect(one.get("c/root")).toBeUndefined();
+  expect(localSessions(storage, "two").get("c/root")?.id).toBe("s2");
+  localSessions(storage, "two").set("c/other", { id: "s3", seen: 1, at: 3 });
+  expect(data.has("buzz.claude-code.sessions.v1")).toBe(false);
+  expect(localSessions(storage, "two").get("c/root")?.id).toBe("s2");
 });
 
 it("shares a temporary metadata lookup, releases its process, and refreshes after settings change", async () => {

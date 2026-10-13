@@ -14,6 +14,7 @@ import { AgentRunners } from "./runner";
 // records with its type as the `runtime` tag, so every device of the owner's
 // can show it: as here, hosted, or on another device.
 import { migrateAgentStorage } from "./migrate-storage";
+import { agentStorage } from "./state";
 import { Service, type Context } from "@deepseek-ai/cordis";
 import { npubEncode } from "nostr-tools/nip19";
 import type { ComponentType, ReactNode } from "react";
@@ -72,7 +73,9 @@ import {
   readTeams,
   readUnfinished,
   setAttention,
-  writeRecords,
+  removeRecord,
+  splitLegacyRecords,
+  writeRecord,
   writeTeams,
   writeUnfinished,
   type AgentRecord,
@@ -460,6 +463,10 @@ export type Agents = {
   /** The owner's connection to a running agent's community, which need not be
    * the selected one: read the agent's conversations through this. */
   relay(pubkey: string): RelayData | undefined;
+  /** Where agent types keep what they save for an agent, such as its
+   * sessions. Every program that runs this machine's agents shares it, so
+   * keep each agent's state under its own key. */
+  readonly storage: Storage;
   /** Makes an agent of `type` in the selected community: here, or with a
    * hosted type at its provider. A hosted one whose setup then fails is kept
    * as `unfinished`. */
@@ -687,7 +694,7 @@ export class AgentsService extends Service implements Agents {
     ctx: Context,
     private readonly communities: AgentCommunities,
     private readonly native: AgentsNative | undefined = nativeAgents(),
-    private readonly storage: Storage = globalThis.localStorage,
+    readonly storage: Storage = agentStorage(),
     private readonly authorize: (
       pubkey: string,
       signal: AbortSignal,
@@ -698,6 +705,7 @@ export class AgentsService extends Service implements Agents {
     this.contributions = createContributions<AgentType>(ctx);
     migrateAgentStorage(storage);
     this.records = readRecords(storage);
+    splitLegacyRecords(storage, this.records);
     this.unfinished = Object.freeze(readUnfinished(storage));
     this.teamList = Object.freeze(readTeams(storage));
     this.state = Object.freeze({
@@ -1198,10 +1206,10 @@ export class AgentsService extends Service implements Agents {
           ...this.recordOf(identity),
           config: change ? change.config : adopted,
         };
-        const records = { ...this.records, [pubkey]: nextRecord };
-        writeRecords(this.storage, records);
+        // Only this agent's key: others may be another program's to change.
+        writeRecord(this.storage, nextRecord);
         // Publish the in-memory pair only after its config is durable.
-        this.records = records;
+        this.records = { ...this.records, [pubkey]: nextRecord };
         this.identities = this.identities.map((saved) =>
           saved.pubkey === pubkey ? { ...saved, type } : saved,
         );
@@ -1524,9 +1532,9 @@ export class AgentsService extends Service implements Agents {
 
   /** Saves one record; memory changes only once storage has taken it. */
   private write(record: AgentRecord) {
-    const records = { ...this.records, [record.pubkey]: record };
-    writeRecords(this.storage, records);
-    this.records = records;
+    // Only this agent's key: others may be another program's to change.
+    writeRecord(this.storage, record);
+    this.records = { ...this.records, [record.pubkey]: record };
     this.update();
   }
   private live(pubkey: string) {
@@ -1659,11 +1667,14 @@ export class AgentsService extends Service implements Agents {
           .filter((saved) => !saved.deleted)
           .map((saved) => saved.pubkey),
       );
-      if (Object.keys(this.records).some((pubkey) => !live.has(pubkey))) {
+      const gone = Object.keys(this.records).filter(
+        (pubkey) => !live.has(pubkey),
+      );
+      if (gone.length) {
+        for (const pubkey of gone) removeRecord(this.storage, pubkey);
         this.records = Object.fromEntries(
           Object.entries(this.records).filter(([pubkey]) => live.has(pubkey)),
         );
-        writeRecords(this.storage, this.records);
       }
       // A deleted agent leaves its teams; the teams stay.
       if (
