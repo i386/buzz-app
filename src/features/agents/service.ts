@@ -44,6 +44,7 @@ import { avatarSource } from "../../shared/avatar-source";
 import { newer, type EventData, type RelayEvent } from "../relay/events";
 import { EFFORT_TAG, MODEL_TAG } from "../relay/messages";
 import type { LiveBatch } from "../relay/incoming";
+import { LIVE_REPLAY_LIMIT } from "../relay/live";
 import { relayPartition } from "../relay/partition";
 import type { RelayData } from "../relay/service";
 import type { RelaySession } from "../relay/session";
@@ -518,9 +519,9 @@ export function teamPrompt(
     })
     .join("\n\n");
 }
-const bounded = (set: Set<string>, id: string) => {
+const bounded = (set: Set<string>, id: string, limit = SEEN_LIMIT) => {
   set.add(id);
-  if (set.size > SEEN_LIMIT) set.delete(set.values().next().value as string);
+  if (set.size > limit) set.delete(set.values().next().value as string);
 };
 /** Whether an agent answers `event`: its owner's, or one by another agent the
  * owner attested (NIP-OA). Both bundled types answer nobody else. */
@@ -678,6 +679,9 @@ type Runner = {
   admitted: number;
   /** Events seen, and events it wrote (so reactions to them reach no watch). */
   readonly seen: Set<string>;
+  /** Events seen in each channel, as many as a reconnect replays of it, so
+   * other channels' traffic cannot push out one a replay sends again. */
+  readonly seenIn: Map<string, Set<string>>;
   readonly wrote: Set<string>;
   /** Watched events whose channel roster is not confirmed yet, by id: they are
    * matched again once it is (see `member()`). */
@@ -1893,6 +1897,7 @@ export class AgentsService extends Service implements Agents {
       windowStart: 0,
       admitted: 0,
       seen: new Set(),
+      seenIn: new Map(),
       wrote: new Set(),
       held: new Map(),
       mayHold: true,
@@ -1936,8 +1941,15 @@ export class AgentsService extends Service implements Agents {
         continue;
       for (const event of batch.events) {
         if (batch.replay && event.created_at < since) continue;
-        if (runner.seen.has(event.id)) continue;
+        const channel = event.tags.find((tag) => tag[0] === "h")?.[1];
+        const seenIn = channel ? runner.seenIn.get(channel) : undefined;
+        if (runner.seen.has(event.id) || seenIn?.has(event.id)) continue;
         bounded(runner.seen, event.id);
+        if (channel) {
+          const ids = seenIn ?? new Set<string>();
+          if (!seenIn) runner.seenIn.set(channel, ids);
+          bounded(ids, event.id, LIVE_REPLAY_LIMIT);
+        }
         // An agent never hears itself; its own events keep reactions to them
         // from its watches.
         if (event.pubkey === agent.pubkey) {

@@ -2049,6 +2049,27 @@ it("delivers what a reconnect replays since the agent started listening, once", 
   expect(woke(run)).toEqual(["live", "missed"]);
 });
 
+it("still knows a quiet channel's event when a reconnect replays it after busy traffic elsewhere", async () => {
+  const { service, run, emit } = await setup();
+  await service.create({ type: "example/echo", name: "Echo" });
+  await service.save(bot, { attentionEnabled: true, attention: everything });
+  const now = Math.floor(Date.now() / 1000);
+  emit({ events: [event("quiet", { created_at: now })] });
+  await vi.waitFor(() => expect(run).toHaveBeenCalledTimes(1));
+  // More events than the shared seen set holds, all in another channel.
+  emit({
+    events: Array.from({ length: 2_100 }, (_, index) =>
+      event(`busy${index}x`, { created_at: now, tags: [["h", "private"]] }),
+    ),
+  });
+  emit({ replay: true, events: [event("quiet", { created_at: now })] });
+  // A later event runs after anything the replay queued.
+  emit({ events: [event("after", { created_at: now })] });
+  await vi.waitFor(() => expect(run).toHaveBeenCalledTimes(2));
+  await settle();
+  expect(woke(run)).toEqual(["quiet", "after"]);
+});
+
 it("holds a watched event until the relay confirms its channel's saved roster", async () => {
   const { service, run, emit, confirm } = await setup();
   await service.create({ type: "example/echo", name: "Echo" });
