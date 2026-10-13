@@ -1982,8 +1982,12 @@ export class AgentsService extends Service implements Agents {
     const triggers = this.heard(runner, agent, event);
     if (triggers === "held") {
       runner.held.set(event.id, { event, ...(channelId ? { channelId } : {}) });
-      if (runner.held.size > HELD_LIMIT)
+      if (runner.held.size > HELD_LIMIT) {
         runner.held.delete(runner.held.keys().next().value as string);
+        console.warn(
+          `Agent ${agent.name} dropped a watched event its roster held`,
+        );
+      }
       return;
     }
     for (const trigger of triggers) {
