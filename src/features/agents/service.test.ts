@@ -858,6 +858,19 @@ it("leaves a member that lives in another community off the team, and never move
   expect(portedKeys(native)).toEqual([alder]);
 });
 
+it("leaves a member another account on this device has off the team, and names it", async () => {
+  const { service, native } = await setup({
+    identities: [{ ...here(birch), owner: "e".repeat(64) }],
+  });
+  listsTeam(native, nightShift([alder, birch]));
+  expect((await service.portable()).here).toEqual([]);
+  const result = await importTeam(service);
+  expect(result.foreign).toEqual(["Birch"]);
+  expect(result.elsewhere).toEqual([]);
+  expect(result.team).toEqual(savedShift([alder]));
+  expect(portedKeys(native)).toEqual([alder]);
+});
+
 it("lists a team whose members are all here, and imports it from them", async () => {
   const { service, native } = await setup({
     identities: [here(alder), here(birch)],
@@ -866,12 +879,14 @@ it("lists a team whose members are all here, and imports it from them", async ()
   const found = await service.portable();
   expect(found.agents).toEqual([]);
   expect(found.teams).toEqual([nightShift([alder, birch])]);
+  expect(found.here).toEqual([alder, birch]);
   const result = await importTeam(service);
   expect(result).toEqual({
     team: savedShift([alder, birch]),
     imported: [],
     failed: [],
     elsewhere: [],
+    foreign: [],
   });
   expect(native.port).not.toHaveBeenCalled();
 });

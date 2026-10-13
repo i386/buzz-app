@@ -470,6 +470,9 @@ export type PortInput = Readonly<
       instructions?: string;
     }
 >;
+/** What Import can bring over, and the agents already in Yours. */
+export type FoundAgents = PortableAgents &
+  Readonly<{ here: readonly string[] }>;
 /** What importing an old Buzz team did. Members that came are kept even when
  * others, or the team itself, did not. */
 export type TeamPort = Readonly<{
@@ -479,6 +482,8 @@ export type TeamPort = Readonly<{
   failed: readonly Readonly<{ name: string; error: string }>[];
   /** Members already here in another community, left off the team. */
   elsewhere: readonly string[];
+  /** Members another account on this device has, left off the team. */
+  foreign: readonly string[];
   /** The team could not be saved, though its members were imported. */
   teamError?: Readonly<{ name: string }>;
 }>;
@@ -508,8 +513,9 @@ export type Agents = {
   /** Continues an unfinished hosted agent's setup. */
   finish(pubkey: string): Promise<Agent>;
   /** Identities earlier agent systems saved on this machine that are not
-   * Agents yet, and old Buzz's teams with all their members. */
-  portable(): Promise<PortableAgents>;
+   * Agents yet, old Buzz's teams with all their members, and which of those
+   * members are already in Yours. */
+  portable(): Promise<FoundAgents>;
   /** Imports one as an agent of `type` in the selected community: an identity
    * from `portable` keeps its key, name and picture, and a shared agent gets a
    * new key with its name and picture. Either keeps whatever of its
@@ -1118,9 +1124,13 @@ export class AgentsService extends Service implements Agents {
         .filter((identity) => !identity.deleted)
         .map((identity) => identity.pubkey),
     );
+    const origin = this.selectedOrigin();
     return {
       ...found,
       agents: found.agents.filter((agent) => !own.has(agent.pubkey)),
+      here: this.identities
+        .filter((identity) => this.yours(identity, origin))
+        .map((identity) => identity.pubkey),
     };
   }
 
@@ -1171,14 +1181,20 @@ export class AgentsService extends Service implements Agents {
     const imported: Agent[] = [];
     const failed: { name: string; error: string }[] = [];
     const elsewhere: string[] = [];
+    const foreign: string[] = [];
     const listed = new Set(found.agents.map((agent) => agent.pubkey));
     const labels = publicKeyLabels(old.members.map(({ pubkey }) => pubkey));
     for (const member of old.members) {
       const name =
         member.name.trim() || (labels.get(member.pubkey) ?? member.pubkey);
       const here = live.find((identity) => identity.pubkey === member.pubkey);
-      if (here && originOf(here.relay) === origin) {
+      if (here && this.yours(here, origin)) {
         members.push(member.pubkey);
+        continue;
+      }
+      // Its keys are another account's; neither can take it from the other.
+      if (here && here.owner !== binding.viewer) {
+        foreign.push(name);
         continue;
       }
       // Kept to its own community's copy of the team, never moved here.
@@ -1209,7 +1225,7 @@ export class AgentsService extends Service implements Agents {
         failed.push({ name, error: message(error) });
       }
     }
-    const result = { imported, failed, elsewhere };
+    const result = { imported, failed, elsewhere, foreign };
     if (!members.length) return result;
     try {
       const team = await this.writeImportedTeam(
@@ -1884,6 +1900,14 @@ export class AgentsService extends Service implements Agents {
       attentionEnabled: record.attentionEnabled === true,
       config: record.config,
     });
+  }
+  /** Whether the agent shows in Yours for the community at `origin`. */
+  private yours(identity: AgentIdentity, origin: string | undefined) {
+    return (
+      !identity.deleted &&
+      originOf(identity.relay) === origin &&
+      !!this.bindingOf(identity)
+    );
   }
   /** The live binding of the agent's community, if it has one now. */
   private bindingOf({ relay, owner }: Pick<AgentIdentity, "relay" | "owner">) {
