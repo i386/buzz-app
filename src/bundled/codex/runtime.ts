@@ -448,6 +448,9 @@ export class CodexRuntime {
     const topLevel =
       trigger.type === "mention" &&
       (await reads.meChat(agent.owner, channelId, delivery.signal));
+    // A stop during the reads deleted this agent's entry; recreating it would
+    // reopen the agent.
+    delivery.signal.throwIfAborted();
     const toolRoot =
       channel?.dm || topLevel ? undefined : rootOf(trigger.event);
     const root = settings.scope === "channel" ? undefined : toolRoot;

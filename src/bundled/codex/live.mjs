@@ -13,11 +13,23 @@ await build({
   input: {
     runtime: new URL("./runtime.ts", import.meta.url).pathname,
     rpc: new URL("./rpc.ts", import.meta.url).pathname,
+    reads: new URL("../../features/agents/reads.ts", import.meta.url).pathname,
   },
   output: { dir: workspace, entryFileNames: "[name].mjs", format: "esm" },
+  // As Vite does, `?raw` imports a file's text.
+  plugins: [
+    {
+      name: "raw",
+      load: async (id) =>
+        id.endsWith("?raw")
+          ? `export default ${JSON.stringify(await readFile(id.slice(0, -4), "utf8"))};`
+          : null,
+    },
+  ],
 });
 const { CodexRuntime } = await import(join(workspace, "runtime.mjs"));
 const { AppServer } = await import(join(workspace, "rpc.mjs"));
+const { ownerReads } = await import(join(workspace, "reads.mjs"));
 const children = new Set();
 const notices = [];
 let servers = 0;
@@ -176,7 +188,11 @@ const relay = {
     },
   }),
 };
-const runtime = new CodexRuntime(nativeSpawn, () => relay, store);
+const runtime = new CodexRuntime(
+  nativeSpawn,
+  (key) => ownerReads(relay, key),
+  store,
+);
 runtime.sync([{ pubkey }], scope);
 let id = 0;
 const delivery = (content) => {
@@ -237,6 +253,7 @@ const delivery = (content) => {
         "Follow the test request exactly. Explicit file gates are acceptance fixtures. Do not delegate. During this acceptance test do not post progress. Post one completed answer per request with buzz.send and final:true.",
     },
     signal: new AbortController().signal,
+    workingUntil: () => {},
     current: () => true,
   };
   events.push(result.trigger.event);

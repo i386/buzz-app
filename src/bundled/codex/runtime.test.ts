@@ -1257,6 +1257,44 @@ it.each([false, true])(
     expect(f.publish).toHaveBeenCalled();
   },
 );
+it("starts no work when the agent stops while its channel is read", async () => {
+  const f = fixture();
+  const relay = { snapshot: () => f.snapshot } as unknown as RelayData;
+  const gate = deferred<void>();
+  const channel = vi.fn();
+  const runtime = new CodexRuntime(
+    f.spawn,
+    (key) => {
+      const reads = ownerReads(relay, key);
+      return (
+        reads && {
+          ...reads,
+          channel: async (id: string) => {
+            channel(id);
+            await gate.promise;
+            return reads.channel(id);
+          },
+        }
+      );
+    },
+    { getItem: () => null, setItem: () => {} } as unknown as Storage,
+  );
+  runtimes.push(runtime);
+  runtime.sync([{ pubkey } as Agent]);
+  const controller = new AbortController();
+  const done = runtime.run({
+    ...f.delivery("work"),
+    signal: controller.signal,
+  });
+  await vi.waitFor(() => expect(channel).toHaveBeenCalledWith("channel"));
+  runtime.sync([]);
+  controller.abort();
+  gate.resolve();
+  await expect(done).rejects.toMatchObject({ name: "AbortError" });
+  expect(f.spawn).not.toHaveBeenCalled();
+  expect(f.workingUntil).not.toHaveBeenCalled();
+  expect(runtime.sessions(pubkey)).toEqual([]);
+});
 it("ignores a relay workflow mention without explicit community authority", async () => {
   const f = fixture();
   const relay = keypair();
