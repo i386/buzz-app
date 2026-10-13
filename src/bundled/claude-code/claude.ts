@@ -53,6 +53,7 @@ export type ClaudeModel = Readonly<{
   value: string;
   resolvedModel?: string;
   displayName?: string;
+  description?: string;
   supportsEffort?: boolean;
   supportedEffortLevels?: readonly string[];
 }>;

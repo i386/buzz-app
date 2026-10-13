@@ -42,5 +42,7 @@ export const effortName = (effort: string) =>
 export const absoluteWorkspace = (path: string) =>
   path.trim().startsWith("/") || /^[A-Za-z]:[\\/]/.test(path.trim());
 
+/** An absolute path, or one under the home directory written `~/…`, which the
+ * process host expands. */
 export const validWorkspace = (path: string) =>
-  path.trim() === defaults.workspace || absoluteWorkspace(path);
+  /^~(\/|$)/.test(path.trim()) || absoluteWorkspace(path);

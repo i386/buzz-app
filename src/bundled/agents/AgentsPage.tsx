@@ -9,8 +9,10 @@ import {
   useEffect,
   useRef,
   useState,
+  useSyncExternalStore,
   type KeyboardEvent,
   type ReactNode,
+  type RefObject,
 } from "react";
 import styles from "./AgentsPage.module.css";
 import cardStyles from "./AgentCard.module.css";
@@ -18,6 +20,7 @@ import { AgentBrowse } from "./AgentBrowse";
 import { AgentCard, AgentPortrait } from "./AgentCard";
 import { AgentCreateDialog, TypeIcon } from "./AgentCreateDialog";
 import { AgentTabs } from "./AgentTabs";
+import { useAgentSettingsHost } from "./AgentSettingsHost";
 import { NewAgentTile } from "./NewAgentTile";
 import type { ChannelChoice } from "../../features/agents/attention";
 import { AgentDelete } from "../../features/agents/AgentManage";
@@ -37,20 +40,39 @@ import type {
 } from "../../features/agents/service";
 import { useRelayConnection } from "../../features/relay/react";
 import type { RelayData } from "../../features/relay/service";
+import type { Navigation } from "../../features/navigation/controller";
+import type { PageNavigation } from "../../features/navigation/service";
+import {
+  ContributionBoundary,
+  contributionKey,
+} from "../../features/conversation/ContributionBoundary";
 import {
   ArrowLeftIcon,
+  CircleNotchIcon,
   CopyIcon,
+  DotsThreeIcon,
   PlusIcon,
   RobotIcon,
   XIcon,
 } from "../../shared/design-system/icons";
 import { Button } from "../../shared/design-system/ui/Button";
 import { Checkbox } from "../../shared/design-system/ui/Checkbox";
+import { Dialog } from "../../shared/design-system/ui/Dialog";
 import { EmptyState } from "../../shared/design-system/ui/EmptyState";
 import { Field } from "../../shared/design-system/ui/Field";
 import { FullPageSurface } from "../../shared/design-system/ui/FullPageSurface";
 import { IconButton } from "../../shared/design-system/ui/IconButton";
 import { Input } from "../../shared/design-system/ui/Input";
+import {
+  MenuPopup,
+  MenuIcon,
+  MenuItem,
+  MenuRoot,
+  MenuSubmenu,
+  MenuSubmenuPopup,
+  MenuSubmenuTrigger,
+  MenuTrigger,
+} from "../../shared/design-system/ui/Menu";
 import { PanelHeader } from "../../shared/design-system/ui/PanelHeader";
 import { Select } from "../../shared/design-system/ui/Select";
 import { Tabs } from "../../shared/design-system/ui/Tabs";
@@ -61,6 +83,7 @@ import {
   formatPublicKey,
   publicKeyLabels,
 } from "../../shared/identity/public-key";
+import { agentProviderRoute, agentProviderTarget } from "./routes";
 
 const message = (error: unknown) =>
   error instanceof Error ? error.message : String(error);
@@ -95,9 +118,13 @@ const TABS = [
 export function AgentsPage({
   agents,
   relay,
+  navigation,
+  navigator,
 }: {
   agents: Agents;
   relay: RelayData;
+  navigation?: PageNavigation;
+  navigator?: Navigation;
 }) {
   const { snapshot, types } = useAgents(agents);
   const connection = useRelayConnection(relay);
@@ -107,6 +134,33 @@ export function AgentsPage({
   const [tab, setTab] = useState<Tab>("yours");
   const [frame, setFrame] = useState<Frame>({ view: "browse" });
   const [creating, setCreating] = useState(false);
+  const [localProviderKey, setLocalProviderKey] = useState<string>();
+  const routed = !!navigation && !!navigator;
+  const providerKey = routed
+    ? agentProviderRoute(
+        navigation.target.kind === "page"
+          ? navigation.target.route?.params
+          : undefined,
+      )
+    : localProviderKey;
+  const setProviderKey = (provider?: string, replace = false) => {
+    if (!navigation || !navigator) {
+      setLocalProviderKey(provider);
+      return;
+    }
+    if (
+      navigation.signal.aborted ||
+      navigation.target.kind !== "page" ||
+      navigation.target.pluginId !== "buzz.agents" ||
+      navigation.target.pageId !== "agents" ||
+      navigator.snapshot().entry.id !== navigation.entryId
+    )
+      return;
+    const target = agentProviderTarget(navigation.target, provider);
+    void (replace
+      ? navigator.open(target, { replace: true })
+      : navigator.open(target));
+  };
   const typeOf = (agent: Agent) =>
     types.find((type) => type.key === agent.type);
   const find = (pubkey: string | undefined) =>
@@ -126,6 +180,7 @@ export function AgentsPage({
   // Importing gives an agent a key here, so a hosted type cannot take one.
   const runnable = types.filter((type) => !type.remote);
   const openTeams = () => setFrame({ view: "browse", side: "teams" });
+  const more = useRef<HTMLButtonElement>(null);
 
   const yours = (() => {
     if (snapshot.status === "unavailable")
@@ -179,6 +234,7 @@ export function AgentsPage({
           agents={agents}
           agent={building}
           type={typeOf(building)}
+          types={types}
           channels={channels}
           onRemoved={() => browse()}
         />
@@ -281,13 +337,25 @@ export function AgentsPage({
             }
             actions={
               !building && tab === "yours" && ready ? (
-                <Button
-                  size="compact"
-                  onClick={openTeams}
-                  disabled={side === "teams"}
-                >
-                  Teams
-                </Button>
+                <MenuRoot>
+                  <MenuTrigger
+                    render={
+                      <IconButton
+                        ref={more}
+                        aria-label="More agent actions"
+                        title="More agent actions"
+                        size="sm"
+                        icon={<DotsThreeIcon size={16} aria-hidden="true" />}
+                      />
+                    }
+                  />
+                  <MenuPopup align="end">
+                    <ProviderSubmenu types={types} onSelect={setProviderKey} />
+                    <MenuItem onClick={openTeams} disabled={side === "teams"}>
+                      Teams
+                    </MenuItem>
+                  </MenuPopup>
+                </MenuRoot>
               ) : undefined
             }
           />
@@ -309,7 +377,224 @@ export function AgentsPage({
           }}
         />
       )}
+      {providerKey && (
+        <ProviderDialog
+          type={types.find((type) => type.key === providerKey)}
+          finalFocus={more}
+          onClose={() => setProviderKey(undefined, true)}
+        />
+      )}
     </div>
+  );
+}
+
+/** A quick device-wide health view. Controls stay in each provider's dialog. */
+function ProviderSubmenu({
+  types,
+  onSelect,
+}: {
+  types: readonly RegisteredAgentType[];
+  onSelect(key: string): void;
+}) {
+  const check = () => {
+    for (const { provider } of types) if (provider) checkProvider(provider);
+  };
+  return (
+    <MenuSubmenu>
+      <MenuSubmenuTrigger onFocus={check} onPointerEnter={check}>
+        Provider settings
+      </MenuSubmenuTrigger>
+      <MenuSubmenuPopup aria-label="Provider settings">
+        {types.map((type) => {
+          const fallback = (
+            <MenuItem aria-label={`${type.title}, unavailable`} disabled>
+              <ProviderIcon type={type} />
+              {type.title}
+            </MenuItem>
+          );
+          return (
+            <ContributionBoundary key={type.key} fallback={fallback}>
+              <ProviderMenuItem
+                type={type}
+                onSelect={() => onSelect(type.key)}
+              />
+            </ContributionBoundary>
+          );
+        })}
+      </MenuSubmenuPopup>
+    </MenuSubmenu>
+  );
+}
+
+function checkProvider(provider: NonNullable<RegisteredAgentType["provider"]>) {
+  try {
+    void Promise.resolve(provider.check()).catch(() => {});
+  } catch {
+    // A failed contribution does not break host-owned provider controls.
+  }
+}
+
+function ProviderIcon({ type }: { type: RegisteredAgentType }) {
+  const Icon = type.icon;
+  return Icon ? (
+    <MenuIcon>
+      <Icon size={17} />
+    </MenuIcon>
+  ) : null;
+}
+
+function ProviderMenuItem({
+  type,
+  onSelect,
+}: {
+  type: RegisteredAgentType;
+  onSelect(): void;
+}) {
+  const provider = type.provider;
+  if (!provider)
+    return (
+      <MenuItem aria-label={`${type.title}, unavailable`} disabled>
+        <ProviderIcon type={type} />
+        {type.title}
+      </MenuItem>
+    );
+  return (
+    <ProviderHealthMenuItem
+      type={type}
+      provider={provider}
+      onSelect={onSelect}
+    />
+  );
+}
+
+function ProviderHealthMenuItem({
+  type,
+  provider,
+  onSelect,
+}: {
+  type: RegisteredAgentType;
+  provider: NonNullable<RegisteredAgentType["provider"]>;
+  onSelect(): void;
+}) {
+  const state = useSyncExternalStore(
+    provider.subscribe,
+    provider.snapshot,
+    provider.snapshot,
+  );
+  const checking = state.readiness === "checking";
+  const label =
+    state.readiness === "attention"
+      ? (state.attentionLabel ?? `Set up ${type.title}`)
+      : type.title;
+  const select = () => {
+    if (state.readiness === "attention") {
+      const action = provider.attentionAction;
+      if (action)
+        try {
+          action();
+          return;
+        } catch {
+          // Fall back to the provider's recovery guidance.
+        }
+    }
+    onSelect();
+  };
+  return (
+    <MenuItem
+      aria-label={`${label}, ${state.readiness}`}
+      aria-busy={checking || undefined}
+      onClick={select}
+      disabled={checking}
+    >
+      {checking ? (
+        <MenuIcon>
+          <CircleNotchIcon
+            size={17}
+            aria-hidden="true"
+            className="motion-safe:animate-spin"
+          />
+        </MenuIcon>
+      ) : (
+        <ProviderIcon type={type} />
+      )}
+      {label}
+    </MenuItem>
+  );
+}
+
+function ProviderDialog({
+  type,
+  finalFocus,
+  onClose,
+}: {
+  type: RegisteredAgentType | undefined;
+  finalFocus: RefObject<HTMLButtonElement | null>;
+  onClose(): void;
+}) {
+  const provider = type?.provider;
+  if (!type || !provider) return null;
+  return (
+    <ContributionBoundary
+      key={contributionKey(type)}
+      fallback={
+        <Dialog
+          open
+          onOpenChange={(open) => !open && onClose()}
+          title={type.title}
+          dismissOnOutsideClick
+          finalFocus={() => finalFocus.current}
+        >
+          <p role="alert" className="m-0 text-body-sm text-danger">
+            Provider controls are unavailable.
+          </p>
+        </Dialog>
+      }
+    >
+      <ManagedProviderDialog
+        type={type}
+        provider={provider}
+        finalFocus={finalFocus}
+        onClose={onClose}
+      />
+    </ContributionBoundary>
+  );
+}
+
+function ManagedProviderDialog({
+  type,
+  provider,
+  finalFocus,
+  onClose,
+}: {
+  type: RegisteredAgentType;
+  provider: NonNullable<RegisteredAgentType["provider"]>;
+  finalFocus: RefObject<HTMLButtonElement | null>;
+  onClose(): void;
+}) {
+  const state = useSyncExternalStore(
+    provider.subscribe,
+    provider.snapshot,
+    provider.snapshot,
+  );
+  const Icon = type.icon;
+  const Body = provider.DialogBody;
+  return (
+    <Dialog
+      open
+      onOpenChange={(open) => !open && onClose()}
+      title={
+        <span className="flex items-center gap-2">
+          {Icon && <Icon size={22} aria-hidden="true" />}
+          {type.title}
+        </span>
+      }
+      headerGap="compact"
+      dismissOnOutsideClick
+      preventClose={!!state.blocking}
+      finalFocus={() => finalFocus.current}
+    >
+      <Body onClose={onClose} />
+    </Dialog>
   );
 }
 
@@ -924,17 +1209,20 @@ function AgentBuild({
   agents,
   agent,
   type,
+  types,
   channels,
   onRemoved,
 }: {
   agents: Agents;
   agent: Agent;
   type: RegisteredAgentType | undefined;
+  types: readonly RegisteredAgentType[];
   channels: readonly ChannelChoice[];
   onRemoved(): void;
 }) {
   const [copied, setCopied] = useState(false);
   const [pictureError, setPictureError] = useState("");
+  const settings = useAgentSettingsHost({ agents, agent, type, types });
   useEffect(() => {
     if (!copied) return;
     const timer = setTimeout(() => setCopied(false), 1500);
@@ -968,8 +1256,6 @@ function AgentBuild({
           onSave={(name) => agents.save(agent.pubkey, { name })}
         />
         <dl className={styles.facts}>
-          <dt>Type</dt>
-          <dd>{type?.title ?? "Type unavailable"}</dd>
           <dt>Key</dt>
           <dd className="flex items-center gap-1">
             <code className="truncate">{formatPublicKey(agent.pubkey, 8)}</code>
@@ -998,9 +1284,10 @@ function AgentBuild({
         )}
         <AgentTabs
           agents={agents}
-          agent={agent}
-          type={type}
+          agent={settings.agent}
+          type={settings.type}
           channels={channels}
+          settingsHost={settings.settingsHost}
         />
       </section>
     </div>

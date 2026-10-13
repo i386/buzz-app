@@ -39,6 +39,37 @@ it("selects a form option with the keyboard and restores trigger focus", async (
   expect(screen.queryByRole("listbox")).not.toBeInTheDocument();
 });
 
+it("shows option descriptions without copying them into the trigger", async () => {
+  const user = userEvent.setup();
+  render(
+    <Select
+      label="Model"
+      variant="field"
+      value="one"
+      groups={[
+        {
+          label: "",
+          options: [
+            { value: "one", label: "One", description: "For daily work." },
+            { value: "two", label: "Two", description: "For quick tasks." },
+          ],
+        },
+      ]}
+      onValueChange={() => {}}
+    />,
+  );
+  const trigger = screen.getByRole("combobox", { name: "Model" });
+  expect(trigger).toHaveTextContent("One");
+  expect(trigger).not.toHaveTextContent("For daily work.");
+  await user.click(trigger);
+  expect(
+    await screen.findByRole("option", { name: "One" }),
+  ).toHaveAccessibleDescription("For daily work.");
+  expect(
+    screen.getByRole("option", { name: "Two" }),
+  ).toHaveAccessibleDescription("For quick tasks.");
+});
+
 it("disables both form choices and searchable input/browse controls", async () => {
   const user = userEvent.setup();
   const change = vi.fn();

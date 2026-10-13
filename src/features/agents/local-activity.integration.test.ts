@@ -75,6 +75,7 @@ it("carries a verified mention through host handover into all three scopes witho
     portable: vi.fn(),
     port: vi.fn(),
     setPicture: vi.fn(),
+    setType: vi.fn(),
     media: vi.fn(),
     create: vi.fn(),
     rename: vi.fn(),

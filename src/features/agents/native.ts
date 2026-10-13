@@ -79,6 +79,8 @@ export type AgentsNative = {
   rename(pubkey: string, name: string): Promise<void>;
   /** Sets its profile picture, an HTTPS image URL, or with `null` clears it. */
   setPicture(pubkey: string, picture: string | null): Promise<void>;
+  /** Makes it an agent of another type, keeping its identity and profile. */
+  setType(pubkey: string, type: string): Promise<void>;
   /** Deletes the key and marks the identity deleted. */
   remove(pubkey: string): Promise<void>;
   /** Drops a deleted identity. */
@@ -128,6 +130,8 @@ export const nativeAgents = (): AgentsNative | undefined =>
         rename: (pubkey, name) => invoke("app_agent_rename", { pubkey, name }),
         setPicture: (pubkey, picture) =>
           invoke("app_agent_set_picture", { pubkey, picture }),
+        setType: (pubkey, agentType) =>
+          invoke("app_agent_set_type", { pubkey, agentType }),
         remove: (pubkey) => invoke("app_agent_delete", { pubkey }),
         forget: (pubkey) => invoke("app_agent_forget", { pubkey }),
         publish: (pubkey, event) =>

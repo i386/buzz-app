@@ -1,12 +1,13 @@
 // The New agent dialog: one card with the avatar and name, which the app owns,
-// and the chosen type's `Create` view for the rest, such as its model and
-// instructions. Its type choice sits in the card's corner.
+// and the chosen type's `Create` view for the rest. The host combines type and
+// model choice in the footer; each type contributes its model-menu rows.
 import { useId, useMemo, useRef, useState } from "react";
 import {
   CreateCardContext,
   type CardEditing,
 } from "../../features/agents/create-card";
 import { randomAgentAvatar } from "../../features/agents/avatar-packs";
+import { CustomModelDialog } from "../../features/agents/ModelPicker";
 import type {
   Agent,
   Agents,
@@ -14,17 +15,19 @@ import type {
 } from "../../features/agents/service";
 import {
   CaretDownIcon,
-  ClaudeLogoIcon,
-  CodexLogoIcon,
+  CheckIcon,
   RobotIcon,
 } from "../../shared/design-system/icons";
 import { Button } from "../../shared/design-system/ui/Button";
+import { ChoiceRow } from "../../shared/design-system/ui/ChoiceRow";
 import { Dialog } from "../../shared/design-system/ui/Dialog";
 import {
+  MenuItem,
   MenuPopup,
-  MenuRadioGroup,
-  MenuRadioItem,
   MenuRoot,
+  MenuSubmenu,
+  MenuSubmenuPopup,
+  MenuSubmenuTrigger,
   MenuTrigger,
 } from "../../shared/design-system/ui/Menu";
 import { AgentCreateHeader } from "./AgentCreateHeader";
@@ -33,14 +36,9 @@ import styles from "./AgentsPage.module.css";
 const message = (error: unknown) =>
   error instanceof Error ? error.message : String(error);
 
-/** The type's mark, recognized from its key or title. */
+/** The type's registered mark, or the generic agent mark. */
 export function TypeIcon({ type }: { type: RegisteredAgentType | undefined }) {
-  const name = `${type?.key ?? ""} ${type?.title ?? ""}`.toLowerCase();
-  const Icon = name.includes("claude")
-    ? ClaudeLogoIcon
-    : name.includes("codex")
-      ? CodexLogoIcon
-      : RobotIcon;
+  const Icon = type?.icon ?? RobotIcon;
   return <Icon size={16} aria-hidden="true" />;
 }
 
@@ -74,15 +72,19 @@ export function AgentCreateDialog({
   const [dirty, setDirty] = useState(false);
   const [pending, setPending] = useState(false);
   const [error, setError] = useState("");
-  const [corner, setCorner] = useState<HTMLElement | null>(null);
   const [editing, setEditing] = useState<CardEditing | null>(null);
+  const [customModel, setCustomModel] = useState<{
+    initialValue: string;
+    onChange(model: string): void;
+  } | null>(null);
   const [avatarActive, setAvatarActive] = useState(false);
   const [avatarBusy, setAvatarBusy] = useState(false);
   const [avatarAction, setAvatarAction] = useState<HTMLDivElement | null>(null);
   const avatarNavigation = useRef<{ back(): void }>(null);
   const nameField = useRef<HTMLInputElement>(null);
+  const selectorTrigger = useRef<HTMLButtonElement>(null);
   const form = useId();
-  const card = useMemo(() => ({ corner, edit: setEditing }), [corner]);
+  const card = useMemo(() => ({ edit: setEditing }), []);
   const Create = type?.Create;
   const close = () => setOpen(false);
   const choose = (key: string) => {
@@ -91,6 +93,91 @@ export function AgentCreateDialog({
     setConfig(startingConfig(types.find((item) => item.key === key)));
     setDirty(true);
   };
+  const chooseModel = (item: RegisteredAgentType, next: unknown) => {
+    setTypeKey(item.key);
+    setConfig(next);
+    setDirty(true);
+  };
+  const modelLabel =
+    type && config !== undefined ? type.createModelLabel?.(config) : undefined;
+  const selectionLabel = modelLabel
+    ? `${type?.title ?? ""} (${modelLabel})`
+    : (type?.title ?? "");
+  const selector =
+    types.length > 1 || type?.CreateModelMenu ? (
+      <MenuRoot>
+        <MenuTrigger
+          render={
+            <Button
+              ref={selectorTrigger}
+              size="compact"
+              variant="quiet"
+              disabled={pending}
+              aria-label={`Agent provider and model: ${selectionLabel}`}
+            >
+              <TypeIcon type={type} />
+              {selectionLabel}
+              <CaretDownIcon size={14} aria-hidden="true" />
+            </Button>
+          }
+        />
+        <MenuPopup>
+          {types.map((item) => {
+            const label = item.remote ? `${item.title} (hosted)` : item.title;
+            const CreateModelMenu = item.CreateModelMenu;
+            if (!CreateModelMenu)
+              return (
+                <MenuItem
+                  key={item.key}
+                  role="menuitemradio"
+                  aria-checked={item.key === type?.key}
+                  closeOnClick
+                  onClick={() => choose(item.key)}
+                >
+                  <ChoiceRow label={label} leading={<TypeIcon type={item} />} />
+                  {item.key === type?.key && (
+                    <CheckIcon size={16} aria-hidden="true" />
+                  )}
+                </MenuItem>
+              );
+            const itemConfig =
+              item.key === type?.key ? config : startingConfig(item);
+            return (
+              <MenuSubmenu key={item.key}>
+                <MenuSubmenuTrigger
+                  role="menuitemradio"
+                  aria-checked={item.key === type?.key}
+                >
+                  <ChoiceRow label={label} leading={<TypeIcon type={item} />} />
+                  {item.key === type?.key && (
+                    <CheckIcon size={16} aria-hidden="true" />
+                  )}
+                </MenuSubmenuTrigger>
+                <MenuSubmenuPopup
+                  size="wide"
+                  aria-label={`${item.title} models`}
+                >
+                  <CreateModelMenu
+                    config={itemConfig}
+                    active={item.key === type?.key}
+                    disabled={pending}
+                    onChange={(next) => chooseModel(item, next)}
+                    requestCustomModel={(initialValue, onChange) =>
+                      setCustomModel({ initialValue, onChange })
+                    }
+                  />
+                </MenuSubmenuPopup>
+              </MenuSubmenu>
+            );
+          })}
+        </MenuPopup>
+      </MenuRoot>
+    ) : (
+      <span className={styles.typeLabel}>
+        <TypeIcon type={type} />
+        {type?.title}
+      </span>
+    );
   const create = async () => {
     if (!type || !name.trim() || pending) return;
     setPending(true);
@@ -137,11 +224,13 @@ export function AgentCreateDialog({
       }}
       preventClose={pending}
       leadingActions={
-        back && (
+        back ? (
           <Button disabled={pending} onClick={back}>
             Back
           </Button>
-        )
+        ) : !avatarActive ? (
+          <div className={styles.footerSelector}>{selector}</div>
+        ) : null
       }
       actions={
         <>
@@ -150,9 +239,17 @@ export function AgentCreateDialog({
             <Button
               variant="primary"
               // The footer is outside the form; Enter in any field submits it.
-              {...(editing
-                ? { onClick: editing.done }
-                : { type: "submit" as const, form })}
+              type={editing ? "button" : "submit"}
+              form={editing ? undefined : form}
+              onClick={
+                editing
+                  ? (event) => {
+                      // This control becomes the submit button after editing ends.
+                      event.preventDefault();
+                      editing.done();
+                    }
+                  : undefined
+              }
               loading={pending}
               disabled={
                 !editing && (avatarBusy || !type || !name.trim() || pending)
@@ -187,53 +284,6 @@ export function AgentCreateDialog({
               setError("");
             }}
             nameRef={nameField}
-            cornerRef={setCorner}
-            corner={
-              types.length > 1 ? (
-                <MenuRoot>
-                  <MenuTrigger
-                    render={
-                      <Button
-                        size="compact"
-                        variant="quiet"
-                        disabled={pending}
-                        aria-label={`Agent type: ${type?.title ?? ""}`}
-                      >
-                        <TypeIcon type={type} />
-                        {type?.title}
-                        <CaretDownIcon size={14} aria-hidden="true" />
-                      </Button>
-                    }
-                  />
-                  <MenuPopup align="end">
-                    <MenuRadioGroup
-                      value={type?.key}
-                      onValueChange={(value) => choose(String(value))}
-                    >
-                      {types.map((item) => (
-                        <MenuRadioItem
-                          key={item.key}
-                          value={item.key}
-                          closeOnClick
-                        >
-                          <span className="flex items-center gap-2">
-                            <TypeIcon type={item} />
-                            {item.remote
-                              ? `${item.title} (hosted)`
-                              : item.title}
-                          </span>
-                        </MenuRadioItem>
-                      ))}
-                    </MenuRadioGroup>
-                  </MenuPopup>
-                </MenuRoot>
-              ) : (
-                <span className={styles.typeLabel}>
-                  <TypeIcon type={type} />
-                  {type?.title}
-                </span>
-              )
-            }
             details={
               Create ? (
                 <Create
@@ -258,6 +308,17 @@ export function AgentCreateDialog({
             avatarActionTarget={avatarAction}
             onAvatarActiveChange={setAvatarActive}
           />
+          {customModel && (
+            <CustomModelDialog
+              initialValue={customModel.initialValue}
+              finalFocus={() => selectorTrigger.current ?? false}
+              onClose={() => setCustomModel(null)}
+              onSubmit={(model) => {
+                customModel.onChange(model);
+                setCustomModel(null);
+              }}
+            />
+          )}
         </CreateCardContext.Provider>
         {error && (
           <p role="alert" className="m-0 text-body-sm text-danger">

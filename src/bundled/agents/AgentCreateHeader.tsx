@@ -1,5 +1,5 @@
-// The New agent card: the avatar, chosen from packs or an image, and the
-// name, with a corner and a details area the agent type fills in.
+// The New agent card: the avatar, chosen from packs or an image, and the name,
+// with a details area the agent type fills in.
 import { Field } from "../../shared/design-system/ui/Field";
 import { Input } from "../../shared/design-system/ui/Input";
 import {
@@ -33,8 +33,6 @@ export function AgentCreateHeader({
   onChange,
   community,
   onBusyChange,
-  cornerRef,
-  corner,
   details,
   editing,
   avatarNavigationRef,
@@ -48,9 +46,6 @@ export function AgentCreateHeader({
   onChange(patch: { name?: string; picture?: string }): void;
   community?: string | undefined;
   onBusyChange?: ((busy: boolean) => void) | undefined;
-  /** The top corner, where the type's compact controls follow `corner`. */
-  cornerRef(element: HTMLDivElement | null): void;
-  corner: ReactNode;
   /** The type's part of the card, below the name. */
   details: ReactNode;
   /** The details are being edited over the card. */
@@ -147,19 +142,6 @@ export function AgentCreateHeader({
         onPointerDown={() => setKeyboard(false)}
         onKeyDown={() => setKeyboard(true)}
       >
-        <motion.div
-          className={styles.corner}
-          ref={cornerRef}
-          inert={editing || view !== "selected"}
-          aria-hidden={editing || view !== "selected"}
-          animate={{
-            opacity: editing || view !== "selected" ? 0 : 1,
-            scale: editing || view !== "selected" ? 0.9 : 1,
-          }}
-          transition={transition}
-        >
-          {corner}
-        </motion.div>
         <div className={styles.cover} data-view={view}>
           <AnimatePresence initial={false} mode="popLayout">
             <motion.div

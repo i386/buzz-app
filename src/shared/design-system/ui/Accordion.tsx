@@ -12,7 +12,11 @@ export function Accordion({
   headingLevel = 3,
   keepMounted = false,
 }: {
-  items: readonly { value: string; title: ReactNode; content: ReactNode }[];
+  items: readonly {
+    value: string;
+    title: ReactNode;
+    content: ReactNode;
+  }[];
   defaultValue?: string[];
   value?: string[];
   onValueChange?: (value: string[]) => void;

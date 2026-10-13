@@ -31,6 +31,45 @@ migration runs. Browser moves write the destination before removing the source
 and resume identical interrupted copies; differing destinations are left intact
 and reported as migration errors.
 
+## Agent types and providers
+
+Harness plugins register agent types with the Agents service. An agent type owns
+the defaults, migration policy, per-agent settings tabs, model discovery and run
+behavior for its agents. The host appends the shared Attention tab.
+
+A type marks its primary configuration tab with `role: "settings"`. In the
+Agents build view and profile panel, the host keeps that tab at a stable
+`Settings` destination and supplies the current type identity plus retype
+control through `settingsHost`. The type keeps ownership of its config draft
+and Save behavior. Types without a settings-role tab receive a host-owned,
+type-only Settings tab in both surfaces.
+
+A reviewed provider choice remains a host-owned draft until that Settings
+form's Save action succeeds. While it is pending, the selected provider's
+settings tab edits the destination config produced by its migration policy, and
+Save is available without another edit. Save commits the provider and that
+config together; a failed save leaves the choice and draft available to retry
+or revert.
+
+An agent type may also contribute `provider`: a subscribable readiness snapshot,
+a read-only check, and a management-dialog body. **More → Providers** lists each
+active type once using the registered title and icon. It is a quick health view:
+rows show only ready, checking, attention, or a neutral unavailable state. The
+Agents host owns the submenu, modal framing, focus restoration and contribution
+error boundary. The plugin owns connection actions and optional defaults inside
+the dialog; blocking install or sign-in work must expose cancellation before the
+dialog can close. Disabled or unloaded types remain in Settings → Plugins.
+
+Workspace, instructions and session scope are always per-agent. Claude and Codex
+model/thinking choices may instead be blank, which means inherited rather than
+rewritten. Their effective order is explicit agent override, saved device-wide
+provider default, then the provider's native default. Missing or malformed
+provider preferences preserve native behavior. A provider-default save notifies
+the runtime like the corresponding per-agent save but does not mutate agent
+records. Codex uses an inherited thinking choice only when the effective model
+supports it, otherwise that model's default applies. Transient process/session
+state may appear as collapsed diagnostics in Settings, but is not durable history.
+
 Agent identity is evidence, never authority. Names, library rows, local agent rows,
 archive state and presence do not prove ownership, membership or runtime state.
 

@@ -1,4 +1,5 @@
 import { defineIcon } from "./createDecorativeIcon";
+export type { DefinedIcon } from "./createDecorativeIcon";
 import { BestieMarkArtwork } from "./BestieMark";
 import { GitHubIssueArtwork } from "./GitHubIssue";
 import { OneDriveLogoArtwork } from "./OneDriveLogo";

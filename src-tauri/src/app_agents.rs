@@ -376,6 +376,16 @@ pub(crate) async fn app_agent_rename(
 }
 
 #[tauri::command]
+pub(crate) async fn app_agent_set_type(
+    state: tauri::State<'_, AppAgentHost>,
+    pubkey: String,
+    agent_type: String,
+) -> Result<(), String> {
+    let agents = state.agents.clone()?;
+    blocking(move || agents.set_type(&pubkey, &agent_type)).await
+}
+
+#[tauri::command]
 pub(crate) async fn app_agent_set_picture(
     state: tauri::State<'_, AppAgentHost>,
     pubkey: String,

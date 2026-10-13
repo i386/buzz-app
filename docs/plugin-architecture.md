@@ -111,6 +111,18 @@ for a registration's lifetime. An invalid value is dropped with a page-named war
 falling back to the sidebar without failing activation. Older hosts ignore placement
 and continue to show primary pages in their sidebar.
 
+Harness plugins register an agent type with `ctx.agents.register`. Per-agent
+configuration belongs in its `tabs`; the Agents host adds Attention. An optional
+`provider` contribution exposes a stable readiness snapshot, subscription,
+read-only `check()` and `DialogBody`. The Agents page supplies the Providers
+health submenu plus provider title, registered icon, modal framing, dismissal,
+focus restoration and error boundary. The plugin body supplies Connection and,
+when supported, explicit-save Defaults sections. It also marks active install or
+authentication work as blocking and supplies its cancellation control. Only
+active registered types appear there; plugin activation remains owned by
+Settings → Plugins. Provider defaults are versioned device preferences, not
+agent-record migrations; blank per-agent values inherit them.
+
 ```ts
 ctx.pages.register({
   id: "dashboard",

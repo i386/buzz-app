@@ -139,6 +139,7 @@ export class CodexRuntime {
     /** The owner's connection to each agent's own community. */
     private readonly relay: (pubkey: string) => RelayData | undefined,
     private readonly storage: Storage = localStorage,
+    private readonly resolveConfig: (raw: unknown) => Config = config,
   ) {}
   subscribe = (listener: () => void) => {
     this.listeners.add(listener);
@@ -149,7 +150,7 @@ export class CodexRuntime {
   sessions = (pubkey: string): readonly SessionView[] =>
     this.views.get(pubkey) ?? EMPTY;
   preview(agent: Agent) {
-    const settings = config(agent.config);
+    const settings = this.resolveConfig(agent.config);
     const key = JSON.stringify([
       settings.workspace,
       settings.model,
@@ -215,7 +216,7 @@ export class CodexRuntime {
     const code = await process.exited;
     const workspace = directory.trim();
     if (code !== 0 || !absoluteWorkspace(workspace))
-      throw new Error("Could not resolve the default Codex workspace.");
+      throw new Error(`Could not resolve the Codex workspace ${path}.`);
     return workspace;
   }
   private status(pubkey: string, key: string, status: string, detail = "") {
@@ -460,7 +461,7 @@ export class CodexRuntime {
       throw new Error("Connect to the agent's community first");
     const channelId = delivery.channelId;
     if (!channelId) throw new Error("The event has no unambiguous channel");
-    const settings = config(delivery.config);
+    const settings = this.resolveConfig(delivery.config);
     const channel = snapshot.session.channels
       .list()
       .channels.find((row) => row.id === channelId);
@@ -511,7 +512,7 @@ export class CodexRuntime {
       );
       await this.publish(
         request,
-        "Choose an absolute workspace path or ~/.buzz in Codex settings first.",
+        "Choose an absolute or ~/… workspace path in Codex settings first.",
       );
       return;
     }
@@ -864,7 +865,7 @@ export class CodexRuntime {
     try {
       const rpc = await server.opening;
       signal.throwIfAborted();
-      // The process host expands ~/.buzz and creates it; Codex's RPC needs
+      // The process host expands ~/… and creates the directory; Codex's RPC needs
       // an absolute path rather than shell-style home notation.
       const workspace = await this.workspace(settings.workspace);
       signal.throwIfAborted();

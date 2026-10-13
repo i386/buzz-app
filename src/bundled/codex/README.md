@@ -24,10 +24,13 @@ BUZZODZ_PROFILE=codex-agents BUZZ_DEV_VIEWER= bin/just desktop
    click **Create agent**. The Codex tab checks the installed CLI and existing
    account. If needed, install Codex
    and run `codex login` in a terminal, then click **Check again**.
-3. The **Workspace** defaults to `~/.buzz`, like Claude. In the agent's
-   **Settings** tab, you can set an absolute path instead; clearing it restores
-   the default. A disposable directory is useful for the first test. Choose model, thinking,
-   session scope, and instructions, then **Save**.
+3. **Agents → More → Provider settings → Codex** manages the device connection and
+   explicit-save model/thinking defaults. A blank agent choice inherits those
+   defaults without changing its saved record. The **Workspace** defaults to
+   `~/.buzz`, like Claude. In the agent's
+   **Settings** tab, you can set an absolute or `~/…` path instead; clearing it
+   restores the default. A disposable directory is useful for the first test.
+   Choose model, thinking, session scope, and instructions, then **Save**.
 4. Mentions are automatic; **Attention** also lets you add event
    watches. In a channel you can write to, select the agent from the `@` picker
    and add it to the channel if prompted. Send: `@Codex Test create hello.txt containing
@@ -95,8 +98,9 @@ their own workspace, instructions and replies. Set
 `BUZZ_CODEX_TEST_MODEL` to another available model if needed. It prints only
 sanitized outcomes; it does not save raw protocol or session logs.
 
-Automated component tests cover model/effort choices, unavailable saved choices,
-workspace validation, pending saves, and closing a process returned after unmount.
+Automated component tests cover provider defaults and precedence, model/effort
+choices, unavailable saved choices, workspace validation, pending saves, and
+cancelling a provider check during disposal.
 Protocol tests cover chunking, request correlation, interactive request rejection,
 malformed output, and consumer exception containment. Runtime tests cover
 conversation routing, ordinary message delivery, persistence, defaults, failures,
@@ -114,8 +118,9 @@ and cleanup.
   network, and use git and `gh`. Web search, inherited MCP servers, Apps, and plugins
   are disabled.
 - Shared Agent Activity integration is deferred because this Agents delivery
-  contract has no live-activity API. The Codex tab shows conversation status and
-  the latest command/output. Messages and uploads use the shared Buzz tools. Codex assistant text is not automatically posted. After `buzz.send` with `final: true`, Codex finishes normally and consumes pending steering. Final sends preserve background processes, such as a dev server it started.
+  contract has no live-activity API. The Runtime diagnostics disclosure in the
+  agent's Settings shows conversation status and the latest command/output.
+  Messages and uploads use the shared Buzz tools. Codex assistant text is not automatically posted. After `buzz.send` with `final: true`, Codex finishes normally and consumes pending steering. Final sends preserve background processes, such as a dev server it started.
 - Turns have a 29-minute deadline;
   RPC acknowledgements have a 30-second deadline. Local bindings retain 200 sessions.
 - Uses experimental app-server APIs for dynamic tools, model discovery, application context, and terminal
