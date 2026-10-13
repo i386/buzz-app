@@ -28,6 +28,15 @@ export type PortableAgent = Readonly<{
   picture?: string;
   /** The community it was saved for there, if valid. */
   relay: string;
+  /** The old Buzz team it was on, for display; importing reads it afresh. */
+  team?: OldTeam;
+}>;
+/** An old Buzz team as old Buzz last saved it, keyed by its old ID. */
+export type OldTeam = Readonly<{
+  id: string;
+  name: string;
+  /** Its shared instructions, "" for none. */
+  instructions: string;
 }>;
 /** What an agent kept in an earlier system that its new type may adopt. */
 export type Carry = Readonly<{
@@ -75,7 +84,7 @@ export type AgentsNative = {
     destination: string,
     owner: string,
     type: string,
-  ): Promise<Readonly<{ agent: AgentIdentity; carry: Carry }>>;
+  ): Promise<Readonly<{ agent: AgentIdentity; carry: Carry; team?: OldTeam }>>;
   rename(pubkey: string, name: string): Promise<void>;
   /** Sets its profile picture, an HTTPS image URL, or with `null` clears it. */
   setPicture(pubkey: string, picture: string | null): Promise<void>;

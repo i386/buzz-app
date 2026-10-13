@@ -19,6 +19,7 @@ import type {
   AgentViewProps,
   Agents,
   AgentsSnapshot,
+  Ported,
   RegisteredAgentType,
   TeamChange,
 } from "../../features/agents/service";
@@ -240,7 +241,7 @@ function setup(
     }),
     finish: vi.fn(async (_: string) => created),
     portable: vi.fn(async () => ({ agents: portable, warnings: [] })),
-    port: vi.fn(async () => created),
+    port: vi.fn(async (): Promise<Ported> => created),
     save: vi.fn(async () => {}),
     previewRetype: vi.fn(
       () =>
@@ -893,6 +894,42 @@ it("shows why importing an agent failed and keeps it listed", async () => {
     "Keychain access was denied",
   );
   expect(screen.getByRole("button", { name: "Import Ada" })).toBeEnabled();
+});
+
+it("says which old Buzz team an agent joins, and stays on Import when it could not join", async () => {
+  const user = userEvent.setup();
+  const { agents } = setup([]);
+  agents.portable.mockResolvedValueOnce({
+    agents: [
+      portable[0] as PortableAgent,
+      {
+        ...(portable[1] as PortableAgent),
+        team: { id: "old", name: "Sietch Tabr", instructions: "Ship small." },
+      },
+    ],
+    warnings: [],
+  });
+  agents.port.mockResolvedValueOnce({
+    ...agent("Bea", 2),
+    teamError: { name: "Sietch Tabr" },
+  });
+  await user.click(screen.getByRole("tab", { name: "Import" }));
+  const list = await screen.findByRole("region", { name: "Agents to import" });
+  expect(
+    within(list).getByText("Buzz 0.X · Joins team Sietch Tabr"),
+  ).toBeInTheDocument();
+  expect(within(list).getByText("Buzz 1.0 harness agent")).toBeInTheDocument();
+  await user.click(screen.getByRole("button", { name: "Import Bea" }));
+  expect(screen.getByRole("tab", { name: "Import" })).toHaveAttribute(
+    "aria-selected",
+    "true",
+  );
+  expect(
+    screen.queryByRole("button", { name: "Import Bea" }),
+  ).not.toBeInTheDocument();
+  expect(screen.getByRole("alert")).toHaveTextContent(
+    "Imported Bea, but couldn't add it to team Sietch Tabr. Add it in Teams.",
+  );
 });
 
 it("makes a team of chosen agents and lists it with its members", async () => {

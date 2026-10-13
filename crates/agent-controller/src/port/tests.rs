@@ -95,6 +95,7 @@ fn lists_each_identity_once_preferring_the_harness_copy() {
                 about: None,
                 relay: "wss://relay.example".into(),
                 carry: Carry::default(),
+                team: None,
             },
             Portable {
                 source: PortSource::Installed,
@@ -104,6 +105,7 @@ fn lists_each_identity_once_preferring_the_harness_copy() {
                 about: None,
                 relay: "wss://old.example".into(),
                 carry: Carry::default(),
+                team: None,
             },
             Portable {
                 source: PortSource::Development,
@@ -113,6 +115,7 @@ fn lists_each_identity_once_preferring_the_harness_copy() {
                 about: None,
                 relay: String::new(),
                 carry: Carry::default(),
+                team: None,
             },
         ]
     );
@@ -424,4 +427,155 @@ fn retained_harness_artwork_survives_agents_storage_and_signed_publication() {
         let event: nostr::event::Event = serde_json::from_value(event).unwrap();
         event.verify().unwrap();
     }
+}
+
+/// Old Buzz's team file and agent library, scrubbed: no keys, made-up names.
+fn old_buzz(dir: &std::path::Path, source: LegacySource) {
+    let fixture = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("testdata/old-buzz-teams");
+    let agents = dir.join("data").join(source.app_directory()).join("agents");
+    std::fs::create_dir_all(&agents).unwrap();
+    for file in ["teams.json", "managed-agents.json"] {
+        std::fs::copy(fixture.join(file), agents.join(file)).unwrap();
+    }
+}
+fn team_of(found: &[Portable], name: &str) -> Option<OldTeam> {
+    found
+        .iter()
+        .find(|agent| agent.name == name)
+        .unwrap()
+        .team
+        .clone()
+}
+
+#[test]
+fn attaches_each_old_buzz_agents_live_team() {
+    let dir = tempfile::tempdir().unwrap();
+    old_buzz(dir.path(), LegacySource::Installed);
+    let found = stores(dir.path()).list();
+    assert!(found.warnings.is_empty());
+    let sietch = OldTeam {
+        id: "6f9c2d1e-4b7a-4e8f-9a3c-2d5e8f1b7c40".into(),
+        name: "Sietch Tabr".into(),
+        instructions: "Ship small, verified changes.\nReport in the originating thread.".into(),
+    };
+    assert_eq!(team_of(&found.agents, "Stilgar"), Some(sietch.clone()));
+    assert_eq!(team_of(&found.agents, "Chani"), Some(sietch));
+    // Built in to old Buzz, by its flag: never brought over.
+    assert_eq!(team_of(&found.agents, "Fizz"), None);
+    // A user's own team with the built-in one's name still comes.
+    assert_eq!(
+        team_of(&found.agents, "Greeter").map(|team| team.name),
+        Some("Welcome Team".into())
+    );
+    // Deleted in old Buzz, or never on one.
+    assert_eq!(team_of(&found.agents, "Ghost"), None);
+    assert_eq!(team_of(&found.agents, "Loner"), None);
+    let nameless = team_of(&found.agents, "Nameless").unwrap();
+    assert_eq!(
+        (nameless.name.as_str(), nameless.instructions.as_str()),
+        ("Team from old Buzz", "")
+    );
+    // The list shows it on the card; the definition is not an agent.
+    let json = serde_json::to_value(&found).unwrap();
+    assert_eq!(json["agents"][0]["team"]["name"], "Sietch Tabr");
+    assert!(json["agents"][4].get("team").is_none());
+    assert_eq!(found.agents.len(), 7);
+
+    // Development's copy has the same old IDs, so the same team.
+    old_buzz(dir.path(), LegacySource::Development);
+    let (dev, teams) = stores(dir.path()).read(PortSource::Development).unwrap();
+    assert!(teams.is_ok());
+    let dev: Vec<Portable> = dev.into_iter().map(|(agent, _)| agent).collect();
+    assert_eq!(team_of(&dev, "Chani"), team_of(&found.agents, "Chani"));
+}
+
+#[test]
+fn unreadable_teams_warn_and_leave_every_agent_importable() {
+    let teams_path = |dir: &std::path::Path| {
+        dir.join("data")
+            .join(LegacySource::Installed.app_directory())
+            .join("agents/teams.json")
+    };
+    let member = json!([{"pubkey": "1".repeat(64), "name": "Stilgar", "team_id": "t"}]);
+    // A missing file: no teams and nothing to report.
+    let dir = tempfile::tempdir().unwrap();
+    legacy(dir.path(), LegacySource::Installed, member.clone());
+    let found = stores(dir.path()).list();
+    assert!(found.warnings.is_empty());
+    assert_eq!(found.agents[0].team, None);
+    for broken in [
+        json!({"teams": []}),
+        json!([{"id": "t", "name": "A"}, {"id": "t", "name": "B"}]),
+        json!([{"id": "", "name": "A"}]),
+        json!([{"id": "t", "name": "A", "instructions": 7}]),
+        json!([{"id": "t", "name": "A", "instructions": "a\0b"}]),
+        json!([{"id": "t", "name": "A", "instructions": "x".repeat(128 * 1024 + 1)}]),
+    ] {
+        let dir = tempfile::tempdir().unwrap();
+        legacy(dir.path(), LegacySource::Installed, member.clone());
+        write(teams_path(dir.path()), broken.clone());
+        let found = stores(dir.path()).list();
+        assert_eq!(found.warnings.len(), 1, "{broken}");
+        assert_eq!(found.agents.len(), 1);
+        assert_eq!(found.agents[0].team, None);
+    }
+    // Not JSON at all.
+    let dir = tempfile::tempdir().unwrap();
+    legacy(dir.path(), LegacySource::Installed, member);
+    std::fs::write(teams_path(dir.path()), "{").unwrap();
+    assert_eq!(stores(dir.path()).list().warnings.len(), 1);
+}
+
+#[test]
+fn team_names_are_trimmed_bounded_and_never_blank() {
+    assert_eq!(team_name("  Sietch  "), "Sietch");
+    assert_eq!(team_name(" \n "), "Team from old Buzz");
+    assert_eq!(team_name(&"a".repeat(130)), "a".repeat(120));
+    // 119 units, then a two-unit character that would cross 120: dropped whole.
+    assert_eq!(
+        team_name(&format!("{}😀b", "a".repeat(119))),
+        "a".repeat(119)
+    );
+}
+
+#[test]
+fn taking_an_agent_rereads_its_team() {
+    let dir = tempfile::tempdir().unwrap();
+    let agent = key();
+    let teams = |name: &str, text: &str| json!([{"id": "t", "name": name, "instructions": text}]);
+    legacy(
+        dir.path(),
+        LegacySource::Installed,
+        json!([{"pubkey": agent.pubkey(), "name": "Stilgar", "team_id": "t",
+                "private_key_nsec": agent.hex().to_string()}]),
+    );
+    let path = dir
+        .path()
+        .join("data")
+        .join(LegacySource::Installed.app_directory())
+        .join("agents/teams.json");
+    write(path.clone(), teams("Before", "old text"));
+    let stores = stores(dir.path());
+    assert_eq!(
+        stores.list().agents[0].team.as_ref().unwrap().name,
+        "Before"
+    );
+    write(path.clone(), teams("After", "new text"));
+    let (taken, _) = stores
+        .take(PortSource::Installed, agent.pubkey(), &Memory::default())
+        .unwrap();
+    assert_eq!(
+        taken.team,
+        Some(OldTeam {
+            id: "t".into(),
+            name: "After".into(),
+            instructions: "new text".into(),
+        })
+    );
+    // Unreadable now: the agent still comes, with no team.
+    std::fs::write(&path, "{").unwrap();
+    let (taken, _) = stores
+        .take(PortSource::Installed, agent.pubkey(), &Memory::default())
+        .unwrap();
+    assert_eq!(taken.team, None);
 }

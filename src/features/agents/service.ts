@@ -22,6 +22,7 @@ import type { ProfileQueries } from "../relay/profile-directory";
 import { migrateAgentStorage } from "./migrate-storage";
 import { Service, type Context } from "@deepseek-ai/cordis";
 import { npubEncode } from "nostr-tools/nip19";
+import { bytesToHex } from "nostr-tools/utils";
 import type { ComponentType, ReactNode } from "react";
 import type { DefinedIcon } from "../../shared/design-system/icons";
 import {
@@ -90,6 +91,7 @@ import {
   type Carry,
   type AgentsNative,
   type AgentUpload,
+  type OldTeam,
   type PortableAgents,
   type PortSource,
 } from "./native";
@@ -467,6 +469,10 @@ export type PortInput = Readonly<
       instructions?: string;
     }
 >;
+/** An imported agent; `teamError` names the old Buzz team it could not be
+ * added to, though the agent itself was kept. */
+export type Ported = Agent &
+  Readonly<{ teamError?: Readonly<{ name: string }> }>;
 export type NewAgent = Readonly<{
   type: string;
   name: string;
@@ -498,8 +504,10 @@ export type Agents = {
   /** Imports one as an agent of `type` in the selected community: an identity
    * from `portable` keeps its key, name and picture, and a shared agent gets a
    * new key with its name and picture. Either keeps whatever of its
-   * instructions and workspace the type adopts; its other settings stay behind. */
-  port(input: PortInput): Promise<Agent>;
+   * instructions and workspace the type adopts; its other settings stay behind.
+   * One that was on an old Buzz team joins that team's copy in this community,
+   * which its first member creates. */
+  port(input: PortInput): Promise<Ported>;
   save(pubkey: string, change: AgentChange): Promise<void>;
   /** Previews the destination config and transferable settings the same
    * migration used by `retype` will produce, without changing the agent. */
@@ -1104,13 +1112,35 @@ export class AgentsService extends Service implements Agents {
     };
   }
 
-  async port(input: PortInput) {
+  async port(input: PortInput): Promise<Ported> {
     const { type } = input;
     if (input.source !== "shared") {
       const { source, pubkey } = input;
-      return this.add(type, (native, destination, owner) =>
-        native.port(source, pubkey, destination, owner, type),
+      let joins: Readonly<{ team: OldTeam; community: string }> | undefined;
+      const agent: Ported = await this.add(
+        type,
+        async (native, destination, owner) => {
+          const ported = await native.port(
+            source,
+            pubkey,
+            destination,
+            owner,
+            type,
+          );
+          // Only what was read at import, in the community it was made in.
+          if (ported.team)
+            joins = { team: ported.team, community: destination };
+          return ported;
+        },
       );
+      if (!joins) return agent;
+      try {
+        await this.joinOldTeam(joins.team, joins.community, agent.pubkey);
+        return agent;
+      } catch (error) {
+        console.warn(`Agent ${agent.name} was not added to its team`, error);
+        return { ...agent, teamError: { name: joins.team.name } };
+      }
     }
     const name = input.name.trim();
     if (!name) throw new Error("Name the agent");
@@ -1444,6 +1474,29 @@ export class AgentsService extends Service implements Agents {
         : [...this.teamList, team],
     );
     return team;
+  }
+
+  /** Adds an imported agent to its old Buzz team's copy in `community`, made
+   * on its first member. Its name and instructions here are never replaced. */
+  private async joinOldTeam(team: OldTeam, community: string, pubkey: string) {
+    const digest = await crypto.subtle.digest(
+      "SHA-256",
+      new TextEncoder().encode(`${team.id}\n${community}`),
+    );
+    const id = `beta-${bytesToHex(new Uint8Array(digest))}`;
+    const saved = this.teamList.find((entry) => entry.id === id);
+    if (saved?.members.includes(pubkey)) return;
+    const joined: Team = Object.freeze({
+      id,
+      name: saved?.name ?? team.name,
+      instructions: saved?.instructions ?? team.instructions,
+      members: Object.freeze([...(saved?.members ?? []), pubkey]),
+    });
+    this.writeTeams(
+      saved
+        ? this.teamList.map((entry) => (entry === saved ? joined : entry))
+        : [...this.teamList, joined],
+    );
   }
 
   async removeTeam(id: string) {

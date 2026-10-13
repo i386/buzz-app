@@ -1,8 +1,8 @@
 //! Agent identities an earlier agent system saved on this machine, which Agents
 //! can take over: the harness controller's library and old Buzz's. The identity
 //! and its public name, picture and description move, with its instructions
-//! and workspace as a `Carry` for the new type to adopt; other harness settings
-//! and memberships stay behind. Neither store is ever written.
+//! and workspace as a `Carry` for the new type to adopt, and old Buzz's team it
+//! was on; other harness settings stay behind. Neither store is ever written.
 use crate::config::{agent_id, canonical_key, canonical_relay, MAX_AGENTS};
 use crate::import::read_json;
 use crate::{Credentials, LegacySource, Result, Secret};
@@ -45,6 +45,19 @@ pub struct Portable {
     /// Settings any type may adopt. Only taking the agent over reports them.
     #[serde(skip)]
     pub carry: Carry,
+    /// The old Buzz team it was on, if that team still exists and is not one
+    /// old Buzz built in.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub team: Option<OldTeam>,
+}
+
+/// An old Buzz team as old Buzz last saved it, keyed by its old ID.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct OldTeam {
+    pub id: String,
+    pub name: String,
+    /// Its shared instructions, "" for none.
+    pub instructions: String,
 }
 
 /// What an agent kept in an earlier system that a new type may give it.
@@ -84,19 +97,23 @@ impl OldStores {
             PortSource::Development,
         ] {
             match self.read(source) {
-                Ok(agents) => found.agents.extend(
-                    agents
-                        .into_iter()
-                        .map(|(agent, _)| agent)
-                        .filter(|agent| seen.insert(agent.pubkey.clone())),
-                ),
+                Ok((agents, teams)) => {
+                    found.warnings.extend(teams.err());
+                    found.agents.extend(
+                        agents
+                            .into_iter()
+                            .map(|(agent, _)| agent)
+                            .filter(|agent| seen.insert(agent.pubkey.clone())),
+                    );
+                }
                 Err(error) => found.warnings.push(error),
             }
         }
         found
     }
-    /// One listed identity and its key, both re-read from the store it is in, so
-    /// the caller names only its choice.
+    /// One listed identity, its team and its key, all re-read from the store it
+    /// is in, so the caller names only its choice. Unreadable teams leave it
+    /// with none.
     pub fn take(
         &self,
         source: PortSource,
@@ -105,6 +122,7 @@ impl OldStores {
     ) -> Result<(Portable, Secret)> {
         let (agent, saved) = self
             .read(source)?
+            .0
             .into_iter()
             .find(|(agent, _)| agent.pubkey == pubkey)
             .ok_or("That agent is no longer saved there")?;
@@ -118,8 +136,9 @@ impl OldStores {
         Ok((agent, key))
     }
     /// Its identities, each with where its key is: the harness credential ID, or
-    /// the key old Buzz kept in the record itself, if it did.
-    fn read(&self, source: PortSource) -> Result<Vec<(Portable, String)>> {
+    /// the key old Buzz kept in the record itself, if it did. Teams that cannot
+    /// be read are reported apart, and attach to no one.
+    fn read(&self, source: PortSource) -> Result<Read> {
         let (path, records) = match source.legacy() {
             None => (self.harness.clone(), "agents"),
             Some(legacy) => (
@@ -130,7 +149,7 @@ impl OldStores {
             ),
         };
         if !path.try_exists().unwrap_or(true) {
-            return Ok(vec![]);
+            return Ok((vec![], Ok(())));
         }
         let file =
             read_json(&path, false).map_err(|_| format!("Could not read {}", path.display()))?;
@@ -143,14 +162,87 @@ impl OldStores {
             .as_array()
             .filter(|records| records.len() <= MAX_AGENTS)
             .ok_or_else(|| format!("Could not read {}", path.display()))?;
-        Ok(records
+        let teams = match source.legacy() {
+            Some(_) if records.iter().any(|record| record["team_id"].is_string()) => {
+                old_teams(&path.with_file_name("teams.json"))
+            }
+            _ => Ok(vec![]),
+        };
+        let known = teams.as_deref().unwrap_or_default();
+        let found = records
             .iter()
-            .filter_map(|record| portable(source, record, records))
-            .collect())
+            .filter_map(|record| portable(source, record, records, known))
+            .collect();
+        Ok((found, teams.map(drop)))
     }
 }
 
-fn portable(source: PortSource, record: &Value, records: &[Value]) -> Option<(Portable, String)> {
+/// A store's identities, each with where its key is, and whether its teams
+/// could be read.
+type Read = (Vec<(Portable, String)>, Result<()>);
+
+/// Old Buzz's teams beside its agents, built-in ones left out. A missing file
+/// has none; any invalid team makes the file unreadable.
+fn old_teams(path: &std::path::Path) -> Result<Vec<OldTeam>> {
+    if !path.try_exists().unwrap_or(true) {
+        return Ok(vec![]);
+    }
+    let unreadable = || format!("Could not read {}", path.display());
+    let file = read_json(path, false).map_err(|_| unreadable())?;
+    let teams = file
+        .as_array()
+        .filter(|teams| teams.len() <= MAX_AGENTS)
+        .ok_or_else(unreadable)?;
+    let mut ids = BTreeSet::new();
+    let mut found = vec![];
+    for team in teams {
+        let id = team["id"].as_str().unwrap_or("");
+        let instructions = match &team["instructions"] {
+            Value::Null => "",
+            value => value.as_str().ok_or_else(unreadable)?,
+        };
+        if id.is_empty()
+            || id.len() > 256
+            || id.contains('\0')
+            || !ids.insert(id)
+            || instructions.len() > 128 * 1024
+            || instructions.contains('\0')
+        {
+            return Err(unreadable());
+        }
+        if team["is_builtin"].as_bool() != Some(true) {
+            found.push(OldTeam {
+                id: id.into(),
+                name: team_name(team["name"].as_str().unwrap_or("")),
+                instructions: instructions.trim().into(),
+            });
+        }
+    }
+    Ok(found)
+}
+
+/// Trimmed, at most 120 UTF-16 units as the app counts them, never splitting a
+/// character; a blank name gets a stand-in.
+fn team_name(raw: &str) -> String {
+    let name = raw.trim();
+    if name.is_empty() {
+        return "Team from old Buzz".into();
+    }
+    let mut units = 0;
+    name.chars()
+        .take_while(|c| {
+            units += c.len_utf16();
+            units <= 120
+        })
+        .collect()
+}
+
+fn portable(
+    source: PortSource,
+    record: &Value,
+    records: &[Value],
+    teams: &[OldTeam],
+) -> Option<(Portable, String)> {
     let text = |key: &str| record.get(key).and_then(Value::as_str).unwrap_or("");
     let harness = source == PortSource::Harness;
     let pubkey = text("pubkey");
@@ -205,6 +297,11 @@ fn portable(source: PortSource, record: &Value, records: &[Value]) -> Option<(Po
                 // Old Buzz saved no workspace.
                 workspace: harness.then(|| present(text("workspace"))).flatten(),
             },
+            // Missing from the file: deleted in old Buzz, or one it built in.
+            team: teams
+                .iter()
+                .find(|team| record["team_id"].as_str() == Some(&team.id))
+                .cloned(),
         },
         credential,
     ))

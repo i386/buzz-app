@@ -1,0 +1,47 @@
+[
+  {
+    "id": "builtin-team:welcome",
+    "name": "Welcome Team",
+    "description": "A friendly starter trio ready to help you plan, create, and ship.",
+    "persona_ids": ["builtin:fizz", "builtin:honey", "builtin:bumble"],
+    "is_builtin": true,
+    "shared": false,
+    "is_symlink": false,
+    "created_at": "2026-05-01T00:00:00Z",
+    "updated_at": "2026-05-01T00:00:00Z"
+  },
+  {
+    "id": "6f9c2d1e-4b7a-4e8f-9a3c-2d5e8f1b7c40",
+    "name": "  Sietch Tabr ",
+    "description": null,
+    "instructions": "\nShip small, verified changes.\nReport in the originating thread.\n",
+    "persona_ids": ["b2c4e6f8-0000-4000-8000-000000000001"],
+    "is_builtin": false,
+    "shared": true,
+    "is_symlink": false,
+    "created_at": "2026-06-02T10:00:00Z",
+    "updated_at": "2026-09-30T12:00:00Z"
+  },
+  {
+    "id": "0a1b2c3d-1111-4222-8333-444455556666",
+    "name": "Welcome Team",
+    "description": "Named like the built-in one, but made by the user.",
+    "persona_ids": [],
+    "is_builtin": false,
+    "shared": false,
+    "is_symlink": false,
+    "created_at": "2026-07-01T00:00:00Z",
+    "updated_at": "2026-07-01T00:00:00Z"
+  },
+  {
+    "id": "9d8c7b6a-2222-4333-8444-555566667777",
+    "name": "   ",
+    "description": null,
+    "persona_ids": [],
+    "is_builtin": false,
+    "shared": false,
+    "is_symlink": false,
+    "created_at": "2026-07-02T00:00:00Z",
+    "updated_at": "2026-07-02T00:00:00Z"
+  }
+]
