@@ -70,6 +70,9 @@ export type Channel = Readonly<{
   dm?: boolean;
 }>;
 export type TurnInput = Readonly<{
+  /** The agent's pubkey, which finds its sessions among others' in a shared
+   * workspace. */
+  agent: string;
   event: EventData;
   channel: Channel;
   scope: Scope;
@@ -140,7 +143,12 @@ export function turnPrompt(input: TurnInput) {
           "Session scope: channel",
           `Channel: ${channelLabel}`,
         ];
-  const parts = [section("context", [...lines, hint, reply].join("\n"))];
+  const parts = [
+    section(
+      "context",
+      [...lines, `Agent: ${input.agent}`, hint, reply].join("\n"),
+    ),
+  ];
   if (context.length)
     parts.push(
       section(

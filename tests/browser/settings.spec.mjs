@@ -346,10 +346,6 @@ confirmedPresence(
       exact: true,
       includeHidden: true,
     });
-    const personalGroups = sections.getByRole("button", {
-      name: "Personal groups",
-      exact: true,
-    });
     const channelTemplates = sections.getByRole("button", {
       name: "Channel templates",
       exact: true,
@@ -378,12 +374,11 @@ confirmedPresence(
     await expect(profile).toHaveAttribute("aria-current", "page");
     await expect(profileContent).toBeVisible();
     await expect(pluginContent).toHaveCount(0);
-    await personalGroups.click();
-    await expect(personalGroups).toHaveAttribute("aria-current", "page");
+    await channelTemplates.click();
+    await expect(channelTemplates).toHaveAttribute("aria-current", "page");
     await expect(
-      page.getByRole("heading", { name: "Personal groups", exact: true }),
+      page.getByRole("heading", { name: "Channel templates", exact: true }),
     ).toBeVisible();
-    await expect(button(page, "Manage personal groups")).toBeVisible();
     await profile.click();
     // Exercise the real shell's destination allowlist, not just the settings component.
     const agents = sections.getByRole("button", {
@@ -418,8 +413,6 @@ confirmedPresence(
       await expect(
         sections.getByRole("button", { name: "Messages", exact: true }),
       ).toBeFocused();
-      await tab();
-      await expect(personalGroups).toBeFocused();
       await tab();
       await expect(channelTemplates).toBeFocused();
       await tab();
@@ -498,8 +491,6 @@ confirmedPresence(
       await expect(
         sections.getByRole("button", { name: "Messages", exact: true }),
       ).toBeFocused();
-      await tab();
-      await expect(personalGroups).toBeFocused();
       await tab();
       await expect(channelTemplates).toBeFocused();
       await tab();

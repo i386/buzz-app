@@ -16,7 +16,7 @@ import {
   type KeyboardEvent,
 } from "react";
 import { Virtualizer, type VirtualizerHandle } from "virtua";
-import { MessageRow } from "./MessageRow";
+import { MessageRow, type MessageLinkOrigin } from "./MessageRow";
 import { continuesMessageGroup } from "./message-grouping";
 import type { Attachment, ChannelWindow } from "../relay/contracts";
 import { useRowProfiles } from "../relay/react";
@@ -127,7 +127,7 @@ export type ChannelTimelineProps = {
   launchPending?: boolean | undefined;
   /** Sessions page history on scroll; retain an explicit button for errors. */
   historyControl?: "button" | "scroll";
-  onOpenLink(url: string): boolean;
+  onOpenLink(url: string, origin?: MessageLinkOrigin): boolean;
   canOpenLink?: ((target: string) => boolean) | undefined;
   revealMessageId?: string | undefined;
   /** One inline exact visit: focus the verified mounted row, without a page navigation. */

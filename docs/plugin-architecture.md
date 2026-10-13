@@ -268,7 +268,7 @@ session capabilities through injection. Host boundaries isolate rendering errors
 exact registration identity and mounted lifetime revoke callbacks on removal.
 
 The channel template extension point (`ctx.channelTemplates`) was removed with the
-v1 Agents system. The host sidebar owns personal groups and the existing + creation
+v1 Agents system. The host sidebar owns channel groups and the existing + creation
 buttons. Channel templates are now device-local (`buzz.channel-templates.v1`,
 `features/channel-templates/local.ts`): a name, agent pubkeys, Agents team ids
 and a starting Canvas, managed under Settings → Channel templates. Picking one in

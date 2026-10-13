@@ -28,7 +28,7 @@ import type { RelaySession } from "../relay/session";
 import type { ThreadView } from "../relay/threads";
 import { useRowProfiles } from "../relay/react";
 import { rowProfileIds } from "../relay/membership";
-import { MessageRow } from "./MessageRow";
+import { MessageRow, type MessageLinkOrigin } from "./MessageRow";
 import { continuesMessageGroup } from "./message-grouping";
 import { MessageComposer } from "./MessageComposer";
 import styles from "./Messages.module.css";
@@ -73,7 +73,7 @@ export type ThreadPanelProps = {
   navigation?: PageNavigation | undefined;
   /** Omit to embed the thread: no header or Escape dismissal; the owner supplies both. */
   close?: (() => void) | undefined;
-  onOpenLink(url: string): boolean;
+  onOpenLink(url: string, origin?: MessageLinkOrigin): boolean;
   onOpenMediaReview?(
     messageId: string,
     attachment: ChannelMessage["attachments"][number],
@@ -461,7 +461,7 @@ function ThreadMessages({
   requireReadyRoot?: boolean | undefined;
   onDraftSaved?: ThreadPanelProps["onDraftSaved"];
   navigation?: PageNavigation | undefined;
-  onOpenLink(url: string): boolean;
+  onOpenLink(url: string, origin?: MessageLinkOrigin): boolean;
   onOpenMediaReview?: ThreadPanelProps["onOpenMediaReview"];
   canOpenLink?: ((target: string) => boolean) | undefined;
 }) {

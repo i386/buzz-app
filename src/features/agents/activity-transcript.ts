@@ -41,7 +41,13 @@ export type TranscriptItem =
       sections: PromptSection[];
       steer: boolean;
     })
-  | (Base & { type: "message" | "thought"; text: string; messageId?: string })
+  | (Base & {
+      type: "message" | "thought";
+      text: string;
+      messageId?: string;
+      /** Posted to Buzz, rather than said only in the session. */
+      posted?: boolean;
+    })
   | ToolItem
   | (Base & { type: "plan"; entries: { content: string; status: string }[] })
   | (Base & { type: "status"; text: string });

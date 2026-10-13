@@ -222,8 +222,18 @@ import TablerPresentationIcon from "@tabler/icons-react/dist/esm/icons/IconPrese
 export const PresentationIcon = defineIcon("tabler", TablerPresentationIcon);
 import TablerQuestionIcon from "@tabler/icons-react/dist/esm/icons/IconHelpCircle.mjs";
 export const QuestionIcon = defineIcon("tabler", TablerQuestionIcon);
-import TablerRobotFaceIcon from "@tabler/icons-react/dist/esm/icons/IconRobotFace.mjs";
-export const RobotIcon = defineIcon("tabler", TablerRobotFaceIcon);
+import { RobotArtwork } from "./Robot";
+export const RobotIcon = defineIcon("custom", RobotArtwork, {
+  meaning: "AI agent",
+  category: "Product mark",
+  provenance:
+    "Original Buzz Soft & wide robot, Fuller canvas refinement with inward ears, selected by the designer",
+  intendedSizes: [
+    { width: 14, height: 14 },
+    { width: 16, height: 16 },
+    { width: 24, height: 24 },
+  ],
+});
 import TablerShieldIcon from "@tabler/icons-react/dist/esm/icons/IconShield.mjs";
 export const ShieldIcon = defineIcon("tabler", TablerShieldIcon);
 import TablerSidebarIcon from "@tabler/icons-react/dist/esm/icons/IconLayoutSidebar.mjs";

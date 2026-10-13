@@ -1,8 +1,4 @@
-import {
-  chooseColorMode,
-  selectSettingsSection,
-  settleShellToggle,
-} from "./navigation.mjs";
+import { chooseColorMode, selectSettingsSection } from "./navigation.mjs";
 import { test, expect } from "./fixture.mjs";
 
 test.use({ historyCounts: { alpha: 0, beta: 0 } });
@@ -192,8 +188,8 @@ test("settings share a centered, bounded column and keep controls contained acro
   await page.screenshot({ path: info.outputPath("agents-dark-390-200.png") });
 });
 
-// Real layout metrics and Base UI focus handoff need a browser; empty/loading/
-// legacy-source conditions are covered by component tests.
+// Real layout metrics and Base UI focus handoff need a browser; empty/loading
+// conditions are covered by component tests.
 test.describe("settings empty collections", () => {
   test.use({ productionBroker: true, channelLifecycle: true });
   test("empty cards fit the settings column and their actions lead to the editor", async ({
@@ -219,139 +215,91 @@ test.describe("settings empty collections", () => {
       );
       for (const width of [1440, 800, 390]) {
         await page.setViewportSize({ width, height: 900 });
-        for (const [name, title] of [
-          ["Custom emoji", "No emojis yet"],
-          ["Personal groups", "No personal groups yet"],
-        ]) {
-          if (name === "Personal groups") {
-            await settleShellToggle(page);
-            const show = page.getByRole("button", {
-              name: "Show navigation",
-              exact: true,
-            });
-            if (await show.isVisible()) await show.click();
-            await page
-              .getByRole("complementary", {
-                name: "Settings sidebar",
-                exact: true,
-              })
-              .getByRole("button", { name, exact: true })
-              .click();
-            await expect(
-              page.getByRole("region", {
-                name: "Personal groups settings",
-                exact: true,
-              }),
-            ).toBeVisible();
-          } else {
-            await selectSettingsSection(page, name);
-          }
-          if (name === "Custom emoji")
-            await page
-              .getByRole("tab", { name: "My emojis", exact: true })
-              .click();
-          const card = page.locator(".buzz-empty-state").filter({
-            has: page.getByRole("heading", { name: title, exact: true }),
-          });
-          await expect(card).toBeVisible();
-          await page.evaluate(() => document.fonts.ready);
-          await expect
-            .poll(() =>
-              card.evaluate((root) => {
-                const bounds = root.getBoundingClientRect();
-                return (
-                  [...root.querySelectorAll("*")].every((node) => {
-                    const box = node.getBoundingClientRect();
-                    return box.left >= bounds.left && box.right <= bounds.right;
-                  }) &&
-                  root.scrollWidth <= root.clientWidth &&
-                  document.documentElement.scrollWidth <= innerWidth
-                );
-              }),
-            )
-            .toBe(true);
-          await expect
-            .poll(() =>
-              page
-                .getByRole("main")
-                .evaluate(
-                  (root) =>
-                    root
-                      .getAnimations({ subtree: true })
-                      .filter((animation) => animation.playState === "running")
-                      .length,
-                ),
-            )
-            .toBe(0);
-          await page.screenshot({
-            path: info.outputPath(`${name}-${mode}-${width}.png`),
-          });
-          if (name === "Custom emoji") {
-            const add = card.getByRole("button", {
-              name: "Add emoji",
-              exact: true,
-            });
-            await add.hover();
-            await add.focus();
-            await add.press("Enter");
-            await expect(
-              page.getByRole("tab", { name: "Add emoji", exact: true }),
-            ).toHaveAttribute("aria-selected", "true");
-            const uploadCard = page.locator(".buzz-empty-state").filter({
-              has: page.getByRole("heading", {
-                name: "Upload an image",
-                exact: true,
-              }),
-            });
-            await expect(uploadCard.locator("button")).toBeFocused();
-            await expect
-              .poll(() =>
-                uploadCard.evaluate((root) => {
-                  const bounds = root.getBoundingClientRect();
-                  return [...root.querySelectorAll("*")].every((node) => {
-                    const box = node.getBoundingClientRect();
-                    return box.left >= bounds.left && box.right <= bounds.right;
-                  });
-                }),
-              )
-              .toBe(true);
-            await expect
-              .poll(() =>
-                page
-                  .getByRole("main")
-                  .evaluate(
-                    (root) =>
-                      root
-                        .getAnimations({ subtree: true })
-                        .filter(
-                          (animation) => animation.playState === "running",
-                        ).length,
-                  ),
-              )
-              .toBe(0);
-            await page.screenshot({
-              path: info.outputPath(`emoji-upload-${mode}-${width}.png`),
-            });
-          } else {
-            await card
-              .getByRole("button", {
-                name: "Manage personal groups",
-                exact: true,
-              })
-              .click();
-            const dialog = page.getByRole("dialog", {
-              name: "Personal groups",
-              exact: true,
-            });
-            await expect(
-              dialog.getByRole("button", { name: "New group", exact: true }),
-            ).toBeVisible();
-            await dialog
-              .getByRole("button", { name: "Close personal groups" })
-              .click();
-            await expect(dialog).toHaveCount(0);
-          }
-        }
+        await selectSettingsSection(page, "Custom emoji");
+        await page.getByRole("tab", { name: "My emojis", exact: true }).click();
+        const card = page.locator(".buzz-empty-state").filter({
+          has: page.getByRole("heading", {
+            name: "No emojis yet",
+            exact: true,
+          }),
+        });
+        await expect(card).toBeVisible();
+        await page.evaluate(() => document.fonts.ready);
+        await expect
+          .poll(() =>
+            card.evaluate((root) => {
+              const bounds = root.getBoundingClientRect();
+              return (
+                [...root.querySelectorAll("*")].every((node) => {
+                  const box = node.getBoundingClientRect();
+                  return box.left >= bounds.left && box.right <= bounds.right;
+                }) &&
+                root.scrollWidth <= root.clientWidth &&
+                document.documentElement.scrollWidth <= innerWidth
+              );
+            }),
+          )
+          .toBe(true);
+        await expect
+          .poll(() =>
+            page
+              .getByRole("main")
+              .evaluate(
+                (root) =>
+                  root
+                    .getAnimations({ subtree: true })
+                    .filter((animation) => animation.playState === "running")
+                    .length,
+              ),
+          )
+          .toBe(0);
+        await page.screenshot({
+          path: info.outputPath(`Custom emoji-${mode}-${width}.png`),
+        });
+        const add = card.getByRole("button", {
+          name: "Add emoji",
+          exact: true,
+        });
+        await add.hover();
+        await add.focus();
+        await add.press("Enter");
+        await expect(
+          page.getByRole("tab", { name: "Add emoji", exact: true }),
+        ).toHaveAttribute("aria-selected", "true");
+        const uploadCard = page.locator(".buzz-empty-state").filter({
+          has: page.getByRole("heading", {
+            name: "Upload an image",
+            exact: true,
+          }),
+        });
+        await expect(uploadCard.locator("button")).toBeFocused();
+        await expect
+          .poll(() =>
+            uploadCard.evaluate((root) => {
+              const bounds = root.getBoundingClientRect();
+              return [...root.querySelectorAll("*")].every((node) => {
+                const box = node.getBoundingClientRect();
+                return box.left >= bounds.left && box.right <= bounds.right;
+              });
+            }),
+          )
+          .toBe(true);
+        await expect
+          .poll(() =>
+            page
+              .getByRole("main")
+              .evaluate(
+                (root) =>
+                  root
+                    .getAnimations({ subtree: true })
+                    .filter((animation) => animation.playState === "running")
+                    .length,
+              ),
+          )
+          .toBe(0);
+        await page.screenshot({
+          path: info.outputPath(`emoji-upload-${mode}-${width}.png`),
+        });
       }
     }
   });

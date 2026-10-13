@@ -58,8 +58,8 @@ Thread scope is the default. Channel scope shares a session across channel
 threads; DMs always share a conversation. Workspace changes start a fresh session.
 Bindings persist locally under the community and agent identity. Earlier bindings without dynamic tools are ignored; new conversations start fresh. Switching
 communities does not end an agent's work. Removing the agent, leaving or
-disconnecting from its community interrupts its turns and ends shells they left
-running; the server ends when no
+disconnecting from its community interrupts its turns and asks Codex to end
+shells they left running; the server ends when no
 Codex agent that has worked is still running, or when the plugin is disabled.
 If a saved Codex thread no longer exists, the next mention starts a fresh one.
 To inspect a saved session, see [View a Codex session](../../../docs/view-codex-session.md).
@@ -107,7 +107,7 @@ and cleanup.
 - Only the owner's events start work. Event watches support those events; timers
   are unsupported and report an error.
 - Replies use Agents' host signer. Codex receives no Buzz agent key and does not
-  publish through the Buzz CLI. Short Buzz guidance and custom instructions are
+  publish through the Buzz CLI. The Buzz base prompt and custom instructions are
   supplied as developer instructions, preserving Codex’s native coding prompt.
 - Codex runs with sandbox `danger-full-access` and approval policy `never`, matching
   Claude's `bypassPermissions`: it can write outside its workspace, reach the

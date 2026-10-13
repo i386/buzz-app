@@ -6,12 +6,19 @@ import type { Transcript } from "../../features/agents/activity-transcript";
 import { AgentInstructions } from "../../features/agents/AgentInstructions";
 import { CreateCorner } from "../../features/agents/create-card";
 import { ModelPicker } from "../../features/agents/ModelPicker";
+import {
+  OpenedConversation,
+  useOpenedSession,
+  useOpenTranscript,
+} from "../../features/agents/OpenedConversation";
 import type {
   AgentCreateProps,
   AgentViewProps,
 } from "../../features/agents/service";
+import { PanelSubview } from "../../features/panels/PanelSubview";
 import { Button } from "../../shared/design-system/ui/Button";
 import { Field } from "../../shared/design-system/ui/Field";
+import { InlineHeader } from "../../shared/design-system/ui/Header";
 import { Input } from "../../shared/design-system/ui/Input";
 import { Select } from "../../shared/design-system/ui/Select";
 import {
@@ -28,6 +35,8 @@ const message = (error: unknown) =>
 
 const label = ({ channelId, name, root }: SavedConversation) =>
   `${name ? `#${name}` : channelId.slice(0, 8)} · ${root ? `thread ${root.slice(0, 8)}` : "channel"}`;
+/** Conversations listed below the one the profile was opened from. */
+const CONVERSATION_LIMIT = 30;
 type Read =
   | { status: "ready"; transcript: Transcript & { more: boolean } }
   | { status: "missing" }
@@ -86,12 +95,10 @@ export function createTabs({
     agent,
     conversation,
     working,
-    onBack,
   }: {
     agent: AgentViewProps<Config>["agent"];
     conversation: SavedConversation;
     working: boolean;
-    onBack(): void;
   }) {
     const workspace = readConfig(agent.config).workspace;
     const [read, setRead] = useState<Read>();
@@ -120,10 +127,7 @@ export function createTabs({
     }, [conversation, workspace, working, attempt]);
     return (
       <div className="grid gap-4">
-        <div className="flex gap-2">
-          <Button variant="ghost" onClick={onBack}>
-            Back
-          </Button>
+        <div>
           <Button
             variant="ghost"
             loading={loading}
@@ -132,7 +136,6 @@ export function createTabs({
             Refresh
           </Button>
         </div>
-        <h3 className="m-0 text-body">{label(conversation)}</h3>
         {!read ? (
           <p role="status" className="m-0">
             Reading the Claude session…
@@ -165,7 +168,7 @@ export function createTabs({
   }
 
   /** Claude on this computer, and this agent's conversations. */
-  function ClaudeTab({ agent }: AgentViewProps<Config>) {
+  function ClaudeTab({ agent, conversation }: AgentViewProps<Config>) {
     const state = useSyncExternalStore(setup.subscribe, setup.snapshot);
     const sessions = useSyncExternalStore(
       (listener) => runtime.subscribe(listener),
@@ -177,20 +180,26 @@ export function createTabs({
     const busy = new Map(
       sessions.map((session) => [session.key, session.busy]),
     );
-    const [open, setOpen] = useState<SavedConversation>();
+    const workspace = readConfig(agent.config).workspace;
+    const {
+      session: here,
+      searching,
+      error: lookupError,
+    } = useOpenedSession(conversations, conversation, (place, signal) =>
+      runtime.find(agent.pubkey, place, workspace, signal),
+    );
+    const recent = conversations
+      .filter((item) => item.key !== here?.key)
+      .slice(0, CONVERSATION_LIMIT);
+    const activity = (key: string) => {
+      const running = busy.get(key);
+      return running === undefined ? undefined : running ? "Working" : "Idle";
+    };
+    const { open, show, back } = useOpenTranscript(conversation, label);
     const [code, setCode] = useState("");
     useEffect(() => {
       void setup.check();
     }, []);
-    if (open)
-      return (
-        <TranscriptView
-          agent={agent}
-          conversation={open}
-          working={busy.get(open.key) ?? false}
-          onBack={() => setOpen(undefined)}
-        />
-      );
     const status = state.status;
     const line =
       !status || state.checking
@@ -275,43 +284,39 @@ export function createTabs({
             </form>
           )}
         </section>
-        <section className="grid gap-1">
-          <h3 className="m-0 text-body">Conversations</h3>
-          {conversations.length ? (
+        {conversation && (
+          <OpenedConversation
+            conversation={conversation}
+            harness="Claude"
+            session={here}
+            searching={searching}
+            error={lookupError}
+            status={here && activity(here.key)}
+            onView={() => here && show(here)}
+          />
+        )}
+        <section>
+          <InlineHeader title="Recent conversations" />
+          {recent.length ? (
             <ul className="m-0 grid list-none gap-2 p-0">
-              {conversations.map((conversation) => {
-                const running = busy.get(conversation.key);
-                return (
-                  <li
-                    key={conversation.key}
-                    className="flex items-center justify-between gap-2"
-                  >
-                    <span className="min-w-0">
-                      <span className="block truncate">
-                        {label(conversation)}
-                      </span>
-                      <span className="block text-body-sm text-subtle">
-                        {[
-                          running === undefined
-                            ? undefined
-                            : running
-                              ? "Working"
-                              : "Idle",
-                          new Date(conversation.at).toLocaleString(),
-                        ]
-                          .filter(Boolean)
-                          .join(" · ")}
-                      </span>
+              {recent.map((item) => (
+                <li
+                  key={item.key}
+                  className="flex items-center justify-between gap-2"
+                >
+                  <span className="min-w-0">
+                    <span className="block truncate">{label(item)}</span>
+                    <span className="block text-body-sm text-subtle">
+                      {[activity(item.key), new Date(item.at).toLocaleString()]
+                        .filter(Boolean)
+                        .join(" · ")}
                     </span>
-                    <Button
-                      variant="ghost"
-                      onClick={() => setOpen(conversation)}
-                    >
-                      View transcript
-                    </Button>
-                  </li>
-                );
-              })}
+                  </span>
+                  <Button variant="ghost" onClick={() => show(item)}>
+                    View transcript
+                  </Button>
+                </li>
+              ))}
             </ul>
           ) : (
             <p className="m-0 text-body-sm text-subtle">
@@ -319,6 +324,19 @@ export function createTabs({
             </p>
           )}
         </section>
+        {open && (
+          <PanelSubview
+            title={label(open)}
+            backLabel="Back to profile"
+            onBack={back}
+          >
+            <TranscriptView
+              agent={agent}
+              conversation={open}
+              working={busy.get(open.key) ?? false}
+            />
+          </PanelSubview>
+        )}
       </div>
     );
   }

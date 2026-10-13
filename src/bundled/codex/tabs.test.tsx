@@ -6,6 +6,7 @@ import {
   render,
   screen,
   waitFor,
+  within,
 } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
@@ -13,8 +14,11 @@ import type { AgentViewProps } from "../../features/agents/service";
 import type { HostProcessOptions } from "../../features/host/service";
 import type { RelayData } from "../../features/relay/service";
 import { defaults, type Config } from "./config";
+import { PanelSubviewHost } from "../../features/panels/PanelSubview";
+import { PanelWorkspace } from "../../features/panels/PanelWorkspace";
 import { createTabs } from "./tabs";
 import { CodexRuntime } from "./runtime";
+import { sessionTag } from "./prompt";
 import type { Wire } from "./rpc";
 function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -46,6 +50,8 @@ async function choose(label: string, option: string) {
 function fixture(
   saved: Record<string, unknown> = {},
   turns: (threadId: string) => Wire = () => ({ result: { data: [] } }),
+  /** What `thread/list` finds, or the error message it fails with. */
+  threads: { id: string; name: string; updatedAt: number }[] | string = [],
 ) {
   const processes: { end: ReturnType<typeof vi.fn> }[] = [];
   const spawn = vi.fn(async (_id: string, options?: HostProcessOptions) => {
@@ -59,6 +65,17 @@ function fixture(
           const reply = turns((wire.params as { threadId: string }).threadId);
           options?.onStdout?.(`${JSON.stringify({ id: wire.id, ...reply })}\n`);
           return;
+        }
+        if (wire.method === "thread/list") {
+          const { searchTerm } = wire.params as { searchTerm: string };
+          if (typeof threads === "string") {
+            const error = { code: -32603, message: threads };
+            options?.onStdout?.(`${JSON.stringify({ id: wire.id, error })}\n`);
+            return;
+          }
+          result = {
+            data: threads.filter((thread) => thread.name.includes(searchTerm)),
+          };
         }
         if (wire.method === "account/read")
           result = { account: { type: "chatgpt", email: "test@example.com" } };
@@ -360,19 +377,205 @@ it("lists saved conversations and shows one's Codex thread, or that Codex no lon
             error: { code: -32600, message: `thread not loaded: ${threadId}` },
           },
   );
-  render(<f.tabs.CodexTab {...f.props()} />);
+  render(
+    <PanelSubviewHost close={vi.fn()}>
+      <f.tabs.CodexTab {...f.props()} />
+    </PanelSubviewHost>,
+  );
+  const user = userEvent.setup();
   const viewButton = (index: number) =>
     screen.getAllByRole("button", { name: "View transcript" })[
       index
     ] as HTMLElement;
   expect(screen.getByText(/#general · thread eeeeeeee/)).toBeVisible();
-  fireEvent.click(viewButton(0));
+  const opened = viewButton(0);
+  await user.click(opened);
   expect(await screen.findByText("what changed?")).toBeVisible();
   expect(screen.getByText("Two files.")).toBeVisible();
-  fireEvent.click(screen.getByRole("button", { name: "Back" }));
-  fireEvent.click(viewButton(1));
+  // The transcript covers the tab, and Back returns focus to what opened it.
+  const back = screen.getByRole("button", { name: "Back to profile" });
+  expect(back).toHaveFocus();
+  await user.click(back);
+  expect(opened).toHaveFocus();
+  await user.click(viewButton(1));
   expect(
     await screen.findByText(/Codex has no history for this conversation/),
   ).toBeVisible();
   expect(screen.queryByRole("alert")).toBeNull();
+});
+
+it("sets the conversation the profile was opened from apart from the recent ones", async () => {
+  const root = "e".repeat(64);
+  const f = fixture(
+    {
+      [JSON.stringify(["channel", "channel"])]: {
+        threadId: "channel-thread",
+        workspace: "/w",
+        at: 1,
+      },
+      [JSON.stringify(["channel", root])]: {
+        threadId: "kept",
+        workspace: "/w",
+        at: 2,
+      },
+    },
+    () => ({ result: { data: [], nextCursor: null } }),
+  );
+  const here = (conversation: { channelId: string; rootId?: string }) =>
+    render(<f.tabs.CodexTab {...f.props()} conversation={conversation} />);
+  const opened = (name: string) =>
+    screen.getByRole("region", { name }) as HTMLElement;
+  here({ channelId: "channel", rootId: root });
+  expect(opened("This thread")).toHaveTextContent("#general");
+  expect(screen.queryByText(/thread eeeeeeee/)).toBeNull();
+  expect(screen.getByText(/#general · channel/)).toBeVisible();
+  fireEvent.click(
+    within(opened("This thread")).getByRole("button", {
+      name: "View transcript",
+    }),
+  );
+  expect(
+    await screen.findByRole("heading", { name: "#general · thread eeeeeeee" }),
+  ).toBeVisible();
+  cleanup();
+  // A thread without its own session falls back to the channel's, once
+  // Codex has no thread for it either.
+  here({ channelId: "channel", rootId: "f".repeat(64) });
+  expect(opened("This thread")).toHaveTextContent(
+    "Looking for a Codex session…",
+  );
+  expect(
+    await screen.findByRole("region", { name: "This channel" }),
+  ).toHaveTextContent("#general");
+  expect(screen.getByText(/#general · thread eeeeeeee/)).toBeVisible();
+  cleanup();
+  here({ channelId: "elsewhere", rootId: root });
+  await waitFor(() =>
+    expect(opened("This thread")).toHaveTextContent(
+      "No Codex session here yet",
+    ),
+  );
+  expect(
+    screen.getAllByRole("button", { name: "View transcript" }),
+  ).toHaveLength(2);
+});
+
+it("brings an open transcript's tab back, and closes it for good when the profile is opened from elsewhere", async () => {
+  const root = "e".repeat(64);
+  const f = fixture(
+    {
+      [JSON.stringify(["channel", root])]: {
+        threadId: "kept",
+        workspace: "/w",
+        at: 2,
+      },
+    },
+    () => ({ result: { data: [], nextCursor: null } }),
+  );
+  const Panel = ({
+    conversation,
+  }: {
+    conversation: { channelId: string; rootId?: string };
+  }) => (
+    <PanelWorkspace
+      value="profile"
+      select={() => undefined}
+      items={[
+        {
+          id: "profile",
+          label: "Sol",
+          close: () => undefined,
+          content: (
+            <f.tabs.CodexTab {...f.props()} conversation={conversation} />
+          ),
+        },
+      ]}
+    />
+  );
+  const user = userEvent.setup();
+  const view = render(
+    <Panel conversation={{ channelId: "channel", rootId: root }} />,
+  );
+  const tab = (name: string) => screen.getByRole("tab", { name });
+  const viewHere = () =>
+    user.click(
+      within(screen.getByRole("region", { name: "This thread" })).getByRole(
+        "button",
+        { name: "View transcript" },
+      ),
+    );
+  const transcript = "#general · thread eeeeeeee";
+  await viewHere();
+  expect(tab(transcript)).toHaveAttribute("aria-selected", "true");
+  await user.click(tab("Sol"));
+  await viewHere();
+  expect(tab(transcript)).toHaveAttribute("aria-selected", "true");
+  view.rerender(<Panel conversation={{ channelId: "channel" }} />);
+  expect(screen.queryByRole("tab", { name: transcript })).toBeNull();
+  expect(tab("Sol")).toHaveAttribute("aria-selected", "true");
+  // Back in the first conversation, it stays closed until viewed again.
+  view.rerender(
+    <Panel conversation={{ channelId: "channel", rootId: root }} />,
+  );
+  expect(screen.queryByRole("tab", { name: transcript })).toBeNull();
+  await viewHere();
+  expect(tab(transcript)).toHaveAttribute("aria-selected", "true");
+});
+
+it("finds the thread's Codex thread another build of the app started", async () => {
+  const root = "f".repeat(64);
+  const tag = sessionTag("a".repeat(64), { channelId: "channel", root });
+  const f = fixture(
+    {},
+    (threadId) => ({
+      result: {
+        data:
+          threadId === "elsewhere"
+            ? [
+                {
+                  id: "turn-1",
+                  status: "completed",
+                  error: null,
+                  startedAt: 1,
+                  completedAt: 2,
+                  items: [
+                    {
+                      type: "userMessage",
+                      id: "u",
+                      content: [
+                        { type: "text", text: 'Request: "what changed?"' },
+                      ],
+                    },
+                  ],
+                },
+              ]
+            : [],
+        nextCursor: null,
+      },
+    }),
+    [{ id: "elsewhere", name: `Buzz #general · Sol · ${tag}`, updatedAt: 5 }],
+  );
+  render(
+    <f.tabs.CodexTab
+      {...f.props()}
+      conversation={{ channelId: "channel", rootId: root }}
+    />,
+  );
+  const opened = screen.getByRole("region", { name: "This thread" });
+  fireEvent.click(
+    await within(opened).findByRole("button", { name: "View transcript" }),
+  );
+  expect(await screen.findByText("what changed?")).toBeVisible();
+});
+
+it("says when looking for another build's thread failed", async () => {
+  const f = fixture({}, undefined, "database is locked");
+  render(
+    <f.tabs.CodexTab {...f.props()} conversation={{ channelId: "channel" }} />,
+  );
+  expect(
+    await within(
+      screen.getByRole("region", { name: "This channel" }),
+    ).findByRole("alert"),
+  ).toHaveTextContent("Could not look for a Codex session: database is locked");
 });

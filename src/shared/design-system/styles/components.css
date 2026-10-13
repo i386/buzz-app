@@ -2,11 +2,6 @@
 @import "./tab-drag.css";
 
 @layer components {
-  /* Optical alignment: lift Robot face artwork without moving its layout box. */
-  .tabler-icon-robot-face {
-    translate: 0 -1px;
-  }
-
   .buzz-button {
     position: relative;
     display: inline-flex;

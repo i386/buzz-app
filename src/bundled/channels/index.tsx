@@ -3,14 +3,9 @@ import { channelQuery } from "./channel-query";
 import { isChannelRoute } from "../../features/channel-navigation/routes";
 import type { PluginModule } from "../../plugins/api";
 import { ChannelsPage } from "./ChannelsPage";
-import { ChannelSetupSettings } from "./ChannelSetupSettings";
 import { ChannelTemplateSettings } from "./ChannelTemplateSettings";
 import { MessageSettings } from "./MessageSettings";
-import {
-  ChatCircleIcon,
-  CopyIcon,
-  FolderSimpleIcon,
-} from "../../shared/design-system/icons";
+import { ChatCircleIcon, CopyIcon } from "../../shared/design-system/icons";
 export const inject = [
   "pages",
   "relay",
@@ -38,14 +33,6 @@ export const apply: PluginModule["apply"] = (ctx) => {
     title: "Messages",
     icon: ChatCircleIcon,
     component: MessageSettings,
-  });
-  ctx.settingsCards.register({
-    id: "groups",
-    title: "Personal groups",
-    icon: FolderSimpleIcon,
-    component: ({ active }) => (
-      <ChannelSetupSettings relay={relay} active={active} />
-    ),
   });
   ctx.settingsCards.register({
     id: "templates",

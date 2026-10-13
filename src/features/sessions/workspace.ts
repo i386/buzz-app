@@ -161,12 +161,12 @@ export function sectionDefault(
 ) {
   const override = templateEntry(entries, overrideId);
   if (override?.record.value.type === "template") return override.record.value;
-  const groups = entries.find(
-    (entry) =>
-      !entry.record.deleted &&
-      entry.record.value.type === "groups" &&
-      entry.record.value.id === (personal ? "me" : "personal"),
-  )?.record.value;
+  const groups = personal
+    ? entries.find(
+        (entry) =>
+          !entry.record.deleted && entry.record.value.type === "groups",
+      )?.record.value
+    : undefined;
   const defaultId =
     groups?.type === "groups"
       ? groups.groups.find((group) => group.id === sectionId)?.defaultTemplateId

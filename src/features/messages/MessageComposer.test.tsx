@@ -974,6 +974,9 @@ async function mountUploadComposer(
     editable?: boolean;
     media?: (url: string) => string | undefined;
     extensions?: MessageComposerProps["extensions"];
+    agents?: Agents;
+    /** Channel members besides the viewer; only members can be mentioned. */
+    members?: readonly string[];
   } = {},
 ) {
   vi.stubGlobal(
@@ -1021,7 +1024,14 @@ async function mountUploadComposer(
               ? [roster(relay, "other", other.members, other.time)]
               : [metadata(relay, "other", "Random", other.time)]
             : filter.kinds?.includes(39002)
-              ? [roster(relay, "channel", [viewer.pubkey], 1700000000)]
+              ? [
+                  roster(
+                    relay,
+                    "channel",
+                    [viewer.pubkey, ...(options.members ?? [])],
+                    1700000000,
+                  ),
+                ]
               : filter.kinds?.includes(39000)
                 ? [metadata(relay, "channel", "General", 1700000000)]
                 : [],
@@ -1051,17 +1061,21 @@ async function mountUploadComposer(
   );
   const scope = `https://relay.example.test:${viewer.pubkey}`;
   const view = render(
-    <MessageComposer
-      session={owner.session}
-      scope={scope}
-      channelId="channel"
-      channelName="General"
-      {...(options.extensions ? { extensions: options.extensions } : {})}
-      {...(options.threadRootId ? { threadRootId: options.threadRootId } : {})}
-      {...(options.replyParentId
-        ? { replyParentId: options.replyParentId }
-        : {})}
-    />,
+    <AgentsContext.Provider value={options.agents}>
+      <MessageComposer
+        session={owner.session}
+        scope={scope}
+        channelId="channel"
+        channelName="General"
+        {...(options.extensions ? { extensions: options.extensions } : {})}
+        {...(options.threadRootId
+          ? { threadRootId: options.threadRootId }
+          : {})}
+        {...(options.replyParentId
+          ? { replyParentId: options.replyParentId }
+          : {})}
+      />
+    </AgentsContext.Provider>,
     { reactStrictMode: true, wrapper: ToastProvider },
   );
   const input = () => within(view.container).getByRole("textbox");
@@ -1210,6 +1224,128 @@ it("restores a failed background upload into the composer with Desktop's toast",
     ).not.toBeInTheDocument(),
   );
 });
+
+// Remounting after the failure covers the usual leave-and-return case: the
+// recovery lands with no mounted listener and must wait for the composer.
+it.each(["never", "before the failure", "after the failure"])(
+  "restores the model and effort picks of a failed background upload (remounted: %s)",
+  async (remounted) => {
+    // Snapshots are stable, as the service's are.
+    const snapshot = {
+      status: "ready",
+      agents: [{ pubkey: first.pubkey, name: "Honey", type: "test/agent" }],
+    };
+    const models = {
+      current: "fast",
+      models: [
+        {
+          id: "fast",
+          label: "Fast",
+          efforts: [
+            { id: "low", label: "Low" },
+            { id: "high", label: "High" },
+          ],
+        },
+      ],
+    };
+    const types = [{ key: "test/agent", models: () => models }];
+    const agents = {
+      subscribe: () => () => {},
+      snapshot: () => snapshot,
+      types: () => types,
+    } as unknown as Agents;
+    const tools: readonly Contribution<ComposerTool>[] = [
+      {
+        id: "fixture",
+        key: "test/fixture",
+        pluginId: "test",
+        revision: "1",
+        title: "Fixture tools",
+        component: (props: ComposerToolProps) => (
+          <button type="button" onClick={() => props.insertMention(first)}>
+            First Honey
+          </button>
+        ),
+      },
+    ];
+    const extensions = {
+      tools: { snapshot: () => tools, subscribe: () => () => {} },
+      inline: { snapshot: () => [], subscribe: () => () => {} },
+    };
+    const h = await mountUploadComposer({
+      agents,
+      members: [first.pubkey],
+      extensions,
+    });
+    const picker = () =>
+      screen.findByRole("button", {
+        name: "Model and effort for the next run",
+      });
+    attachByPaste(h.input(), attachmentFile("tuned.txt"));
+    await userEvent.type(h.input(), "think hard");
+    await userEvent.click(screen.getByRole("button", { name: "First Honey" }));
+    await userEvent.click(await picker());
+    const slider = await screen.findByLabelText("Effort for Honey's next run");
+    slider.focus();
+    await userEvent.keyboard("{ArrowRight}");
+    expect(slider).toHaveAttribute("aria-valuetext", "High");
+    await userEvent.keyboard("{Escape}");
+    fireEvent.click(h.send());
+    await waitFor(() => expect(h.uploadCalls).toHaveLength(1));
+
+    let container = h.container;
+    if (remounted !== "never") h.unmount();
+    const remount = () => {
+      container = render(
+        <AgentsContext.Provider value={agents}>
+          <MessageComposer
+            session={h.owner.session}
+            scope={h.scope}
+            channelId="channel"
+            channelName="General"
+            extensions={extensions}
+          />
+        </AgentsContext.Provider>,
+        { wrapper: ToastProvider },
+      ).container;
+    };
+    if (remounted === "before the failure") remount();
+    await act(async () => {
+      h.uploadCalls[0]?.result.reject(new Error("offline"));
+    });
+    if (remounted === "after the failure") remount();
+    const input = () => within(container).getByRole("textbox");
+    await waitFor(() => expect(input()).toHaveValue("think hard@Honey "));
+    expect(within(container).getByText("tuned.txt")).toBeVisible();
+    // The restored draft brings its pick back with it, not the default run.
+    const button = await picker();
+    expect(button).toHaveAttribute("data-selected");
+    await userEvent.hover(button);
+    expect(await screen.findByRole("tooltip")).toHaveTextContent(
+      "Next run: High",
+    );
+    await userEvent.unhover(button);
+    expect(h.publish).not.toHaveBeenCalled();
+
+    await userEvent.click(
+      screen.getByRole("button", { name: "Retry tuned.txt" }),
+    );
+    fireEvent.click(
+      within(container).getByRole("button", { name: "Send message" }),
+    );
+    await waitFor(() => expect(h.uploadCalls).toHaveLength(2));
+    await act(async () => {
+      h.uploadCalls[1]?.result.resolve(uploadDescriptor("tuned.txt"));
+    });
+    await waitFor(() => expect(h.publish).toHaveBeenCalledTimes(1));
+    expect(h.publish.mock.calls[0]?.[0].tags).toEqual(
+      expect.arrayContaining([
+        ["p", first.pubkey],
+        ["effort", first.pubkey, "high"],
+      ]),
+    );
+  },
+);
 
 it.each(["cleanup", "restore"] as const)(
   "retains a failed attachment send until %s storage recovers",

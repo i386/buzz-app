@@ -11,7 +11,12 @@
         "args": ["-c", "curl -fsSL https://claude.ai/install.sh | bash"]
       },
       { "id": "read", "program": "base64", "args": ["-i"] },
-      { "id": "workspace", "program": "pwd" }
+      { "id": "workspace", "program": "pwd" },
+      {
+        "id": "find",
+        "program": "grep",
+        "args": ["-rlF", "--include=*.jsonl", "-e"]
+      }
     ]
   }
 }

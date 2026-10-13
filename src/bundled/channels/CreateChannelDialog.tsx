@@ -1,4 +1,3 @@
-import type { Groups, Group } from "../../features/channel-templates/model";
 import type { ChannelCreationInput } from "../../features/channel-templates/setup";
 import type { RelaySession } from "../../features/relay/session";
 import type { Agents } from "../../features/agents/service";
@@ -45,9 +44,11 @@ type Props = {
   session: RelaySession;
   /** Supplies the agents and teams a template adds. */
   agents?: Agents | undefined;
-  groups: Groups | undefined;
-  destinations?: readonly (Pick<Group, "id" | "name"> & { icon?: string })[];
-  groupSource?: "legacy";
+  destinations: readonly Readonly<{
+    id: string;
+    name: string;
+    icon?: string;
+  }>[];
   initialGroup: string;
   groupsReady: boolean;
 };
@@ -63,9 +64,7 @@ function OpenCreateChannelDialog({
   finalFocus,
   session,
   agents,
-  groups,
-  destinations = groups?.groups ?? [],
-  groupSource,
+  destinations,
   initialGroup,
   groupsReady,
 }: Props) {
@@ -215,7 +214,6 @@ function OpenCreateChannelDialog({
                   canvas: templateSetup?.canvas ?? "",
                   groupId,
                   templateId,
-                  ...(groupId && groupSource ? { groupSource } : {}),
                 },
               }
             : {}),

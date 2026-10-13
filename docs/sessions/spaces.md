@@ -144,5 +144,5 @@ native process restarts require coordination; no live migration is authorized he
 - [Buzz vision: access](https://github.com/block/buzz/blob/main/VISION.md#access)
 - Current app owners: `src/features/sessions/personal.ts`,
   `src/features/relay/discovery.ts`, `src/features/relay/work-sessions.ts`,
-  `src/features/relay/sidebar-personal-groups.ts`,
+  `src/features/relay/me-preferences.ts`,
   `src/features/channel-templates/model.ts`, `src-tauri/src/relay/kit.rs`.

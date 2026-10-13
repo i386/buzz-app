@@ -11,6 +11,7 @@ import {
   MessageManagementStatus,
 } from "../../features/messages/MessageManagement";
 import { ThreadPanel } from "../../features/messages/ThreadPanel";
+import type { MessageLinkOrigin } from "../../features/messages/MessageRow";
 import { MediaReviewViewer } from "../../features/messages/MediaReviewViewer";
 import { rejectUnhandledFileDrop } from "../../features/messages/use-file-drop";
 import { ChannelBody } from "./ChannelBody";
@@ -30,7 +31,7 @@ type ConversationTabProps = {
   session: RelaySession;
   scope: string;
   extensions?: ConversationExtensions | undefined;
-  openLink(target: string): boolean;
+  openLink(target: string, origin?: MessageLinkOrigin): boolean;
   canOpenLink(target: string): boolean;
   openThread(messageId: string, rootId: string, intent?: "reply"): void;
   close(): void;

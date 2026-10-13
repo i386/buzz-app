@@ -1418,6 +1418,16 @@ Keep the public gateway names stable. For chat and conversation metaphors, use
 the variant that matches the meaning. Keep accessible names on controls and
 decorative artwork hidden from assistive technology.
 
+`RobotIcon` is the designer-approved **Soft & wide** custom agent mark, using the
+**Fuller canvas** refinement: a larger rounded head, short antenna, narrow ear
+strokes moved inward to meet the head, and filled dot eyes, with no mouth. The
+artwork fills more of the same icon box without widening the ears or adding fill
+between them and the head. It uses Tabler's 24-unit canvas, round caps and default
+stroke width of 2. Use the
+existing gateway export for agent mentions, navigation and placeholders; retain
+its inherited color, relative sizing and decorative-by-default semantics. This
+is a specific product-mark exception, not another general icon family.
+
 OneDrive is a designer-approved custom brand mark: its complete outline is recreated on
 Phosphor’s square canvas, uses the same current-color and sizing behavior, and stays in
 the shared icon gateway. It does not permit another general icon library.

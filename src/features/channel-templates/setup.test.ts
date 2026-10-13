@@ -214,7 +214,7 @@ it("opens after confirmed creation, before Canvas completes; places independentl
   const run = f.setup.run(input, viewer.pubkey);
   const id = await run.admission;
   await reached.promise;
-  expect(f.opts.place).toHaveBeenCalledWith(id, "work", undefined);
+  expect(f.opts.place).toHaveBeenCalledWith(id, "work");
   expect(f.events.map((e) => e.event.kind)).toEqual([9007, 40100]);
   expect(f.events[1]?.event.tags).toEqual([
     ["h", id],
@@ -298,7 +298,7 @@ it("Canvas failure does not lose group placement or turn admission into failure"
   const failure = expect(run.completion).rejects.toThrow("Canvas unconfirmed");
   const id = await run.admission;
   await failure;
-  expect(f.opts.place).toHaveBeenCalledWith(id, "work", undefined);
+  expect(f.opts.place).toHaveBeenCalledWith(id, "work");
   expect(f.events.map((e) => e.event.kind)).toEqual([9007, 40100]);
   expect(receipts()).toHaveLength(1);
 });

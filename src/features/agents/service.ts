@@ -150,8 +150,17 @@ export type AgentChange<Config = unknown> = Readonly<{
 export type AgentPeekProps<Config = unknown> = { agent: Agent<Config> };
 /** What each of a type's settings tabs receives. A type writes only its own
  * config; the app owns the name and attention. */
+/** The message's conversation a profile was opened from: its channel, and its
+ * thread root when the message had one. Which session that is stays the type's
+ * own rule. */
+export type AgentConversation = Readonly<{
+  channelId: string;
+  rootId?: string;
+}>;
 export type AgentViewProps<Config = unknown> = {
   agent: Agent<Config>;
+  /** Where the agent was opened from, when it was opened from a conversation. */
+  conversation?: AgentConversation;
   /** Replaces the type's whole config. Spread `agent.config` to change one
    * field, or tabs that each save a part will erase each other's fields. A
    * hosted type's tabs save to its provider instead; for them this rejects. */

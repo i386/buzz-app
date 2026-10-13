@@ -79,6 +79,16 @@ export function exactLifecycleTag(event: RelayEvent, name: string) {
   return matches[0]?.[1];
 }
 
+/**
+ * The channel type of relay-signed channel state. NIP-CL puts the type in
+ * the first `t` tag; later `t` tags are channel labels, not a second type.
+ */
+export function channelTypeTag(event: RelayEvent) {
+  const first = event.tags.find(([key]) => key === "t");
+  if (first && first.length !== 2) throw new Error("Malformed channel t state");
+  return first?.[1];
+}
+
 export function lifecycleRecord(
   events: readonly RelayEvent[],
   kind: number,
@@ -118,7 +128,7 @@ export function lifecycleSettings(
   const roster = lifecycleRecord(events, 39002, id, relayAuthor);
   if (!metadata || !admins || !roster)
     throw new Error("Current channel permissions could not be verified");
-  const type = exactLifecycleTag(metadata, "t");
+  const type = channelTypeTag(metadata);
   if (type !== "stream" && type !== "forum" && type !== "dm")
     throw new Error("Current channel type could not be verified");
   const members = new Set<string>();

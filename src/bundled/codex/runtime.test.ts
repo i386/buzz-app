@@ -47,6 +47,8 @@ function fixture(
   let thread = 0;
   let turn = 0;
   const sent: Wire[] = [];
+  /** Methods the server answers with a JSON-RPC error instead of a result. */
+  const failing = new Set<string>();
   const toolCalls = new Map<
     number | string,
     { threadId: string | undefined; turnId: string; callId: string }
@@ -75,6 +77,13 @@ function fixture(
         return;
       }
       if (request.id == null) return;
+      if (request.method && failing.has(request.method)) {
+        emit({
+          id: request.id,
+          error: { message: `${request.method} failed` },
+        });
+        return;
+      }
       const params = request.params as Record<string, unknown>;
       let result: unknown = {};
       if (request.method === "model/list")
@@ -397,6 +406,7 @@ function fixture(
     spawn,
     process,
     sent,
+    failing,
     emit,
     publish,
     read,
@@ -433,6 +443,9 @@ it("hands over promptly and runs conversations independently on one server", asy
   });
   expect(started.baseInstructions).toBeUndefined();
   expect(started.developerInstructions).toContain("coding agent in Buzz");
+  expect(started.developerInstructions).toContain(
+    "Never publish a bare acknowledgement.",
+  );
   expect(started.developerInstructions).toContain(BUZZ_PROMPT);
   expect(f.starts()[0]?.params).toMatchObject({
     additionalContext: {
@@ -455,6 +468,15 @@ it("hands over promptly and runs conversations independently on one server", asy
     additionalContext: {
       "buzz.instructions": {
         value: expect.not.stringContaining("<team>"),
+      },
+    },
+  });
+  expect(f.starts()[1]?.params).toMatchObject({
+    additionalContext: {
+      "buzz.instructions": {
+        value: expect.stringContaining(
+          "Read your `core` memory with `mem_get` at the start of a session",
+        ),
       },
     },
   });
@@ -593,6 +615,71 @@ it("ends a stopped agent's leftover shells and lets it start again only after le
     "SERVER RUNNING",
     "BACK",
   ]);
+});
+it("logs a failed idle terminal clean without ending the shared server or blocking the agent's return", async () => {
+  const f = fixture([{ processId: "dev-server" }]);
+  const b = second(f);
+  await f.runtime.run(f.delivery("work"));
+  await f.runtime.run(b.delivery("start a dev server"));
+  await vi.waitFor(() => expect(f.starts()).toHaveLength(2));
+  const thread = (f.starts()[1]?.params as { threadId: string } | undefined)
+    ?.threadId;
+  await f.complete(1, "SERVER RUNNING");
+  await vi.waitFor(() => expect(b.agent.publish).toHaveBeenCalledTimes(1));
+  f.failing.add("thread/backgroundTerminals/clean");
+  const error = vi.spyOn(console, "error").mockImplementation(() => {});
+  f.runtime.sync([{ pubkey } as Agent]);
+  await vi.waitFor(() =>
+    expect(error).toHaveBeenCalledWith(
+      "Codex could not clean a stopped agent's terminals",
+      new Error("thread/backgroundTerminals/clean failed"),
+    ),
+  );
+  error.mockRestore();
+  expect(
+    f.sent.find((wire) => wire.method === "thread/backgroundTerminals/clean")
+      ?.params,
+  ).toMatchObject({ threadId: thread });
+  expect(f.process.end).not.toHaveBeenCalled();
+  await f.complete(0, "STILL HERE");
+  await vi.waitFor(() => expect(f.publish).toHaveBeenCalledTimes(1));
+  expect(contents(f.publish)).toEqual(["STILL HERE"]);
+  f.runtime.sync([{ pubkey } as Agent, { pubkey: "9".repeat(64) } as Agent]);
+  await f.runtime.run(b.delivery("back"));
+  await vi.waitFor(() => expect(f.starts()).toHaveLength(3));
+  expect(
+    f.sent.find((wire) => wire.method === "thread/resume")?.params,
+  ).toMatchObject({ threadId: thread });
+  await f.complete(2, "BACK");
+  await vi.waitFor(() => expect(b.agent.publish).toHaveBeenCalledTimes(2));
+  expect(contents(b.agent.publish as never)).toEqual([
+    "SERVER RUNNING",
+    "BACK",
+  ]);
+});
+it("does not clean or log a cleanup error after the last agent closes the server", async () => {
+  const f = fixture([{ processId: "dev-server" }]);
+  await f.runtime.run(f.delivery("start a dev server"));
+  await vi.waitFor(() => expect(f.starts()).toHaveLength(1));
+  await f.complete(0, "SERVER RUNNING");
+  await vi.waitFor(() =>
+    expect(f.runtime.sessions(pubkey)[0]?.status).toBe("Idle"),
+  );
+  const error = vi.spyOn(console, "error").mockImplementation(() => {});
+  vi.useFakeTimers();
+  try {
+    f.runtime.sync([]);
+    await vi.runAllTimersAsync();
+    expect(f.process.end).toHaveBeenCalledTimes(1);
+    expect(
+      f.sent.some((wire) => wire.method === "thread/backgroundTerminals/clean"),
+    ).toBe(false);
+    expect(error).not.toHaveBeenCalled();
+    expect(f.runtime.sessions(pubkey)).toHaveLength(0);
+  } finally {
+    vi.useRealTimers();
+    error.mockRestore();
+  }
 });
 it("reopens the shared server after it exits", async () => {
   const f = fixture();

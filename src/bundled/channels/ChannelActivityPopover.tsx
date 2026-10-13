@@ -244,8 +244,8 @@ export function ChannelActivityPopover({
   const keyLabels = publicKeyLabels(activeAgents);
   const hasActivity = items.length > 0 || activeAgents.length > 0;
   useEffect(() => {
-    if (!hasActivity) setOpen(false);
-  }, [hasActivity]);
+    if (!hasActivity && open) actions.current?.close();
+  }, [hasActivity, open]);
   const stale = items.length > 0 && snapshot.freshness === "stale";
   // Row actions close through Base UI so its hover/press state resets; the
   // sidebar trigger stays mounted after the navigation they start.

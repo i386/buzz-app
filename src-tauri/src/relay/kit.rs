@@ -182,12 +182,7 @@ fn record(raw: &Value, community: &str) -> Result<String> {
                 && text(value.get("description"), 1000, false)
         }
         "groups" => {
-            let fields: &[&str] = if id == "me" {
-                &["type", "id", "groups", "assignments", "channels"]
-            } else {
-                &["type", "id", "groups", "assignments"]
-            };
-            if !matches!(id, "personal" | "me") || !only(value, fields) {
+            if id != "me" || !only(value, &["type", "id", "groups", "assignments", "channels"]) {
                 return Err("Invalid channel recipe".into());
             }
             if let Some(channels) = value.get("channels") {

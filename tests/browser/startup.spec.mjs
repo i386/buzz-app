@@ -471,56 +471,6 @@ test("cached workspace remains usable when live reconnect stalls", async ({
   }
 });
 
-test.describe("personal sidebar startup", () => {
-  test.use({ personalSidebar: true });
-  test("keeps opted-in groups through cached launch and live promotion", async ({
-    page,
-    app,
-  }) => {
-    await page.goto(app.origin);
-    await page.getByRole("button", { name: "Alpha", exact: true }).click();
-    await expect(
-      page.getByRole("textbox", { name: "Message #Alpha", exact: true }),
-    ).toBeEditable();
-    const group = page.getByText("Personal work", { exact: true });
-    await expect(group).toBeVisible();
-    await expect
-      .poll(async () =>
-        (await cached(page)).startup.some(
-          (r) => r.data.preferences?.data.groupSource === "personal",
-        ),
-      )
-      .toBe(true);
-    const gate = held();
-    let requested = false;
-    await page.route("**/api/relay/*/session", async (route) => {
-      requested = true;
-      await gate.promise;
-      await route.fallback();
-    });
-    try {
-      await page.reload({ waitUntil: "domcontentloaded" });
-      await expect.poll(() => requested).toBe(true);
-      await expect(group).toBeVisible();
-      await expect(page.getByText("Work", { exact: true })).toHaveCount(0);
-      gate.release();
-      await expect(
-        page.getByRole("textbox", { name: "Message #Alpha", exact: true }),
-      ).toBeEditable();
-      await expect(group).toBeVisible();
-      await expect
-        .poll(async () =>
-          (await cached(page)).startup.some(
-            (r) => r.data.preferences?.data.groupSource === "personal",
-          ),
-        )
-        .toBe(true);
-    } finally {
-      gate.release();
-    }
-  });
-});
-
 test.describe("populated device cache", () => {
   const channels = [
     "alpha",

@@ -5,7 +5,12 @@
 import type { ReactNode } from "react";
 import type { ChannelChoice } from "./attention";
 import { AttentionPanel } from "./AttentionPanel";
-import type { Agent, Agents, RegisteredAgentType } from "./service";
+import type {
+  Agent,
+  AgentConversation,
+  Agents,
+  RegisteredAgentType,
+} from "./service";
 
 export type AgentSection = Readonly<{
   /** `agent:<type tab id>` or `agent:attention`; never collides with a host tab. */
@@ -19,11 +24,13 @@ export function agentSections({
   agent,
   type,
   channels,
+  conversation,
 }: {
   agents: Agents;
   agent: Agent;
   type: RegisteredAgentType | undefined;
   channels: readonly ChannelChoice[];
+  conversation?: AgentConversation | undefined;
 }): readonly AgentSection[] {
   if (agent.place === "elsewhere") return [];
   const tabs = (type?.tabs ?? []).map(
@@ -33,6 +40,7 @@ export function agentSections({
       render: () => (
         <Component
           agent={agent}
+          {...(conversation && { conversation })}
           save={(config) => agents.save(agent.pubkey, { config })}
         />
       ),

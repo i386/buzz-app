@@ -5,12 +5,19 @@ import { ActivityTranscript } from "../../features/agents/ActivityTranscript";
 import { AgentInstructions } from "../../features/agents/AgentInstructions";
 import { CreateCorner } from "../../features/agents/create-card";
 import { ModelPicker } from "../../features/agents/ModelPicker";
+import {
+  OpenedConversation,
+  useOpenedSession,
+  useOpenTranscript,
+} from "../../features/agents/OpenedConversation";
 import type {
   AgentCreateProps,
   AgentViewProps,
 } from "../../features/agents/service";
+import { PanelSubview } from "../../features/panels/PanelSubview";
 import { Button } from "../../shared/design-system/ui/Button";
 import { Field } from "../../shared/design-system/ui/Field";
+import { InlineHeader } from "../../shared/design-system/ui/Header";
 import { Input } from "../../shared/design-system/ui/Input";
 import { Select } from "../../shared/design-system/ui/Select";
 import {
@@ -55,6 +62,8 @@ const message = (error: unknown) =>
   error instanceof Error ? error.message : String(error);
 const label = ({ channelId, name, root }: SavedConversation) =>
   `${name ? `#${name}` : channelId.slice(0, 8)} · ${root ? `thread ${root.slice(0, 8)}` : "channel"}`;
+/** Conversations listed below the one the profile was opened from. */
+const CONVERSATION_LIMIT = 30;
 type Read =
   | { status: "ready"; transcript: CodexTranscript }
   | { status: "missing" }
@@ -165,11 +174,9 @@ export function createTabs(spawn: Spawn, runtime: CodexRuntime) {
   function TranscriptView({
     agent,
     conversation,
-    onBack,
   }: {
     agent: AgentViewProps<Config>["agent"];
     conversation: SavedConversation;
-    onBack(): void;
   }) {
     const [read, setRead] = useState<Read>();
     const [loading, setLoading] = useState(true);
@@ -180,9 +187,9 @@ export function createTabs(spawn: Spawn, runtime: CodexRuntime) {
       setLoading(true);
       void readTranscript(
         spawn,
-        conversation.threadId,
-        conversation,
+        { agent: { pubkey: agent.pubkey, name: agent.name }, ...conversation },
         abort.signal,
+        (pubkey) => runtime.name(agent.pubkey, pubkey),
       )
         .then(
           (transcript): Read =>
@@ -197,13 +204,10 @@ export function createTabs(spawn: Spawn, runtime: CodexRuntime) {
           setLoading(false);
         });
       return () => abort.abort();
-    }, [conversation, attempt]);
+    }, [conversation, agent.pubkey, agent.name, attempt]);
     return (
       <div className="grid gap-4">
-        <div className="flex gap-2">
-          <Button variant="ghost" onClick={onBack}>
-            Back
-          </Button>
+        <div>
           <Button
             variant="ghost"
             loading={loading}
@@ -212,7 +216,6 @@ export function createTabs(spawn: Spawn, runtime: CodexRuntime) {
             Refresh
           </Button>
         </div>
-        <h3 className="m-0 text-body">{label(conversation)}</h3>
         {!read ? (
           <p role="status" className="m-0">
             Reading the Codex session…
@@ -245,7 +248,7 @@ export function createTabs(spawn: Spawn, runtime: CodexRuntime) {
   }
 
   /** Codex on this computer, and what this agent has running. */
-  function CodexTab({ agent }: AgentViewProps<Config>) {
+  function CodexTab({ agent, conversation }: AgentViewProps<Config>) {
     const { data, error, checking, retry } = useCatalog();
     const sessions = useSyncExternalStore(runtime.subscribe, () =>
       runtime.sessions(agent.pubkey),
@@ -253,17 +256,19 @@ export function createTabs(spawn: Spawn, runtime: CodexRuntime) {
     // Read on each render: bindings change as turns start, which also
     // changes the session list this tab subscribes to.
     const conversations = runtime.conversations(agent.pubkey);
-    const [open, setOpen] = useState<SavedConversation>();
-    if (open)
-      return (
-        <TranscriptView
-          agent={agent}
-          conversation={open}
-          onBack={() => setOpen(undefined)}
-        />
-      );
+    const {
+      session: here,
+      searching,
+      error: lookupError,
+    } = useOpenedSession(conversations, conversation, (place, signal) =>
+      runtime.find({ pubkey: agent.pubkey, name: agent.name }, place, signal),
+    );
+    const { open, show, back } = useOpenTranscript(conversation, label);
     const saved = new Set(conversations.map((row) => row.key));
     const views = new Map(sessions.map((view) => [view.key, view]));
+    const recent = conversations
+      .filter((row) => row.key !== here?.key)
+      .slice(0, CONVERSATION_LIMIT);
     const detail = (text: string) => (
       <pre className="m-0 max-h-48 overflow-auto whitespace-pre-wrap text-caption">
         {text}
@@ -299,9 +304,20 @@ export function createTabs(spawn: Spawn, runtime: CodexRuntime) {
             in a terminal if needed.
           </p>
         </section>
+        {conversation && (
+          <OpenedConversation
+            conversation={conversation}
+            harness="Codex"
+            session={here}
+            searching={searching}
+            error={lookupError}
+            status={here && views.get(here.key)?.status}
+            onView={() => here && show(here)}
+          />
+        )}
         <section className="grid gap-1">
-          <h3 className="m-0 text-body">Conversations</h3>
-          {conversations.length || sessions.length ? (
+          <InlineHeader title="Recent conversations" />
+          {recent.length || sessions.some((view) => !saved.has(view.key)) ? (
             <ul className="m-0 grid list-none gap-4 p-0">
               {/* Work that failed before Codex started a thread has no binding. */}
               {sessions
@@ -314,17 +330,15 @@ export function createTabs(spawn: Spawn, runtime: CodexRuntime) {
                     {view.detail && detail(view.detail)}
                   </li>
                 ))}
-              {conversations.map((conversation) => {
-                const view = views.get(conversation.key);
+              {recent.map((row) => {
+                const view = views.get(row.key);
                 return (
-                  <li key={conversation.key} className="grid gap-2">
+                  <li key={row.key} className="grid gap-2">
                     <p className="m-0">
-                      {label(conversation)}
+                      {label(row)}
                       {[
                         view?.status,
-                        conversation.at
-                          ? new Date(conversation.at).toLocaleString()
-                          : undefined,
+                        row.at ? new Date(row.at).toLocaleString() : undefined,
                       ]
                         .filter(Boolean)
                         .map((part) => ` · ${part}`)
@@ -332,10 +346,7 @@ export function createTabs(spawn: Spawn, runtime: CodexRuntime) {
                     </p>
                     {view?.detail && detail(view.detail)}
                     <div>
-                      <Button
-                        variant="ghost"
-                        onClick={() => setOpen(conversation)}
-                      >
+                      <Button variant="ghost" onClick={() => show(row)}>
                         View transcript
                       </Button>
                     </div>
@@ -354,6 +365,15 @@ export function createTabs(spawn: Spawn, runtime: CodexRuntime) {
             your messages; timers are not supported yet.
           </p>
         </section>
+        {open && (
+          <PanelSubview
+            title={label(open)}
+            backLabel="Back to profile"
+            onBack={back}
+          >
+            <TranscriptView agent={agent} conversation={open} />
+          </PanelSubview>
+        )}
       </div>
     );
   }

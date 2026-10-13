@@ -17,7 +17,7 @@ import { CreateChannelDialog } from "./CreateChannelDialog";
 let store = createRelaySession(null);
 const setupProps = () => ({
   session: store.session,
-  groups: undefined,
+  destinations: [],
   initialGroup: "",
   groupsReady: true,
 });

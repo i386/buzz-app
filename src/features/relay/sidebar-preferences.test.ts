@@ -1,4 +1,3 @@
-import { TEAM_MANIFEST_TAG } from "../channel-templates/team-payload";
 import {
   fixtureRelayUrl,
   fixtureAliases,
@@ -10,7 +9,6 @@ import type { ViteDevServer } from "vite";
 import { nip44 } from "nostr-tools";
 import { expect, it, vi } from "vitest";
 import { relayBrokerPlugin } from "../../../browser-host/relay-broker.mjs";
-import { KIT_TAG, ME_KIT_TAG } from "../channel-templates/model";
 import { connectBrokerTransport } from "./transport";
 import { createRelaySession } from "./session";
 import {
@@ -111,18 +109,6 @@ it("reads legacy preferences through the production session, transport, and boun
   const upstream = vi.fn<typeof fetch>(async (input, init) => {
     expect(String(input)).toBe("https://primary.example/query");
     const filters = JSON.parse(String(init?.body));
-    // Store selection uses the existing catalog owner, not a wider legacy decoder.
-    if (filters[0]?.["#t"]) {
-      expect(filters).toEqual([
-        {
-          kinds: [30078],
-          authors: [viewer.pubkey],
-          "#t": [KIT_TAG, TEAM_MANIFEST_TAG, ME_KIT_TAG],
-          limit: 500,
-        },
-      ]);
-      return Response.json([]);
-    }
     expect(filters).toEqual([
       {
         kinds: [30078],
@@ -191,7 +177,7 @@ it("reads legacy preferences through the production session, transport, and boun
     });
   try {
     expect(await owner.session.sidebarPreferences.read()).toEqual(expected);
-    expect(upstream).toHaveBeenCalledTimes(2); // Preferences + exact personal catalog.
+    expect(upstream).toHaveBeenCalledOnce();
     result = [
       ...records,
       encrypted("channel-mutes", {

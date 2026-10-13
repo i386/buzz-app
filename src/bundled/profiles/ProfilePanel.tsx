@@ -144,7 +144,15 @@ function ProfileDetails({
   );
   const sections =
     plugin && agents
-      ? agentSections({ agents, ...plugin, channels: channelChoices })
+      ? agentSections({
+          agents,
+          ...plugin,
+          channels: channelChoices,
+          conversation: context && {
+            channelId: context.channelId,
+            ...(context.rootId && { rootId: context.rootId }),
+          },
+        })
       : [];
   // Opened for activity, a plugin agent shows its type's own first tab (its
   // sessions) until the reader picks a tab; harness agents keep Activity.

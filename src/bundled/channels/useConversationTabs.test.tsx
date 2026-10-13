@@ -3,7 +3,11 @@ import { act, cleanup, renderHook } from "@testing-library/react";
 import { afterEach, expect, it } from "vitest";
 import type { RelaySession } from "../../features/relay/session";
 import type { RelayData } from "../../features/relay/service";
-import type { Panels, RegisteredPanel } from "../../features/panels/service";
+import type {
+  PanelContext,
+  Panels,
+  RegisteredPanel,
+} from "../../features/panels/service";
 import { useChannelTabState } from "./useChannelTabState";
 import { useConversationTabs } from "./useConversationTabs";
 
@@ -75,6 +79,61 @@ it("retained offline tabs can close and open threads without activating connecte
   act(() => staleOpen("beta", "another-root", "another-root"));
   const restored = renderHook(() => useChannelTabState(session, "alpha"));
   expect(restored.result.current.tabs).toHaveLength(2);
+});
+
+it("gives a panel the thread its link was opened from, retargeting a reopened tab", () => {
+  const channels = [{ id: "alpha", name: "Alpha" }];
+  const session = {
+    viewer: "viewer",
+    channels: { list: () => ({ channels }) },
+  } as unknown as RelaySession;
+  const panel = { key: "profile", title: "Profile" } as RegisteredPanel;
+  const available = [panel];
+  const panels = {
+    snapshot: () => available,
+    subscribe: () => () => {},
+    resolve: () => panel,
+  } as unknown as Panels;
+  const snapshot = { status: "ready", session };
+  const relay = { snapshot: () => snapshot } as unknown as RelayData;
+  const h = renderHook(() =>
+    useConversationTabs({
+      state: useChannelTabState(session, "alpha"),
+      relay,
+      session,
+      panels,
+      current: channels[0],
+      channels,
+      scope: "scope:viewer",
+      conversationIcon: () => null,
+      leadingIds: [],
+      continuingVisit: true,
+      isLive: () => true,
+      openLink: () => false,
+    }),
+  );
+  const context = () => {
+    const [item] = h.result.current.items;
+    if (!item) throw new Error("no panel tab");
+    return (item.content as { props: { context: PanelContext } }).props.context;
+  };
+  act(() => {
+    h.result.current.openConversationLink("alpha", "buzz://profile", {
+      rootId: "first",
+    });
+  });
+  expect(context()).toMatchObject({ channelId: "alpha", rootId: "first" });
+  act(() => {
+    h.result.current.openConversationLink("alpha", "buzz://profile", {
+      rootId: "second",
+    });
+  });
+  expect(h.result.current.items).toHaveLength(1);
+  expect(context()).toMatchObject({ rootId: "second" });
+  act(() => {
+    h.result.current.openConversationLink("alpha", "buzz://profile");
+  });
+  expect(context()).not.toHaveProperty("rootId");
 });
 
 it("a keyboard move focuses the placed tab at once and never takes focus back later", async () => {

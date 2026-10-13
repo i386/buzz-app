@@ -33,8 +33,6 @@ export type SidebarPreferences = SidebarGroups &
     starred: readonly string[];
     muted: readonly string[];
     sort?: Readonly<Record<string, SidebarSortMode>>;
-    /** Presentation source only; never serialized into legacy preferences. */
-    groupSource?: "personal";
   }>;
 export type SidebarAssignmentIntent = Readonly<{
   channelId: string;
@@ -44,17 +42,10 @@ export type SidebarAssignmentIntent = Readonly<{
 export type SidebarAssignmentMutator = (
   intent: SidebarAssignmentIntent,
   signal: AbortSignal,
-  source?: "personal",
-) => Promise<SidebarGroups>;
-export type SidebarGroupSource = "legacy" | "personal";
-export type SidebarSectionRemovalWriter = (
-  sectionId: string,
-  signal: AbortSignal,
 ) => Promise<SidebarGroups>;
 export type SidebarSectionRemovalMutator = (
   sectionId: string,
   signal: AbortSignal,
-  source: SidebarGroupSource,
 ) => Promise<SidebarGroups>;
 export type SidebarStarMutator = (
   intent: Readonly<{ channelId: string; starred: boolean }>,

@@ -7,14 +7,22 @@ import {
   type KitEntry,
 } from "../channel-templates/model";
 import { createSidebarPreferencesStore } from "./sidebar-preferences-store";
-import { projectPersonalGroups } from "./sidebar-personal-groups";
-import type { SidebarAssignmentIntent } from "./sidebar-preferences";
+import type {
+  SidebarAssignmentIntent,
+  SidebarGroups,
+} from "./sidebar-preferences";
 
 export function meGroups(entries: readonly KitEntry[]) {
   return entries.find(
     (entry) =>
       entry.record.value.type === "groups" && entry.record.value.id === "me",
   );
+}
+function project(groups: Groups): SidebarGroups {
+  return {
+    sections: groups.groups.map(({ id, name }, order) => ({ id, name, order })),
+    assignments: groups.assignments,
+  };
 }
 const empty = (): Groups => ({
   type: "groups",
@@ -119,11 +127,11 @@ export function createMePreferences(kit: ChannelKit, lifetime: AbortSignal) {
       comparable(confirmed.record.value) !== comparable(value)
     )
       throw new Error("Me group changes could not be confirmed");
-    return projectPersonalGroups(value);
+    return project(value);
   }
   const store = createSidebarPreferencesStore(
     async (signal) => ({
-      ...projectPersonalGroups((await current(signal, false)).value),
+      ...project((await current(signal, false)).value),
       starred: [],
       muted: [],
     }),
@@ -155,7 +163,7 @@ export function createMePreferences(kit: ChannelKit, lifetime: AbortSignal) {
           groups === value.groups &&
           value.assignments[intent.channelId] === target
         )
-          return projectPersonalGroups(value);
+          return project(value);
         return save({ ...value, groups, assignments }, entry, active);
       }),
     undefined,
@@ -167,7 +175,7 @@ export function createMePreferences(kit: ChannelKit, lifetime: AbortSignal) {
       serialize(async () => {
         const { value, entry, active } = await current(signal);
         if (!value.groups.some((group) => group.id === id))
-          return projectPersonalGroups(value);
+          return project(value);
         return save(
           {
             ...value,

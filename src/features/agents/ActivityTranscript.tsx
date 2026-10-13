@@ -230,6 +230,9 @@ function Item({
           <ChatCircleIcon size={16} aria-hidden="true" />
           <div className={styles.reply}>
             <strong>{agentName}</strong>
+            {item.posted && (
+              <span className="text-body-sm text-secondary"> · Posted</span>
+            )}
             <Reply text={item.text} />
           </div>
         </div>

@@ -68,15 +68,20 @@ test("keyboard Retry hands off focus while reconnecting a failed Messages tab op
     return route.continue();
   });
   // Start outside Messages so its header activation owns preserve-focus intent.
+  // Settings also reads the community profile through /session, racing this gate.
   await page.goto(
-    `${app.origin}/#buzz=${encodeURIComponent(JSON.stringify({ version: 1, kind: "settings" }))}`,
+    `${app.origin}/#buzz=${encodeURIComponent(JSON.stringify({ version: 1, kind: "page", pluginId: "buzz.me", pageId: "me" }))}`,
   );
+  await expect(
+    page.getByRole("tab", { name: "Me", exact: true }),
+  ).toHaveAttribute("aria-selected", "true");
   const messages = page.getByRole("tab", { name: "Messages", exact: true });
   await messages.focus();
   await messages.press("Enter");
   await expect(
     page.getByRole("heading", { name: "This destination couldn’t open" }),
   ).toBeVisible();
+  expect(requests).toBe(1);
   const visit = await entry(page);
   const retry = button(page, "Retry navigation");
   const main = page.getByRole("main");

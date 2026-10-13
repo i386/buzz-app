@@ -33,10 +33,10 @@ export type Template = Lineup & {
 export type Group = { id: string; name: string; defaultTemplateId: string };
 export type Groups = {
   type: "groups";
-  id: "personal" | "me";
+  id: "me";
   groups: Group[];
   assignments: Record<string, string>;
-  /** Me placement is independent of group membership. Never used by Messages groups. */
+  /** Me placement is independent of group membership. */
   channels?: string[];
 };
 export type KitValue = Team | Template | Groups;
@@ -158,9 +158,9 @@ export function parseKitRecord(raw: unknown, community: string): KitRecord {
       description: text(v.description, 1000),
       ...parseLineup(v),
     };
-  else if (v.type === "groups" && (v.id === "personal" || v.id === "me")) {
+  else if (v.type === "groups" && v.id === "me") {
     if (!Array.isArray(v.groups) || v.groups.length > 100)
-      throw new Error("Too many personal groups");
+      throw new Error("Too many Me groups");
     const groups = v.groups.map((raw) => {
       const g = object(raw);
       return {
@@ -171,7 +171,7 @@ export function parseKitRecord(raw: unknown, community: string): KitRecord {
       };
     });
     if (new Set(groups.map((g) => g.id)).size !== groups.length)
-      throw new Error("Duplicate personal group");
+      throw new Error("Duplicate Me group");
     const assignments = Object.entries(object(v.assignments));
     if (
       assignments.length > 1000 ||
@@ -181,23 +181,17 @@ export function parseKitRecord(raw: unknown, community: string): KitRecord {
           !groups.some((g) => g.id === group),
       )
     )
-      throw new Error("Invalid personal group placement");
-    if (v.id === "personal" && v.channels !== undefined)
-      throw new Error("Messages groups cannot contain Me placement");
+      throw new Error("Invalid Me group placement");
     value = {
       type: "groups",
       id: v.id,
       groups,
       assignments: Object.fromEntries(assignments) as Record<string, string>,
-      ...(v.id === "me"
-        ? {
-            channels: keys(
-              v.channels ?? [],
-              /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/,
-              1000,
-            ),
-          }
-        : {}),
+      channels: keys(
+        v.channels ?? [],
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/,
+        1000,
+      ),
     };
   } else throw new Error("Unsupported channel recipe type");
   if (
@@ -215,7 +209,7 @@ export function parseKitRecord(raw: unknown, community: string): KitRecord {
   };
   if (!kitRecordFits(result))
     throw new Error(
-      value.type === "groups" && value.id === "me"
+      value.type === "groups"
         ? meCapacityMessage
         : "This saved recipe exceeds 16 KiB; shorten its Canvas or selections",
     );
@@ -223,7 +217,7 @@ export function parseKitRecord(raw: unknown, community: string): KitRecord {
 }
 export function kitTag(record: KitRecord) {
   if (
-    (record.value.type === "groups" && record.value.id === "me") ||
+    record.value.type === "groups" ||
     (record.value.type === "template" &&
       record.value.id.startsWith("me-section-"))
   )

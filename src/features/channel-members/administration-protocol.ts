@@ -2,6 +2,7 @@ import type { EventTemplate } from "nostr-tools";
 import { sessionMetadata } from "../sessions/metadata.ts";
 import type { RelayEvent } from "../relay/events.ts";
 import {
+  channelTypeTag,
   exactLifecycleTag,
   lifecycleChannelId,
   lifecycleRecord,
@@ -38,7 +39,7 @@ export function memberAuthority(
     throw new Error(
       "Current member roles could not be verified. Refresh members and roles.",
     );
-  const type = exactLifecycleTag(metadata, "t");
+  const type = channelTypeTag(metadata);
   const archived = exactLifecycleTag(metadata, "archived");
   if (
     !["stream", "forum", "dm"].includes(type ?? "") ||

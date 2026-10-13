@@ -79,6 +79,7 @@ import { ToastNotice } from "../../shared/design-system/ui/Toast";
 import { ReportMessageDialog } from "./ReportMessageDialog";
 import { messageCopyLink, messageCopyText } from "./message-copy";
 
+export type MessageLinkOrigin = Readonly<{ rootId: string }>;
 export type MessageRowProps = {
   row: ChannelMessage;
   getThreadRoot?: (() => ChannelMessage | undefined) | undefined;
@@ -91,7 +92,8 @@ export type MessageRowProps = {
   agentPubkeys?: ReadonlySet<string> | undefined;
   canOpenLink?: ((target: string) => boolean) | undefined;
   media(url: string, size?: "small"): string | undefined;
-  onOpenLink(url: string): boolean;
+  /** Receives the thread the link was opened from: the row's root, or the row. */
+  onOpenLink(url: string, origin?: MessageLinkOrigin): boolean;
   day: boolean;
   retry: ((id: string) => void) | undefined;
   /** Pins this row in a virtualized list; returns the release. */
@@ -222,6 +224,11 @@ function MessageRowContent({
     row.threadRootId ?? row.id,
     row.id,
     row.threadRootId,
+  );
+  const rootId = row.threadRootId ?? row.id;
+  const openLink = useCallback(
+    (url: string) => onOpenLink(url, { rootId }),
+    [onOpenLink, rootId],
   );
   const channels = session?.channels;
   const listed = useListedChannel(
@@ -443,7 +450,7 @@ function MessageRowContent({
       row={displayRow}
       extensions={extensions}
       media={media}
-      onOpenLink={onOpenLink}
+      onOpenLink={openLink}
       canOpenLink={canOpenLink}
       participantProfiles={participantProfiles}
       largeEmoji={emojiOnly}
@@ -479,7 +486,7 @@ function MessageRowContent({
             aria-describedby={presence !== "unknown" ? presenceId : undefined}
             onClick={(event) => {
               event.currentTarget.focus();
-              onOpenLink(target);
+              openLink(target);
             }}
             icon={
               <>
@@ -644,7 +651,7 @@ function MessageRowContent({
                   ownerName={workflowOwnerName}
                   signer={row.signerId ?? row.authorId}
                   canOpenLink={canOpenLink}
-                  onOpenLink={onOpenLink}
+                  onOpenLink={openLink}
                 />
               ) : (
                 <strong className={styles.author}>{name}</strong>
@@ -674,7 +681,7 @@ function MessageRowContent({
                 registry={extensions?.links}
                 session={session}
                 scope={scope}
-                onOpenLink={onOpenLink}
+                onOpenLink={openLink}
                 label={
                   row.sentFromThread.excerpt
                     ? `Thread — ${row.sentFromThread.excerpt}`
@@ -719,7 +726,7 @@ function MessageRowContent({
                     key={url}
                     attachment={{ ...attachment, url }}
                     source={source}
-                    onOpenLink={onOpenLink}
+                    onOpenLink={openLink}
                   />
                 );
               if (attachment.kind === "audio") {
@@ -752,7 +759,7 @@ function MessageRowContent({
                     key={url}
                     attachment={{ ...attachment, url }}
                     source={source}
-                    onOpenLink={onOpenLink}
+                    onOpenLink={openLink}
                   />
                 );
               }

@@ -341,7 +341,7 @@ The conversation header’s **Channel actions** ellipsis opens the shared, defau
 Channel Settings tab; selecting it again never closes the pane. Editing is available
 from that pane, not directly from the menu. **View canvas**, **New session**, **Move channel**, **Mute/Unmute**, and **Mark as Read/Unread**
 reuse the sidebar’s action composition and persistent mutation/recovery owners.
-Move replaces the redundant Personal group shortcut. Permission-gated lifecycle
+Permission-gated lifecycle
 actions follow in **Leave → Archive → Delete** order, with Delete in the shared
 danger tone. DMs retain Hide conversation and the separate Remove from Messages
 action; their permissions are not inferred from stream channels. Members retains its adjacent button and Diagnostics remains inside Settings.

@@ -13,6 +13,8 @@ import {
 export type PanelContext = Readonly<{
   /** Originating conversation, not a claim of thread-level scope or access. */
   channelId: string;
+  /** Thread root of the message the panel was opened from, when there is one. */
+  rootId?: string;
   canOpen(target: string): boolean;
   /** Replace this panel through its host. False after this opening is retired. */
   open(target: string): boolean;

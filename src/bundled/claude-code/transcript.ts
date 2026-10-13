@@ -17,8 +17,18 @@ export const TURN_LIMIT = 50;
 const STEER = "new-message-arrived-while-you-were-working";
 
 type Json = Record<string, unknown>;
-export type Conversation = Readonly<{
+/** One session file's conversation. */
+type Session = Readonly<{
   sessionId: string;
+  channelId: string;
+  root?: string;
+}>;
+/** A conversation to read: the agent's sessions for its thread or channel,
+ * including the one this build of the app saved, if any. */
+export type Conversation = Readonly<{
+  /** The agent's pubkey, as its turn prompts name it. */
+  agent: string;
+  sessionId?: string;
   channelId: string;
   root?: string;
 }>;
@@ -74,11 +84,16 @@ function prompt(id: string, at: number, raw: string): TranscriptItem {
  * entries (metadata, subagents, attachments) are left out. */
 export function claudeTurns(
   file: string,
-  conversation: Conversation,
+  conversation: Session,
   working: boolean,
 ): TranscriptTurn[] {
   const turns: TranscriptTurn[] = [];
   const tools = new Map<string, ToolItem>();
+  /** Messages sent with send, until their result says whether they were posted. */
+  const sends = new Map<
+    string,
+    { turn: TranscriptTurn; message: { posted?: boolean } }
+  >();
   let last = 0;
   const turn = (id: string, at: number, partial: boolean) => {
     const current = turns.at(-1);
@@ -129,6 +144,16 @@ export function claudeTurns(
     const current = turns.at(-1) ?? turn(id, at, true);
     last = at;
     for (const result of results) {
+      const sent = sends.get(str(result.tool_use_id));
+      if (sent && !result.is_error) sent.message.posted = true;
+      else if (sent) {
+        sent.turn.items.push({
+          id: `${id}:${str(result.tool_use_id)}`,
+          at,
+          type: "status",
+          text: `The message above was not posted: ${text(result.content)}`,
+        });
+      }
       const tool = tools.get(str(result.tool_use_id));
       if (!tool) continue;
       tool.output = text(result.content);
@@ -154,13 +179,25 @@ export function claudeTurns(
       else if (block.type === "tool_use") {
         const name = str(block.name);
         const input = object(block.input) ?? {};
+        if (name === "mcp__buzz__send" && str(input.text).trim()) {
+          const message: TranscriptItem & { posted?: boolean } = {
+            id: key,
+            at,
+            type: "message",
+            text: str(input.text),
+          };
+          current.items.push(message);
+          sends.set(str(block.id), { turn: current, message });
+          return;
+        }
         const path = str(input.file_path) || str(input.path);
         const tool: ToolItem = {
           id: key,
           at,
           type: "tool",
           toolCallId: str(block.id),
-          title: str(input.command) || name,
+          // MCP tools as Codex names them: buzz.read, not mcp__buzz__read.
+          title: str(input.command) || name.replace(/^mcp__(.+?)__/, "$1."),
           kind: KINDS[name] ?? "other",
           status: "in_progress",
           input: JSON.stringify(input, null, 2),
@@ -184,8 +221,60 @@ export function claudeTurns(
 export const projectName = (cwd: string) => cwd.replace(/[^a-zA-Z0-9]/g, "-");
 const PROJECT_NAME_LIMIT = 200;
 
-/** The session's transcript, or undefined when this computer has no file for
- * it: deleted, or started in a workspace the agent no longer uses. */
+/** Whether a session file was started for `conversation`: its first prompt
+ * names the same agent, channel and, for a thread session, thread root.
+ * Prompts from before agents were named match any agent. */
+export function startedFor(file: string, conversation: Conversation) {
+  for (const line of file.split("\n")) {
+    let entry: Json | undefined;
+    try {
+      entry = object(JSON.parse(line));
+    } catch {
+      continue;
+    }
+    if (entry?.type !== "user" || entry.isMeta || entry.isSidechain) continue;
+    const context = promptSections(text(object(entry.message)?.content)).find(
+      (section) => section.tag === "context",
+    )?.body;
+    if (!context) return false;
+    const field = (name: string) =>
+      context.match(new RegExp(`^${name}: (.*)$`, "m"))?.[1];
+    const agent = field("Agent");
+    return (
+      (agent === undefined || agent === conversation.agent) &&
+      !!field("Channel")?.endsWith(`(#${conversation.channelId})`) &&
+      (conversation.root
+        ? field("Session scope") === "thread" &&
+          field("Thread root") === conversation.root
+        : field("Session scope") !== "thread")
+    );
+  }
+  return false;
+}
+
+/** Other session files mentioning the conversation. The agent starts a new
+ * session when it cannot resume one, e.g. in another build of the app, which
+ * keeps its own saved sessions. */
+async function otherSessions(spawn: Spawn, project: string, pattern: string) {
+  let output = "";
+  const process = await spawn("find", {
+    args: [pattern, "."],
+    cwd: `~/.claude/projects/${project}`,
+    onStdout: (data) => {
+      output += data;
+    },
+  });
+  // No match exits 1; a failed search leaves just the saved session.
+  await process.exited;
+  return output
+    .split("\n")
+    .map((line) => line.trim().replace(/^\.\//, ""))
+    .filter((name) => /^[^/]+\.jsonl$/.test(name));
+}
+
+/** The conversation's transcript across its sessions, or undefined when this
+ * computer has no file for it: deleted, or started in a workspace the agent
+ * no longer uses. */
 export async function readTranscript(
   spawn: Spawn,
   workspace: string,
@@ -205,26 +294,53 @@ export async function readTranscript(
   signal.throwIfAborted();
   const project = projectName(directory.trim());
   if (project.length > PROJECT_NAME_LIMIT) return undefined;
-  let bytes: Uint8Array;
-  try {
-    bytes = await readFile(
+  const saved = conversation.sessionId && `${conversation.sessionId}.jsonl`;
+  const names = new Set([
+    ...(saved ? [saved] : []),
+    ...(await otherSessions(
       spawn,
-      "~/.claude/projects",
-      // Project names start with `-`; GNU base64 would read one as options.
-      `./${project}/${conversation.sessionId}.jsonl`,
-      signal,
+      project,
+      conversation.root ?? conversation.channelId,
+    )),
+  ]);
+  signal.throwIfAborted();
+  const turns: TranscriptTurn[] = [];
+  let found = false;
+  for (const name of names) {
+    let file: string;
+    try {
+      file = new TextDecoder().decode(
+        await readFile(
+          spawn,
+          "~/.claude/projects",
+          // Project names start with `-`; GNU base64 would read one as options.
+          `./${project}/${name}`,
+          signal,
+        ),
+      );
+    } catch (error) {
+      signal.throwIfAborted();
+      if (/no such file/i.test(error instanceof Error ? error.message : ""))
+        continue;
+      throw error;
+    }
+    if (name !== saved && !startedFor(file, conversation)) continue;
+    found = true;
+    const sessionId = name.slice(0, -".jsonl".length);
+    turns.push(
+      ...claudeTurns(
+        file,
+        {
+          sessionId,
+          channelId: conversation.channelId,
+          ...(conversation.root ? { root: conversation.root } : {}),
+        },
+        working && name === saved,
+      ),
     );
-  } catch (error) {
-    signal.throwIfAborted();
-    if (/no such file/i.test(error instanceof Error ? error.message : ""))
-      return undefined;
-    throw error;
   }
-  const turns = claudeTurns(
-    new TextDecoder().decode(bytes),
-    conversation,
-    working,
-  );
+  if (!found) return undefined;
+  turns.sort((a, b) => a.startedAt - b.startedAt);
   return {
     turns: turns.slice(-TURN_LIMIT),
     unknownThread: 0,
