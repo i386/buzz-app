@@ -10,6 +10,7 @@ import { eventDto } from "../../features/relay/events";
 import { keypair, signed } from "../../features/relay/testing";
 import type { HostProcessOptions } from "../../features/host/service";
 import { BUZZ_PROMPT } from "../../buzz-mcp/prompt";
+import { createAgentMemories } from "../../features/agents/memory";
 import { CodexRuntime, codexStep, programs } from "./runtime";
 import type { Wire } from "./rpc";
 
@@ -160,7 +161,11 @@ function fixture(
   let appServerSpawns = 0;
   const fileReads: { cwd?: string; path: string }[] = [];
   const spawn = vi.fn(async (_id: string, value?: HostProcessOptions) => {
-    if (plugin && _id === "app-server" && appServerSpawns++ === 0) {
+    // The plugin starts the app server as a step of Buzz's `codex.sh`.
+    const appServer =
+      _id === "app-server" ||
+      value?.args?.slice(2, 4).join(" ") === "run app-server";
+    if (plugin && appServer && appServerSpawns++ === 0) {
       const catalogExit = deferred<number | null>();
       return {
         write: async (data: string) => {
@@ -197,6 +202,12 @@ function fixture(
       );
       return { ...process, exited: Promise.resolve(0) };
     }
+    // The plugin's setup checks find Buzz's copy installed and signed in.
+    const step = value?.args?.slice(3).join(" ");
+    if (step === "--version" || step === "login status") {
+      value?.onStdout?.("codex-cli 0.162.1\n");
+      return { ...process, exited: Promise.resolve(0) };
+    }
     options = value;
     return process;
   });
@@ -208,9 +219,13 @@ function fixture(
   }));
   const read = vi.fn(async () => [] as EventData[]);
   const memories: { slug: string; body: string; createdAt: number }[] = [];
+  const memoryRead = vi.fn(async () => ({ entries: memories, partial: false }));
   const memoryView = {
     refresh: vi.fn(async () => {}),
-    snapshot: () => ({ status: "ready", listing: { entries: memories } }),
+    snapshot: () => ({
+      status: "ready",
+      listing: { entries: memories, partial: false },
+    }),
     dispose: vi.fn(),
   };
   const memoryOpen = vi.fn(() => memoryView);
@@ -226,7 +241,7 @@ function fixture(
         ),
       },
       read,
-      agentMemories: { open: memoryOpen },
+      agentMemories: { open: memoryOpen, read: memoryRead },
       channels: {
         list: () => ({
           channels: [{ id: "channel", name: "test", channelType: "stream" }],
@@ -412,6 +427,7 @@ function fixture(
     query,
     fileReads,
     memoryOpen,
+    memoryRead,
     memoryView,
     remember,
     upload,
@@ -495,7 +511,7 @@ it("hands over promptly and runs conversations independently on one server", asy
     additionalContext: {
       "buzz.instructions": {
         value: expect.stringContaining(
-          "Read your `core` memory with `mem_get` at the start of a session",
+          "Your `core` memory is auto-injected into your context every turn",
         ),
       },
     },
@@ -1776,6 +1792,102 @@ it("routes callbacks by thread and turn, rejecting stale, unknown and malformed 
   expect(f.publish).toHaveBeenCalledTimes(count);
 });
 
+it("gives each turn the agent's current core memory, and goes on without it when unreadable", async () => {
+  const f = fixture();
+  const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+  const memory = (index: number) =>
+    (
+      f.starts()[index]?.params as
+        | { additionalContext?: Record<string, { value: string }> }
+        | undefined
+    )?.additionalContext?.["buzz.instructions"]?.value;
+  await f.runtime.run(f.delivery("@Codex first"));
+  await vi.waitFor(() => expect(f.starts()).toHaveLength(1));
+  expect(memory(0)).toContain(
+    "Current core memory replaces all prior core memory.\n<core-memory>\nNo core memory found.",
+  );
+  f.complete(0, "FIRST");
+  await f.remember("core", "I am Codex.", 0);
+  await f.runtime.run(f.delivery("@Codex second", "e".repeat(64)));
+  await vi.waitFor(() => expect(f.starts()).toHaveLength(2));
+  expect(memory(1)).toContain(
+    "Current core memory replaces all prior core memory.\n<core-memory>\nI am Codex.\n</core-memory>",
+  );
+  f.complete(1, "SECOND");
+  f.memoryRead.mockRejectedValueOnce(new Error("offline"));
+  await f.runtime.run(f.delivery("@Codex third", "f".repeat(64)));
+  await vi.waitFor(() => expect(f.starts()).toHaveLength(3));
+  expect(memory(2)).toContain("TEST_INSTRUCTIONS");
+  expect(memory(2)).not.toContain("<core-memory>");
+  expect(warn).toHaveBeenCalledWith(
+    "Codex could not read the agent's memory",
+    expect.any(Error),
+  );
+  f.complete(2, "THIRD");
+  await vi.waitFor(() => expect(f.publish).toHaveBeenCalledTimes(3));
+  warn.mockRestore();
+});
+
+it("does not declare core missing when the owner listing is partial", async () => {
+  const f = fixture();
+  f.memoryRead.mockResolvedValueOnce({ entries: [], partial: true });
+  await f.runtime.run(f.delivery("partial"));
+  await vi.waitFor(() => expect(f.starts()).toHaveLength(1));
+  const start = f.starts()[0];
+  expect(start).toBeDefined();
+  const instructions = (
+    start?.params as {
+      additionalContext?: Record<string, { value: string }>;
+    }
+  )?.additionalContext?.["buzz.instructions"]?.value;
+  expect(instructions).toContain("TEST_INSTRUCTIONS");
+  expect(instructions).not.toContain("No core memory found");
+  expect(instructions).not.toContain("<core-memory>");
+});
+
+it("coalesces concurrent core reads before the owner-view pool is exhausted", async () => {
+  const f = fixture();
+  const gate = deferred<void>();
+  const read = vi.fn(async () => {
+    await gate.promise;
+    return {
+      entries: [
+        {
+          slug: "core",
+          body: "CONCURRENT CORE",
+          eventId: "6".repeat(64),
+          createdAt: 1,
+        },
+      ],
+      partial: false,
+    };
+  });
+  const memories = createAgentMemories(read, owner, () => true);
+  f.snapshot.session.agentMemories =
+    memories.capability as unknown as typeof f.snapshot.session.agentMemories;
+
+  await Promise.all(
+    Array.from({ length: 5 }, (_, index) =>
+      f.runtime.run(
+        f.delivery(`concurrent ${index}`, index.toString(16).repeat(64)),
+      ),
+    ),
+  );
+  await vi.waitFor(() => expect(read).toHaveBeenCalledOnce());
+  expect(f.starts()).toHaveLength(0);
+
+  gate.resolve();
+  await vi.waitFor(() => expect(f.starts()).toHaveLength(5));
+  for (const start of f.starts())
+    expect(start.params).toMatchObject({
+      additionalContext: {
+        "buzz.instructions": {
+          value: expect.stringContaining("CONCURRENT CORE"),
+        },
+      },
+    });
+});
+
 it("uses the launched workspace for shared file tools and the owner view for encrypted memory", async () => {
   const f = fixture();
   await f.runtime.run(f.delivery("work"));
@@ -1805,9 +1917,10 @@ it("uses the launched workspace for shared file tools and the owner view for enc
     ],
   });
   expect(f.media).toHaveBeenCalledWith("shot.png");
-  expect(f.memoryOpen).toHaveBeenCalledWith(pubkey);
+  expect(f.memoryRead).toHaveBeenCalledWith(pubkey, expect.any(AbortSignal));
   expect(f.remember).toHaveBeenCalledWith("mem/test", "remembered", 0);
-  expect(f.memoryView.dispose).toHaveBeenCalledTimes(2);
+  // The turn's own `core` read, then mem_set's read and a fresh post-write read.
+  expect(f.memoryRead).toHaveBeenCalledTimes(3);
   expect(
     (
       await f.tool("send", {

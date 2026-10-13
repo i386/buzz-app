@@ -75,6 +75,8 @@ const STDERR_LIMIT = 4_000;
 export const ENV: Readonly<Record<string, string | null>> = {
   CLAUDE_CODE_ENTRYPOINT: "sdk-ts",
   CLAUDE_CODE_EMIT_SESSION_STATE_EVENTS: "1",
+  // Buzz keeps its own copy current; Claude must not install itself elsewhere.
+  DISABLE_AUTOUPDATER: "1",
   // A key in the shell that launched the app would outrank the sign-in; the
   // interactive CLI asks before using one, but stream-json mode uses it silently.
   ANTHROPIC_API_KEY: null,

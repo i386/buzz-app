@@ -139,9 +139,13 @@ const relay = {
     scope,
     session: {
       agentMemories: {
+        read: async () => ({ entries: memories, partial: false }),
         open: () => ({
           refresh: async () => {},
-          snapshot: () => ({ status: "ready", listing: { entries: memories } }),
+          snapshot: () => ({
+            status: "ready",
+            listing: { entries: memories, partial: false },
+          }),
           dispose() {},
         }),
       },

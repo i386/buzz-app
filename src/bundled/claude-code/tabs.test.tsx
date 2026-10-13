@@ -72,9 +72,14 @@ function applied({
   files?: Record<string, string>;
 } = {}) {
   let type: AgentType<Config> | undefined;
-  const spawn = vi.fn(async (_id: string, options: HostProcessOptions = {}) => {
-    const args = (options.args ?? []).join(" ");
-    if (_id === "find") {
+  const spawn = vi.fn(async (id: string, options: HostProcessOptions = {}) => {
+    // Claude and its install steps run as steps of claude.sh: its script, $0
+    // and step come first.
+    const step = id === "claude-sh" ? options.args?.[2] : undefined;
+    const name = step === "run" ? "claude" : (step ?? id);
+    const args = (options.args ?? []).slice(step ? 3 : 0).join(" ");
+    if (name === "find") {
+      // Session files in the project folder that mention the pattern.
       const project = options.cwd?.split("/").pop();
       const [pattern = ""] = options.args ?? [];
       const found = Object.keys(files).filter(
@@ -95,10 +100,10 @@ function applied({
         ),
       };
     }
-    if (_id === "workspace" || _id === "read") {
+    if (name === "workspace" || name === "read") {
       const file = files[args];
       queueMicrotask(() =>
-        _id === "workspace"
+        name === "workspace"
           ? options.onStdout?.("/Users/me/.buzz\n")
           : file === undefined
             ? options.onStderr?.(`base64: ${args}: No such file or directory`)
@@ -110,30 +115,34 @@ function applied({
         kill: async () => undefined,
         exited: new Promise<number>((resolve) =>
           setTimeout(
-            () => resolve(_id === "read" && file === undefined ? 1 : 0),
+            () => resolve(name === "read" && file === undefined ? 1 : 0),
             0,
           ),
         ),
       };
     }
-    if (_id === "claude" && args === "--version" && !available)
-      throw new Error("Could not start claude: No such file");
+    // Buzz's launcher answers 127 when it has no copy.
+    const missing = name === "claude" && args === "--version" && !available;
     const streaming = args.includes("--input-format stream-json");
     let kill: () => void = () => undefined;
     const exited = new Promise<number | null>((resolve) => {
-      if (_id === "install" || args === "auth login" || streaming)
+      if (name === "install" || args === "auth login" || streaming)
         kill = () => resolve(null);
-      else setTimeout(() => resolve(0), 0);
+      else setTimeout(() => resolve(missing ? 127 : 0), 0);
     });
     queueMicrotask(() =>
       options.onStdout?.(
-        _id === "install"
-          ? "Setting up Claude Code...\n"
-          : args === "--version"
-            ? "2.1.292 (Claude Code)\n"
-            : args === "auth status --json"
-              ? JSON.stringify({ loggedIn, email: "me@example.com" })
-              : "",
+        missing
+          ? ""
+          : name === "install"
+            ? "Setting up Claude Code...\n"
+            : name === "platform"
+              ? "Darwin arm64\n"
+              : args === "--version"
+                ? "2.1.292 (Claude Code)\n"
+                : args === "auth status --json"
+                  ? JSON.stringify({ loggedIn, email: "me@example.com" })
+                  : "",
       ),
     );
     return {
@@ -193,7 +202,19 @@ function applied({
   });
   const ctx = {
     pluginOwner: { id: "buzz.claude-code", revision: "r1" },
-    host: { spawn, request: vi.fn() },
+    host: {
+      spawn,
+      // downloads.claude.ai offering the release installed, so no update runs.
+      request: vi.fn(async ({ url }: { url: string }) => ({
+        status: 200,
+        headers: {},
+        body: url.endsWith("/latest")
+          ? "2.1.292"
+          : JSON.stringify({
+              platforms: { "darwin-arm64": { checksum: "a".repeat(64) } },
+            }),
+      })),
+    },
     agents: {
       register: (registered: AgentType<Config>) => {
         type = registered;
@@ -560,13 +581,18 @@ it("starts viable provider recovery directly from its attention action", async (
       attentionLabel: "Log in to Claude Code",
     }),
   );
+  // Offered once the update check on load has finished.
+  await waitFor(() =>
+    expect(type.provider?.attentionAction).toBeTypeOf("function"),
+  );
   const action = type.provider?.attentionAction;
-  expect(action).toBeTypeOf("function");
   act(() => action?.());
   await waitFor(() =>
     expect(spawn).toHaveBeenCalledWith(
-      "claude",
-      expect.objectContaining({ args: ["auth", "login"] }),
+      "claude-sh",
+      expect.objectContaining({
+        args: [expect.any(String), "claude.sh", "run", "auth", "login"],
+      }),
     ),
   );
   expect(type.provider?.attentionAction).toBeUndefined();

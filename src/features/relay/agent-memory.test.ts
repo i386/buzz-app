@@ -139,6 +139,31 @@ it("reports denied/error separately, retries, rejects malformed host output and 
   expect(() => h.session.agentMemories.open(agent.pubkey)).not.toThrow();
 });
 
+it("serializes runtime reads outside the mounted-view budget", async () => {
+  const next = keypair();
+  const releases: ((value: MemoryListing) => void)[] = [];
+  const read = vi.fn<MemoryReader>(
+    () => new Promise((resolve) => releases.push(resolve)),
+  );
+  const h = harness(read);
+  for (let i = 0; i < 4; i++) h.session.agentMemories.open(agent.pubkey);
+
+  const first = h.session.agentMemories.read(
+    agent.pubkey,
+    new AbortController().signal,
+  );
+  const second = h.session.agentMemories.read(
+    next.pubkey,
+    new AbortController().signal,
+  );
+  await vi.waitFor(() => expect(read).toHaveBeenCalledTimes(1));
+  releases[0]?.(listing);
+  await expect(first).resolves.toEqual(listing);
+  await vi.waitFor(() => expect(read).toHaveBeenCalledTimes(2));
+  releases[1]?.(listing);
+  await expect(second).resolves.toEqual(listing);
+});
+
 it("disconnect subscribers cannot reenter with stale connected authority", async () => {
   const read = vi.fn<MemoryReader>().mockResolvedValue(listing);
   const h = harness(read),

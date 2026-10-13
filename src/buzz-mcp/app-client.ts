@@ -18,6 +18,8 @@ export function appClient(
     /** Where relative paths start: the agent's working directory. */
     cwd: string;
     memories(): Promise<readonly Memory[]>;
+    /** Forget a read that may have started before a successful memory write. */
+    remembered?(): void;
     /** Reject operations after the owning turn or community has ended. */
     check?(): void;
     signal?: AbortSignal;
@@ -56,6 +58,8 @@ export function appClient(
     remember: async (slug, body, after) => {
       check();
       await agent.remember(slug, body, after);
+      check();
+      options.remembered?.();
     },
   };
 }

@@ -582,6 +582,19 @@ the complete suite still runs with `pnpm test` / `just scan`:
   and fails closed if the pnpm store path cannot be resolved. Containers use
   `HOME=/root` and trust only their exact checked-out workspace. Native host
   jobs keep their normal toolchain and library setup.
+- **Flake check (advisory):** on pull requests, `scripts/flake-check.mjs select`
+  maps the diff against the base branch to the Vitest tests and Playwright
+  journeys it changed (`file:line` for hunks inside a test body; the whole file
+  when the diff touches any line outside one, such as imports, helpers or hooks
+  before, between or after tests, or the file is new; removed lines are judged
+  against the base revision's test bodies). `flake_vitest`
+  then runs that selection ten times with the JavaScript lane's two workers, and
+  `flake_browser` runs `--repeat-each=10` once per engine (Chromium and WebKit)
+  on the shard container with the same native fixture. Measurement specs and
+  journeys tagged `@classic-scrollbars`, `@local-webkit` or `@media-recorder`
+  are excluded; their own lanes cover them. The step summary shows a test ×
+  iteration table. The lanes skip when no test changed and report as their own
+  statuses, outside `CI required`.
 - **CI required:** fails unless every automatic Linux lane and every browser shard succeeds,
   including cancellation or an unexpectedly skipped lane. Configure this status
   as a required repository check; the workflow does not change branch protection.

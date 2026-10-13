@@ -336,14 +336,14 @@ it("peeks at a selected agent beside the grid and follows the arrow keys", async
   expect(grid).toBeInTheDocument();
 });
 
-it("opens the build view with the type's tabs and the app's Attention tab", async () => {
+it("opens the build view with the type's tabs and the app's Attention and Memory tabs", async () => {
   const user = userEvent.setup();
   setup([agent("Ada", 1)]);
   await user.click(screen.getByRole("option", { name: /Ada/ }));
   await user.keyboard("{Enter}");
   expect(screen.queryByRole("listbox")).not.toBeInTheDocument();
   const tabs = screen.getAllByRole("tab").map((tab) => tab.textContent);
-  expect(tabs).toEqual(["Settings", "Reply", "Attention"]);
+  expect(tabs).toEqual(["Settings", "Reply", "Attention", "Memory"]);
   expect(
     within(
       screen.getByRole("complementary", { name: "Ada identity" }),
