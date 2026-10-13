@@ -7,7 +7,14 @@ import { NavigationSection } from "../shared/design-system/ui/NavigationSection"
 import { Button } from "../shared/design-system/ui/Button";
 import { SwitchPreferenceRow } from "../shared/design-system/ui/SwitchPreferenceRow";
 import { PreferenceRow } from "../shared/design-system/ui/PreferenceRow";
-import { useEffect, useMemo, useState, useSyncExternalStore } from "react";
+import {
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  useSyncExternalStore,
+} from "react";
 import { RecoveryScreen } from "./RecoveryScreen";
 import styles from "./Settings.module.css";
 import { SquaresFourIcon } from "../shared/design-system/icons/index";
@@ -89,6 +96,12 @@ export function Settings({
     [contributed, departureCommunity],
   );
   const [selected, setSelected] = useState(defaultSection);
+  const departureFocus = useRef(false);
+  useLayoutEffect(() => {
+    if (selected !== "profile" || !departureFocus.current) return;
+    departureFocus.current = false;
+    document.getElementById("main-content")?.focus({ preventScroll: true });
+  }, [selected]);
   useEffect(() => {
     if (
       departure &&
@@ -235,6 +248,7 @@ export function Settings({
                   );
                 }}
                 onRemoved={() => {
+                  departureFocus.current = true;
                   if (onSection) onSection("profile");
                   else setSelected("profile");
                 }}

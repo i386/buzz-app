@@ -35,6 +35,7 @@ export function CommunityDepartureSettings({
   const [pending, setPending] = useState(false);
   const busy = useRef(false);
   const mounted = useRef(false);
+  const completed = useRef(false);
   const removeButton = useRef<HTMLButtonElement>(null);
   const leaveButton = useRef<HTMLButtonElement>(null);
   useEffect(() => {
@@ -72,6 +73,7 @@ export function CommunityDepartureSettings({
           );
       }
       if (mounted.current && communities.snapshot().viewer === viewer) {
+        completed.current = true;
         setIntent(null);
         onRemoved();
       }
@@ -154,7 +156,13 @@ export function CommunityDepartureSettings({
               : "The community connection and any saved drafts or data will be removed from Buzz on this device."
           }
           pending={pending}
-          finalFocus={intent === "leave" ? leaveButton : removeButton}
+          finalFocus={() =>
+            completed.current
+              ? false
+              : intent === "leave"
+                ? leaveButton.current
+                : removeButton.current
+          }
           onClose={() => setIntent(null)}
           actions={
             <>
