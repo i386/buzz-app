@@ -67,9 +67,9 @@ inside the current entry; Back returns to the list.
   reopens the report. The console asks for the relay's maximum of 200 reports;
   each card shows when the report was made.
 - **Feedback**: list, detail and status (new, reviewed, archived). At most five
-  attachments, each at most 10 MiB and 50 MiB in total, are shown. Images preview inline and open in the
-  shared media viewer on click; every attachment can
-  be saved through the native Save dialog.
+  attachments, each at most 10 MiB and 50 MiB in total, are shown. PNG, JPEG,
+  GIF and WebP images preview inline and open in the shared media viewer on
+  click; every shown attachment can be saved through the native Save dialog.
 - **Communities**: the directory searched by host prefix, with the connected
   community pinned and cursor paging. Each community page has Reports,
   Restrictions (lift a ban, clear a timeout), Members and Actions (ban, timeout,

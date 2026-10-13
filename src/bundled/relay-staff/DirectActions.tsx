@@ -34,6 +34,7 @@ import {
   publicKeyInput,
   time,
   UNSUPPORTED_BROWSING,
+  useRetry,
   type CommunityRef,
 } from "./ui";
 
@@ -181,16 +182,62 @@ export function DirectActionsProvider({ children }: { children: ReactNode }) {
   );
 }
 
-function validate(draft: Draft, eventId: string | null) {
-  if (draft.action === "delete" && !eventId)
-    return "Enter a 64-hex event id, or a note1… or nevent1… link.";
-  if (draft.action !== "delete" && !draft.member)
-    return "Choose a member: search by name, or paste an npub or hex key.";
+type Problems = Partial<
+  Record<"target" | "member" | "secs" | "reason", string>
+>;
+
+/** What each field still needs before the action can be reviewed. */
+function validate(draft: Draft, eventId: string | null): Problems {
   const secs = Number(draft.secs);
-  if (draft.action === "timeout" && !(Number.isInteger(secs) && secs > 0))
-    return "Duration must be a whole number of seconds above zero.";
-  if (containsSecretKey(draft.reason)) return SECRET_REASON;
-  return null;
+  return {
+    ...(draft.action === "delete" && !eventId
+      ? { target: "Enter a 64-hex event id, or a note1… or nevent1… link." }
+      : {}),
+    ...(draft.action !== "delete" && !draft.member
+      ? {
+          member:
+            "Choose a member: search by name, or paste an npub or hex key.",
+        }
+      : {}),
+    ...(draft.action === "timeout" && !(Number.isInteger(secs) && secs > 0)
+      ? { secs: "Duration must be a whole number of seconds above zero." }
+      : {}),
+    ...(containsSecretKey(draft.reason) ? { reason: SECRET_REASON } : {}),
+  };
+}
+
+/** Whether rerunning a failed lookup could change its answer. */
+const retryable = (failure: StaffFailure) =>
+  !unsupported(failure) &&
+  failure.code !== "event_not_found" &&
+  failure.code !== "not_found";
+
+/** A failed lookup's message, with Retry beside it when that could help. */
+function LookupFailure({
+  read,
+  reload,
+}: {
+  read: Read<unknown>;
+  reload(): void;
+}) {
+  const retry = useRetry(
+    read.state === "failed" ? read.failure : null,
+    read.state === "loading",
+    reload,
+  );
+  if (!retry.failure) return null;
+  return (
+    <div className="flex flex-wrap items-center gap-2">
+      <p className="text-body-sm text-danger" role="alert">
+        {lookupFailure(retry.failure)}
+      </p>
+      {retryable(retry.failure) && (
+        <Button size="sm" loading={retry.retrying} onClick={retry.retry}>
+          Retry
+        </Button>
+      )}
+    </div>
+  );
 }
 
 function MemberState({ member }: { member: MemberDetailDto }) {
@@ -226,8 +273,8 @@ function useLookup<R extends StaffRequest>(
   request: R | null,
   key: string | null,
 ) {
-  const [read] = useRead(request, [key]);
-  return request ? read : null;
+  const [read, reload] = useRead(request, [key]);
+  return request ? { read, reload } : null;
 }
 
 export function ActionsSection({ community }: { community: CommunityRef }) {
@@ -236,7 +283,8 @@ export function ActionsSection({ community }: { community: CommunityRef }) {
   const host = community.host;
   const draft = c.draftFor(host);
   const set = (patch: Partial<Draft>) => c.setDraft({ ...draft, ...patch });
-  const [invalid, setInvalid] = useState<string | null>(null);
+  /** Field errors show once Review is first tried, then track the input. */
+  const [checked, setChecked] = useState(false);
 
   useEffect(() => {
     c.shownHost.current = host;
@@ -249,18 +297,21 @@ export function ActionsSection({ community }: { community: CommunityRef }) {
   const memberKey =
     draft.action !== "delete" ? (draft.member?.pubkey ?? null) : null;
   const fence = `${context.signer} ${context.origin} ${host}`;
-  const member = useLookup(
+  const memberLookup = useLookup(
     memberKey
       ? { route: "getMember", communityHost: host, pubkey: memberKey }
       : null,
     memberKey && `${fence} member ${memberKey}`,
   );
-  const preview = useLookup(
+  const previewLookup = useLookup(
     eventId ? { route: "getEvent", communityHost: host, id: eventId } : null,
     eventId && `${fence} event ${eventId}`,
   );
-  const lookup: Read<unknown> | null =
-    draft.action === "delete" ? preview : member;
+  const member = memberLookup?.read ?? null;
+  const preview = previewLookup?.read ?? null;
+  const active = draft.action === "delete" ? previewLookup : memberLookup;
+  const lookup: Read<unknown> | null = active?.read ?? null;
+  const problems = checked ? validate(draft, eventId) : {};
   const blocked =
     lookup?.state === "failed"
       ? lookupFailure(lookup.failure)
@@ -283,9 +334,9 @@ export function ActionsSection({ community }: { community: CommunityRef }) {
 
   const locked = !!c.frozen || c.submitting || !canMutate;
   const review = () => {
-    const problem = validate(draft, eventId);
-    setInvalid(problem);
-    if (problem || lookup?.state !== "ok" || blocked) return;
+    setChecked(true);
+    if (Object.keys(validate(draft, eventId)).length > 0) return;
+    if (lookup?.state !== "ok" || blocked) return;
     const target = eventId ?? memberKey ?? "";
     const reason = draft.reason.trim();
     c.review(
@@ -307,7 +358,7 @@ export function ActionsSection({ community }: { community: CommunityRef }) {
       },
     );
   };
-  const error = invalid ?? c.error;
+  const error = c.error;
 
   return (
     <div className="flex flex-col gap-3">
@@ -324,7 +375,11 @@ export function ActionsSection({ community }: { community: CommunityRef }) {
         </RadioGroup>
       </Field>
       {draft.action === "delete" ? (
-        <Field label="Event id" description="Hex, note1… or nevent1…">
+        <Field
+          label="Event id"
+          description="Hex, note1… or nevent1…"
+          error={problems.target}
+        >
           <Input
             disabled={locked}
             value={draft.target}
@@ -336,6 +391,7 @@ export function ActionsSection({ community }: { community: CommunityRef }) {
           communityHost={host}
           disabled={locked}
           member={draft.member}
+          error={problems.member}
           onChange={(picked) => set({ member: picked })}
         />
       )}
@@ -345,13 +401,18 @@ export function ActionsSection({ community }: { community: CommunityRef }) {
       {!c.frozen && preview?.state === "ok" && draft.action === "delete" && (
         <EventPreview event={preview.value} />
       )}
-      {!c.frozen && blocked && (
-        <p className="text-body-sm text-danger" role="alert">
-          {blocked}
-        </p>
-      )}
+      {!c.frozen &&
+        (lookup?.state === "failed" && active ? (
+          <LookupFailure read={active.read} reload={active.reload} />
+        ) : (
+          blocked && (
+            <p className="text-body-sm text-danger" role="alert">
+              {blocked}
+            </p>
+          )
+        ))}
       {draft.action === "timeout" && (
-        <Field label="Duration (seconds)">
+        <Field label="Duration (seconds)" error={problems.secs}>
           <Input
             type="number"
             disabled={locked}
@@ -363,6 +424,7 @@ export function ActionsSection({ community }: { community: CommunityRef }) {
       <Field
         label="Reason (optional)"
         description={reasonAudience(c.frozen?.intent.action ?? draft.action)}
+        error={problems.reason}
       >
         <Input
           disabled={locked}
@@ -479,11 +541,14 @@ export function MemberPicker({
   communityHost,
   disabled,
   member,
+  error,
   onChange,
 }: {
   communityHost: string;
   disabled: boolean;
   member: Member | null;
+  /** Why the form still needs a member, shown on the search field. */
+  error?: string | undefined;
   onChange(member: Member | null): void;
 }) {
   const { context } = useSession();
@@ -495,7 +560,7 @@ export function MemberPicker({
   const secret = containsSecretKey(query);
   const pasted = publicKeyInput(typed);
   const searching = !!q && q === typed && !secret && !pasted;
-  const [results] = useRead(
+  const [results, reload] = useRead(
     searching ? { route: "searchMembers", communityHost, q } : null,
     [context, communityHost, searching ? q : null],
   );
@@ -506,6 +571,12 @@ export function MemberPicker({
       ? results.value.items.map((m) => ({ pubkey: m.pubkey, name: label(m) }))
       : [];
   const people = usePeople(candidates.map((candidate) => candidate.pubkey));
+  const failed = searching && results.state === "failed";
+  const retry = useRetry(
+    failed ? results.failure : null,
+    searching && results.state === "loading",
+    reload,
+  );
 
   if (member)
     return (
@@ -561,9 +632,9 @@ export function MemberPicker({
           error={
             secret
               ? SECRET_SEARCH
-              : searching && results.state === "failed"
-                ? lookupFailure(results.failure)
-                : undefined
+              : searching && retry.failure
+                ? lookupFailure(retry.failure)
+                : error
           }
         />
         <Combobox.Popup empty="No members found.">
@@ -580,6 +651,13 @@ export function MemberPicker({
           </Combobox.List>
         </Combobox.Popup>
       </Combobox.Root>
+      {searching && retry.failure && retryable(retry.failure) && (
+        <div>
+          <Button size="sm" loading={retry.retrying} onClick={retry.retry}>
+            Retry search
+          </Button>
+        </div>
+      )}
     </PeopleScope>
   );
 }

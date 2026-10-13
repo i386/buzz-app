@@ -21,6 +21,7 @@ import type {
 import { ToastProvider } from "../../shared/design-system/ui/Toast";
 import { cards } from "./index";
 import { SEARCH_DEBOUNCE_MS } from "./Communities";
+import { SEARCH_DEBOUNCE_MS as MEMBER_SEARCH_DEBOUNCE_MS } from "./DirectActions";
 import { ProfilesContext } from "./people";
 import type { ProfileQueries } from "../../features/relay/profile-directory";
 import {
@@ -2538,10 +2539,13 @@ it("while one lift is sending, every row's lift waits for it", async () => {
       name: "Lift ban",
     }),
   );
-  await lift.started();
-  for (const button of screen.getAllByRole("button", { name: "Lift ban" }))
-    expect(button).toBeDisabled();
-  await lift.release(ok(null));
+  try {
+    await lift.started();
+    for (const button of screen.getAllByRole("button", { name: "Lift ban" }))
+      expect(button).toBeDisabled();
+  } finally {
+    await lift.release(ok(null));
+  }
   await waitFor(() => {
     for (const button of screen.getAllByRole("button", { name: "Lift ban" }))
       expect(button).toBeEnabled();
@@ -2565,14 +2569,17 @@ it("while one operator change is sending, every staff control waits for it", asy
     target: { value: signer },
   });
   fireEvent.click(screen.getByRole("button", { name: "Add" }));
-  await put.started();
   const controls = () => [
     ...screen.getAllByRole("button", { name: "Remove" }),
     ...screen.getAllByRole("combobox", { name: /Role/ }),
     screen.getByLabelText("Public key"),
   ];
-  for (const control of controls()) expect(control).toBeDisabled();
-  await put.release(ok(null));
+  try {
+    await put.started();
+    for (const control of controls()) expect(control).toBeDisabled();
+  } finally {
+    await put.release(ok(null));
+  }
   await waitFor(() => {
     for (const control of controls()) expect(control).toBeEnabled();
   });
@@ -2638,7 +2645,7 @@ it("member search waits for typing to pause before sending one request", async (
     for (const value of ["B", "Bo", "Bob"])
       fireEvent.change(input, { target: { value } });
     await act(async () => {
-      vi.advanceTimersByTime(SEARCH_DEBOUNCE_MS - 1);
+      vi.advanceTimersByTime(MEMBER_SEARCH_DEBOUNCE_MS - 1);
     });
     expect(sent("searchMembers")).toHaveLength(0);
     await act(async () => {
@@ -2755,10 +2762,13 @@ it("a failed read offers Retry beside the error, keeps focus on it, and recovers
   const retry = screen.getByRole("button", { name: "Retry" });
   retry.focus();
   fireEvent.click(retry);
-  await again.started();
-  expect(screen.getByRole("button", { name: "Retry" })).toBe(retry);
-  expect(retry).toHaveFocus();
-  await again.release(fail({ message: "Still failing" }));
+  try {
+    await again.started();
+    expect(screen.getByRole("button", { name: "Retry" })).toBe(retry);
+    expect(retry).toHaveFocus();
+  } finally {
+    await again.release(fail({ message: "Still failing" }));
+  }
   await screen.findByText("Still failing");
   expect(screen.getByRole("button", { name: "Retry" })).toHaveFocus();
   fireEvent.click(screen.getByRole("button", { name: "Retry" }));
@@ -2778,4 +2788,125 @@ it("a failed restrictions load can be retried in place", async () => {
   fireEvent.click(screen.getByRole("button", { name: "Retry" }));
   expect(await screen.findByRole("button", { name: "Lift ban" })).toBeVisible();
   expect(screen.queryByText("Restrictions failed")).toBeNull();
+});
+
+it("Retry stops being busy when the same failure object comes back", async () => {
+  routes.probe = () => probe({ role: "operator", canStaff: true });
+  const same = fail({ message: "Staff list failed" });
+  routes.listOperators = () => same;
+  mount();
+  fireEvent.click(await screen.findByRole("tab", { name: "Staff" }));
+  fireEvent.click(await screen.findByRole("button", { name: "Retry" }));
+  await waitFor(() => expect(sent("listOperators")).toHaveLength(2));
+  await waitFor(() =>
+    expect(screen.getByRole("button", { name: "Retry" })).not.toHaveAttribute(
+      "aria-busy",
+      "true",
+    ),
+  );
+  expect(screen.getByText("Staff list failed")).toBeVisible();
+});
+
+async function pickBob() {
+  fireEvent.change(await screen.findByLabelText("Member"), {
+    target: { value: "Bob" },
+  });
+  fireEvent.click(await screen.findByRole("option", { name: /Bob/ }));
+}
+
+it("a failed member lookup recovers with Retry in place", async () => {
+  const found = routes.getMember as Handler;
+  let failing = true;
+  routes.getMember = (request) =>
+    failing ? fail({ message: "Lookup failed" }) : found(request);
+  mount();
+  await reopenActions();
+  await pickBob();
+  await screen.findByText("Lookup failed");
+  expect(screen.getByRole("button", { name: "Review" })).toBeDisabled();
+  failing = false;
+  fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+  expect(await screen.findByText("Role: member")).toBeVisible();
+  expect(screen.queryByText("Lookup failed")).toBeNull();
+  expect(screen.getByRole("button", { name: "Review" })).toBeEnabled();
+});
+
+it("a failed event lookup recovers with Retry in place", async () => {
+  let failing = true;
+  routes.getEvent = () =>
+    failing
+      ? fail({ message: "Lookup failed" })
+      : ok({
+          id: "e".repeat(64),
+          authorPubkey: member,
+          kind: 9,
+          content: "the message",
+          createdAt: "2026-01-01T00:00:00Z",
+          deletedAt: null,
+          channelId: null,
+        });
+  mount();
+  await reopenActions();
+  fireEvent.click(await screen.findByRole("radio", { name: "Delete message" }));
+  fireEvent.change(screen.getByLabelText("Event id"), {
+    target: { value: "e".repeat(64) },
+  });
+  await screen.findByText("Lookup failed");
+  failing = false;
+  fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+  expect(await screen.findByText("the message")).toBeVisible();
+  expect(screen.queryByText("Lookup failed")).toBeNull();
+});
+
+it("a failed member search recovers with Retry in place", async () => {
+  const results = routes.searchMembers as Handler;
+  let failing = true;
+  routes.searchMembers = (request) =>
+    failing ? fail({ message: "Search failed" }) : results(request);
+  mount();
+  await reopenActions();
+  fireEvent.change(await screen.findByLabelText("Member"), {
+    target: { value: "Bob" },
+  });
+  await screen.findByText("Search failed");
+  failing = false;
+  fireEvent.click(screen.getByRole("button", { name: "Retry search" }));
+  expect(await screen.findByRole("option", { name: /Bob/ })).toBeVisible();
+  expect(screen.queryByText("Search failed")).toBeNull();
+});
+
+it("direct action validation errors sit on their fields and clear when corrected", async () => {
+  mount();
+  await reopenActions();
+  fireEvent.click(screen.getByRole("button", { name: "Review" }));
+  const memberField = await screen.findByLabelText("Member");
+  await waitFor(() =>
+    expect(memberField).toHaveAttribute("aria-invalid", "true"),
+  );
+  expect(memberField).toHaveAccessibleDescription(/Choose a member/);
+  await pickBob();
+  await screen.findByText("Role: member");
+
+  fireEvent.click(screen.getByRole("radio", { name: "Time out member" }));
+  const secs = screen.getByLabelText("Duration (seconds)");
+  fireEvent.change(secs, { target: { value: "0" } });
+  await waitFor(() => expect(secs).toHaveAttribute("aria-invalid", "true"));
+  expect(secs).toHaveAccessibleDescription(/whole number of seconds/);
+  fireEvent.change(secs, { target: { value: "60" } });
+  await waitFor(() => expect(secs).not.toHaveAttribute("aria-invalid"));
+
+  const reason = screen.getByLabelText("Reason (optional)");
+  fireEvent.change(reason, { target: { value: `nsec1${"q".repeat(58)}` } });
+  await waitFor(() => expect(reason).toHaveAttribute("aria-invalid", "true"));
+  expect(reason).toHaveAccessibleDescription(/looks like a private key/);
+  expect(reason).not.toHaveAccessibleDescription(/Sent verbatim/);
+  fireEvent.change(reason, { target: { value: "spam" } });
+  await waitFor(() => expect(reason).not.toHaveAttribute("aria-invalid"));
+
+  fireEvent.click(screen.getByRole("radio", { name: "Delete message" }));
+  const target = screen.getByLabelText("Event id");
+  fireEvent.change(target, { target: { value: "nope" } });
+  await waitFor(() => expect(target).toHaveAttribute("aria-invalid", "true"));
+  expect(target).toHaveAccessibleDescription(/64-hex event id/);
+  expect(sent("directAction")).toHaveLength(0);
 });

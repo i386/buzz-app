@@ -114,13 +114,20 @@ export function useRetry(
   loading: boolean,
   run: () => void,
 ) {
-  const [kept, setKept] = useState<StaffFailure | null>(null);
-  if (kept && !loading && failure !== kept) setKept(null);
+  const [kept, setKept] = useState<{
+    failure: StaffFailure;
+    started: boolean;
+  } | null>(null);
+  if (kept && loading && !kept.started) setKept({ ...kept, started: true });
+  // The attempt is over once its read has loaded and settled, even if it
+  // settled on the very same failure object.
+  if (kept && !loading && (kept.started || failure !== kept.failure))
+    setKept(null);
   return {
-    failure: failure ?? kept,
+    failure: failure ?? kept?.failure ?? null,
     retrying: kept !== null,
     retry: () => {
-      setKept(failure);
+      if (failure) setKept({ failure, started: false });
       run();
     },
   };
