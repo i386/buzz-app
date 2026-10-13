@@ -232,19 +232,21 @@ function fakeNative(identities: AgentIdentity[] = []) {
       identities.push(identity);
       return identity;
     }),
-    portable: vi.fn(async (): Promise<PortableAgents> => ({
-      agents: [
-        { source: "harness" as const, pubkey: bot, name: "Old", relay: "" },
-        {
-          source: "installed" as const,
-          pubkey: sibling,
-          name: "Older",
-          relay: "",
-        },
-      ],
-      teams: [],
-      warnings: ["Could not read one store"],
-    })),
+    portable: vi.fn(
+      async (): Promise<PortableAgents> => ({
+        agents: [
+          { source: "harness" as const, pubkey: bot, name: "Old", relay: "" },
+          {
+            source: "installed" as const,
+            pubkey: sibling,
+            name: "Older",
+            relay: "",
+          },
+        ],
+        teams: [],
+        warnings: ["Could not read one store"],
+      }),
+    ),
     port: vi.fn(
       async (
         _: string,
@@ -869,6 +871,7 @@ it("leaves a member that lives in another community off the team, and never move
     identities: [here(birch, "wss://other.example.test")],
   });
   listsTeam(native, nightShift([alder, birch]));
+  expect((await service.portable()).here).toEqual([]);
   const result = await importTeam(service);
   expect(result.elsewhere).toEqual(["Birch"]);
   expect(result.team).toEqual(savedShift([alder]));

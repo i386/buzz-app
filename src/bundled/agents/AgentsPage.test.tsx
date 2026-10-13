@@ -963,6 +963,25 @@ it("lists old teams apart from agents, and imports one as a team", async () => {
   );
 });
 
+it("counts no member of a team as here when they were imported into another community", async () => {
+  const user = userEvent.setup();
+  // Bea and Cy were imported into another community; Import there lists none.
+  const { agents } = setup([]);
+  agents.portable.mockResolvedValueOnce({
+    agents: [],
+    teams: [nightShift],
+    warnings: [],
+    here: [],
+  });
+  await user.click(screen.getByRole("tab", { name: "Import" }));
+  const teams = await screen.findByRole("region", { name: "Teams to import" });
+  expect(within(teams).getByText("2 members")).toBeInTheDocument();
+  expect(within(teams).queryByText(/already here/)).not.toBeInTheDocument();
+  expect(
+    within(teams).getByRole("button", { name: "Import team Night Shift" }),
+  ).toBeEnabled();
+});
+
 it("keeps a team whose members are all here importable with no agents to list", async () => {
   const user = userEvent.setup();
   const bea = { ...agent("Bea", 2), pubkey: "b".repeat(64) };
