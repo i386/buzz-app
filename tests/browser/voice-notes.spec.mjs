@@ -99,6 +99,11 @@ test.beforeEach(async ({ page }) => {
     page.getByRole("button", { name: "Play voice note", exact: true }),
   ).toBeVisible();
 });
+test.afterEach(async ({ page }) => {
+  // Media handlers read blob bytes from this page. Stop admitting routes and
+  // finish those reads before Playwright tears down their context.
+  await page.unrouteAll({ behavior: "wait" });
+});
 async function record(page) {
   await page
     .getByRole("button", { name: "Record voice note", exact: true })
