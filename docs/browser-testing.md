@@ -3,8 +3,8 @@
 `pnpm test` and therefore `just scan` now run the checked-in Chromium and WebKit
 journeys in `tests/browser/`. `just iterate` remains the fast, browser-free loop.
 [GitHub Actions](../.github/workflows/ci.yml) runs these gates on PRs and main
-pushes: an isolated serial measurement job runs alongside twelve Linux functional jobs
-(six file-level shards per engine, two workers per runner) and one macOS WebKit
+pushes: an isolated serial measurement job runs alongside eighteen Linux functional jobs
+(nine file-level shards per engine, two workers per runner) and one macOS WebKit
 recording job. Both engines remain
 mandatory for the [CI-selected coverage](#ci-coverage-and-local-only-webkit-checks);
 `CI required` fails if any lane or shard fails, is cancelled, or is skipped.
@@ -116,15 +116,15 @@ are unchanged, and no recording cases become local-only. Both engines, serial
 measurement order, zero retries, the documented functional assertions and
 measurement ceilings, and the strict `CI required` aggregate remain in place.
 
-CI shards each functional engine across six runners, without waiting for the
+CI shards each functional engine across nine runners, without waiting for the
 separate measurement runner. Each job selects its engine with `--no-deps` and
-`--shard=N/6`; measurement success is enforced by `CI required`, not job ordering.
+`--shard=N/9`; measurement success is enforced by `CI required`, not job ordering.
 This preserves measurement isolation while spending more setup/runner minutes,
 including when measurements fail. Local same-runner dependencies remain unchanged.
 Artifacts include engine and shard so parallel jobs never overwrite one another.
 
 The Node integration gate lists tests without launching browsers and checks that
-the workflow's twelve Linux selections plus macOS recording cover every functional
+the workflow's eighteen Linux selections plus macOS recording cover every functional
 test/project from the full local config exactly once, with no measurements included.
 It also exercises the required
 check's shell against failed, skipped, cancelled and missing lane results.
