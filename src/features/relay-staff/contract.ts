@@ -362,7 +362,7 @@ export type SaveResult =
   | { state: "failed"; failure: StaffFailure };
 
 export interface RelayStaffBackend {
-  /** False in browser and dev-broker builds: show "native build required". */
+  /** False in browser and dev-broker builds, where the console stays hidden. */
   readonly available: boolean;
   /**
    * Unsigned. Reads `admin_api` from `relay`'s NIP-11 and returns the

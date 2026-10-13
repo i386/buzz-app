@@ -3,10 +3,7 @@ import { Button } from "../../shared/design-system/ui/Button";
 import { SearchField } from "../../shared/design-system/ui/SearchField";
 import { Tabs } from "../../shared/design-system/ui/Tabs";
 import { ArrowLeftIcon } from "../../shared/design-system/icons";
-import {
-  unsupported,
-  type CommunityDto,
-} from "../../features/relay-staff/contract";
+import type { CommunityDto } from "../../features/relay-staff/contract";
 import { ActionsSection, MembersSection } from "./DirectActions";
 import { Reports } from "./Reports";
 import { Restrictions } from "./Restrictions";
@@ -67,7 +64,7 @@ export function Communities({
     pages.loading,
     pages.next ? pages.more : pages.restart,
   );
-  const [pinnedRead] = useRead(
+  const [pinnedRead, reloadPinned] = useRead(
     connectedHost ? { route: "listCommunities", q: connectedHost } : null,
     [context, connectedHost],
   );
@@ -76,11 +73,11 @@ export function Communities({
       ? (pinnedRead.value.items.find((c) => c.host === connectedHost) ?? null)
       : null;
   const shownPinned = pinned?.host.toLowerCase().startsWith(q) ? pinned : null;
-
-  if (pages.failure && unsupported(pages.failure))
-    return (
-      <p className="text-body-sm text-secondary">{UNSUPPORTED_BROWSING}</p>
-    );
+  const pinnedRetry = useRetry(
+    pinnedRead.state === "failed" ? pinnedRead.failure : null,
+    pinnedRead.state === "loading",
+    reloadPinned,
+  );
 
   const items = secret
     ? []
@@ -113,10 +110,18 @@ export function Communities({
           That's a secret key. Never paste it here.
         </p>
       )}
+      {pinnedRetry.failure && (
+        <Failure
+          failure={pinnedRetry.failure}
+          onRetry={pinnedRetry.retry}
+          retrying={pinnedRetry.retrying}
+        />
+      )}
       {shownPinned && <ul>{row(shownPinned, true)}</ul>}
       {retry.failure && (
         <Failure
           failure={retry.failure}
+          unsupportedText={UNSUPPORTED_BROWSING}
           onRetry={retry.retry}
           retrying={retry.retrying}
         />

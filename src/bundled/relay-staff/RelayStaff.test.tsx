@@ -642,7 +642,11 @@ it("a failed feedback list recovers with Retry in the same view", async () => {
 
 it("a failed community directory recovers with Retry in the same view", async () => {
   const working = routes.listCommunities ?? (() => ok({ items: [] }));
-  routes.listCommunities = () => fail({ category: "rejected", status: 500 });
+  // The directory fails; the pinned lookup for the connected host still works.
+  routes.listCommunities = (request) =>
+    (request as { q?: string }).q
+      ? working(request)
+      : fail({ category: "rejected", status: 500 });
   mount();
   fireEvent.click(await screen.findByRole("tab", { name: "Communities" }));
   const retry = await screen.findByRole("button", { name: "Retry" });
@@ -651,6 +655,135 @@ it("a failed community directory recovers with Retry in the same view", async ()
   expect(
     await screen.findByRole("button", { name: /team\.example\.com/ }),
   ).toBeVisible();
+  expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
+});
+
+it("feedback with only oversized attachments still shows the hidden count", async () => {
+  feedbackWith([
+    ["imeta", `x ${"2".repeat(64)}`, "m image/png", `size ${20 * 1024 * 1024}`],
+  ]);
+  mount();
+  fireEvent.click(await screen.findByRole("tab", { name: "Feedback" }));
+  fireEvent.click(await screen.findByRole("button", { name: /Broken/ }));
+  expect(await screen.findByText(/1 attachment not shown/)).toBeVisible();
+  expect(screen.queryByRole("button", { name: "Save" })).toBeNull();
+});
+
+it("a failed attachment preview recovers with Retry in place", async () => {
+  const original = backend.attachment;
+  let release!: (outcome: StaffOutcome<Uint8Array>) => void;
+  let attempts = 0;
+  backend.attachment = (() => {
+    attempts += 1;
+    if (attempts === 1)
+      return Promise.resolve(fail({ category: "rejected", status: 500 }));
+    return new Promise((resolve) => {
+      release = resolve;
+    });
+  }) as RelayStaffBackend["attachment"];
+  try {
+    await openFeedback("m image/png");
+    const retry = await screen.findByRole("button", { name: "Retry" });
+    retry.focus();
+    fireEvent.click(retry);
+    await waitFor(() => expect(release).toBeTypeOf("function"));
+    expect(screen.getByRole("button", { name: "Retry" })).toBe(retry);
+    expect(retry).toHaveFocus();
+    await act(async () =>
+      release(ok(new Uint8Array([1, 2, 3])) as StaffOutcome<Uint8Array>),
+    );
+    expect(screen.getByAltText("Feedback attachment")).toHaveAttribute(
+      "src",
+      "blob:x",
+    );
+    expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
+    expect(attempts).toBe(2);
+  } finally {
+    backend.attachment = original;
+  }
+});
+
+it("a failed pinned community lookup recovers with Retry", async () => {
+  let pinnedFails = true;
+  routes.listCommunities = (request) => {
+    if ((request as { q?: string }).q === "team.example.com" && pinnedFails)
+      return fail({ category: "rejected", status: 500 });
+    return ok({
+      items: [{ id: "c1", host: "team.example.com", icon: null }],
+      nextCursor: null,
+    });
+  };
+  mount();
+  fireEvent.click(await screen.findByRole("tab", { name: "Communities" }));
+  const retry = await screen.findByRole("button", { name: "Retry" });
+  pinnedFails = false;
+  fireEvent.click(retry);
+  expect(await screen.findByText("Connected")).toBeVisible();
+  expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
+});
+
+/** Directory pages: `first` then a later page answered by `later`. */
+function directoryPages(later: Handler) {
+  routes.listCommunities = (request) => {
+    const { q, cursor } = request as { q?: string; cursor?: string };
+    if (q) return ok({ items: [], nextCursor: null });
+    if (cursor === "p2") return later(request);
+    return ok({
+      items: [{ id: "a", host: "a.example.com", icon: null }],
+      nextCursor: "p2",
+    });
+  };
+}
+
+it("an unsupported later directory page keeps the rows already loaded", async () => {
+  directoryPages(() => routeMissing);
+  mount();
+  fireEvent.click(await screen.findByRole("tab", { name: "Communities" }));
+  fireEvent.click(await screen.findByRole("button", { name: "Load more" }));
+  expect(
+    await screen.findByText(
+      "This relay doesn't support community browsing yet.",
+    ),
+  ).toBeVisible();
+  expect(screen.getByRole("button", { name: "a.example.com" })).toBeVisible();
+  expect(screen.getByRole("button", { name: "Retry" })).toBeVisible();
+});
+
+it("Retry on a failed later directory page resends that cursor in place", async () => {
+  let release!: (outcome: StaffOutcome<unknown>) => void;
+  let laterCalls = 0;
+  directoryPages(() => {
+    laterCalls += 1;
+    if (laterCalls === 1) return fail({ category: "rejected", status: 500 });
+    return new Promise((resolve) => {
+      release = resolve;
+    });
+  });
+  mount();
+  fireEvent.click(await screen.findByRole("tab", { name: "Communities" }));
+  fireEvent.click(await screen.findByRole("button", { name: "Load more" }));
+  const retry = await screen.findByRole("button", { name: "Retry" });
+  retry.focus();
+  fireEvent.click(retry);
+  await waitFor(() => expect(release).toBeTypeOf("function"));
+  expect(screen.getByRole("button", { name: "Retry" })).toBe(retry);
+  expect(retry).toHaveFocus();
+  await act(async () =>
+    release(
+      ok({
+        items: [{ id: "b", host: "b.example.com", icon: null }],
+        nextCursor: null,
+      }),
+    ),
+  );
+  const cursors = sent("listCommunities")
+    .map((r) => r as { q?: string; cursor?: string })
+    .filter((r) => !r.q)
+    .map((r) => r.cursor ?? null);
+  expect(cursors).toEqual([null, "p2", "p2"]);
+  expect(
+    screen.getAllByRole("button", { name: /^[ab]\.example\.com$/ }),
+  ).toHaveLength(2);
   expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
 });
 

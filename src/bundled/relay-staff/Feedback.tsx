@@ -249,7 +249,7 @@ function FeedbackBody({
           <span className="text-body-sm">{status}</span>
         </div>
       )}
-      {shown.length > 0 && (
+      {(shown.length > 0 || hidden > 0) && (
         <div className="flex flex-col gap-3">
           <h4 className="text-body-sm font-medium">Attachments</h4>
           {shown.map((attachment) => (
@@ -280,6 +280,9 @@ function AttachmentView({ attachment }: { attachment: AttachmentRef }) {
   >(null);
   const [saving, setSaving] = useState(false);
   const [viewing, setViewing] = useState(false);
+  // Bumped by Retry to rerun the preview load; the failure stays (busy) until it settles.
+  const [attempt, setAttempt] = useState(0);
+  const [retrying, setRetrying] = useState(false);
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: keyed by the attachment's identity, not its object
   useEffect(() => {
@@ -288,6 +291,7 @@ function AttachmentView({ attachment }: { attachment: AttachmentRef }) {
     let current = true;
     void session.attachment(attachment).then((outcome) => {
       if (!current) return;
+      setRetrying(false);
       if (!outcome.ok) return setPreview({ failure: outcome.failure });
       url = URL.createObjectURL(
         new Blob([outcome.value as BlobPart], { type: image }),
@@ -299,7 +303,7 @@ function AttachmentView({ attachment }: { attachment: AttachmentRef }) {
       current = false;
       if (url) URL.revokeObjectURL(url);
     };
-  }, [session, attachment.feedbackId, attachment.sha256, image]);
+  }, [session, attachment.feedbackId, attachment.sha256, image, attempt]);
 
   const save = async () => {
     setSaving(true);
@@ -344,7 +348,14 @@ function AttachmentView({ attachment }: { attachment: AttachmentRef }) {
               )}
           </>
         ) : (
-          <Failure failure={preview.failure} />
+          <Failure
+            failure={preview.failure}
+            retrying={retrying}
+            onRetry={() => {
+              setRetrying(true);
+              setAttempt((n) => n + 1);
+            }}
+          />
         ))}
       <span className="flex items-center gap-2 text-secondary">
         {attachment.mime} · {Math.ceil(attachment.size / 1024)} KiB
