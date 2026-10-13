@@ -470,6 +470,18 @@ export type PortInput = Readonly<
       instructions?: string;
     }
 >;
+/** Whether the binding's owner owns the agent, by the partition Yours uses. */
+function ownedBy({ owner }: Pick<AgentIdentity, "owner">, binding: Binding) {
+  return binding.scope === relayPartition(binding.origin, owner);
+}
+/** Whether the agent is in Yours under the binding: its owner's, there. */
+function yours(identity: AgentIdentity, binding: Binding) {
+  return (
+    !identity.deleted &&
+    originOf(identity.relay) === binding.origin &&
+    ownedBy(identity, binding)
+  );
+}
 /** What Import can bring over, and the agents already in Yours. */
 export type FoundAgents = PortableAgents &
   Readonly<{ here: readonly string[] }>;
@@ -1124,13 +1136,15 @@ export class AgentsService extends Service implements Agents {
         .filter((identity) => !identity.deleted)
         .map((identity) => identity.pubkey),
     );
-    const origin = this.selectedOrigin();
+    const binding = this.bound.get(this.selectedOrigin() ?? "")?.binding;
     return {
       ...found,
       agents: found.agents.filter((agent) => !own.has(agent.pubkey)),
-      here: this.identities
-        .filter((identity) => this.yours(identity, origin))
-        .map((identity) => identity.pubkey),
+      here: binding
+        ? this.identities
+            .filter((identity) => yours(identity, binding))
+            .map((identity) => identity.pubkey)
+        : [],
     };
   }
 
@@ -1188,12 +1202,12 @@ export class AgentsService extends Service implements Agents {
       const name =
         member.name.trim() || (labels.get(member.pubkey) ?? member.pubkey);
       const here = live.find((identity) => identity.pubkey === member.pubkey);
-      if (here && this.yours(here, origin)) {
+      if (here && yours(here, binding)) {
         members.push(member.pubkey);
         continue;
       }
       // Its keys are another account's; neither can take it from the other.
-      if (here && here.owner !== binding.viewer) {
+      if (here && !ownedBy(here, binding)) {
         foreign.push(name);
         continue;
       }
@@ -1900,14 +1914,6 @@ export class AgentsService extends Service implements Agents {
       attentionEnabled: record.attentionEnabled === true,
       config: record.config,
     });
-  }
-  /** Whether the agent shows in Yours for the community at `origin`. */
-  private yours(identity: AgentIdentity, origin: string | undefined) {
-    return (
-      !identity.deleted &&
-      originOf(identity.relay) === origin &&
-      !!this.bindingOf(identity)
-    );
   }
   /** The live binding of the agent's community, if it has one now. */
   private bindingOf({ relay, owner }: Pick<AgentIdentity, "relay" | "owner">) {

@@ -802,6 +802,24 @@ it("imports every member into the community and owner the import started with", 
   expect(result.team).toEqual(savedShift([alder, birch]));
 });
 
+it("keeps an agent of the import's owner on the team when another owner signs in meanwhile", async () => {
+  const { service, native, signIn } = await setup({
+    identities: [here(birch)],
+  });
+  listsTeam(native, nightShift([alder, birch]));
+  const listed = native.portable.getMockImplementation() as NonNullable<
+    ReturnType<typeof native.portable.getMockImplementation>
+  >;
+  native.portable.mockImplementationOnce(async () => {
+    signIn("e".repeat(64));
+    return listed();
+  });
+  const result = await importTeam(service);
+  expect(result.team).toEqual(savedShift([alder, birch]));
+  expect(result.elsewhere).toEqual([]);
+  expect(result.foreign).toEqual([]);
+});
+
 it("imports nothing when the community changes while old Buzz is read", async () => {
   const { service, native, second, select } = await setup();
   listsTeam(native, nightShift([alder]));
