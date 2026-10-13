@@ -20,6 +20,7 @@ import { Button } from "../../shared/design-system/ui/Button";
 import { Field } from "../../shared/design-system/ui/Field";
 import { Input } from "../../shared/design-system/ui/Input";
 import { Select } from "../../shared/design-system/ui/Select";
+import { SwitchPreferenceRow } from "../../shared/design-system/ui/SwitchPreferenceRow";
 import {
   type ClaudeRuntime,
   type Config,
@@ -181,6 +182,9 @@ export function createTabs({
       defaults.snapshot,
     );
     const [draftDefault, setDraftDefault] = useState(savedDefaults.model);
+    const [draftAutoMemory, setDraftAutoMemory] = useState(
+      savedDefaults.autoMemory,
+    );
     const [defaultError, setDefaultError] = useState("");
     const [code, setCode] = useState("");
     const status = state.status;
@@ -314,7 +318,10 @@ export function createTabs({
             event.preventDefault();
             setDefaultError("");
             try {
-              defaults.save({ model: draftDefault });
+              defaults.save({
+                model: draftDefault,
+                autoMemory: draftAutoMemory,
+              });
             } catch (error) {
               setDefaultError(message(error));
               return;
@@ -347,6 +354,12 @@ export function createTabs({
             {...(draftDefault === "" ? { valueLabel: nativeLabel } : {})}
             onValueChange={setDraftDefault}
           />
+          <SwitchPreferenceRow
+            label="Claude auto memory"
+            description="Let Claude write its own auto memory in addition to Buzz memory. CLAUDE.md works either way."
+            checked={draftAutoMemory}
+            onCheckedChange={setDraftAutoMemory}
+          />
           {defaultError && (
             <p role="alert" className="buzz-field-error">
               {defaultError}
@@ -356,7 +369,10 @@ export function createTabs({
             <Button
               type="submit"
               variant="prominent"
-              disabled={draftDefault === savedDefaults.model}
+              disabled={
+                draftDefault === savedDefaults.model &&
+                draftAutoMemory === savedDefaults.autoMemory
+              }
               focusableWhenDisabled
             >
               Save defaults

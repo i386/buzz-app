@@ -36,6 +36,7 @@ it("starts Claude as the SDK does and initializes it with the system prompt", as
       CLAUDE_CODE_SESSION_ID: null,
       CLAUDE_CODE_ENTRYPOINT: "sdk-ts",
       CLAUDE_CODE_EMIT_SESSION_STATE_EVENTS: "1",
+      CLAUDE_CODE_DISABLE_AUTO_MEMORY: null,
     },
   });
   expect(fake?.received[0]).toMatchObject({
@@ -44,6 +45,18 @@ it("starts Claude as the SDK does and initializes it with the system prompt", as
   });
   expect(claude.sessionId).toBe("new-session");
   expect(claude.started).toBe(false);
+});
+
+it("disables Claude auto memory for a Buzz-managed launch when requested", async () => {
+  const { spawn, processes } = fakeSpawn();
+  await ClaudeProcess.start(spawn, {
+    ...launch,
+    disableAutoMemory: true,
+    sessionId: "s1",
+  });
+  expect(processes[0]?.options.env).toMatchObject({
+    CLAUDE_CODE_DISABLE_AUTO_MEMORY: "1",
+  });
 });
 
 it("resolves a message once the session is idle, and keeps the process for the next", async () => {

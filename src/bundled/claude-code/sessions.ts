@@ -390,8 +390,9 @@ export class AgentSessions {
 }
 
 /** Where a process runs and its model: all a spare is started with. */
-type Where = Pick<ClaudeLaunch, "cwd" | "model">;
-const place = ({ cwd, model }: Where) => JSON.stringify([cwd, model ?? ""]);
+type Where = Pick<ClaudeLaunch, "cwd" | "model" | "disableAutoMemory">;
+const place = ({ cwd, model, disableAutoMemory }: Where) =>
+  JSON.stringify([cwd, model ?? "", disableAutoMemory ?? false]);
 
 /** One process started ahead of need, for whichever agent next starts a
  * conversation where it runs and with its model. Starting is most of the wait

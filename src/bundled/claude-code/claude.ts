@@ -24,6 +24,8 @@ export type Spawn = (
 
 export type ClaudeLaunch = Readonly<{
   cwd: string;
+  /** Keep Claude's native auto memory out of Buzz-managed sessions. */
+  disableAutoMemory?: boolean;
   /** Appended to Claude's own system prompt. */
   systemPrompt: string;
   model?: string;
@@ -188,7 +190,10 @@ export class ClaudeProcess {
           : []),
       ],
       cwd: launch.cwd,
-      env: ENV,
+      env: {
+        ...ENV,
+        CLAUDE_CODE_DISABLE_AUTO_MEMORY: launch.disableAutoMemory ? "1" : null,
+      },
       onStdout: (data) => (claude ? claude.read(data) : early.push(data)),
       onStderr: (data) =>
         claude ? claude.readError(data) : earlyErrors.push(data),
