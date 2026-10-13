@@ -1,13 +1,22 @@
 // A type's model choice, shared by agent types for the New agent dialog and
-// their settings: a list to pick from, or any model ID typed in.
-import { useLayoutEffect, useRef, useState } from "react";
+// their settings. Each type decides whether its catalog accepts custom IDs.
+import { useId, useRef, useState, type ComponentProps } from "react";
 import {
   ClaudeLogoIcon,
   OpenAILogoIcon,
   RobotIcon,
 } from "../../shared/design-system/icons";
-import { Combobox } from "../../shared/design-system/ui/Combobox";
-import styles from "./AgentControls.module.css";
+import { Button } from "../../shared/design-system/ui/Button";
+import { ChoiceRow } from "../../shared/design-system/ui/ChoiceRow";
+import { Dialog } from "../../shared/design-system/ui/Dialog";
+import { Field } from "../../shared/design-system/ui/Field";
+import { Input } from "../../shared/design-system/ui/Input";
+import {
+  MenuItem,
+  MenuRadioGroup,
+  MenuRadioItem,
+} from "../../shared/design-system/ui/Menu";
+import { Select } from "../../shared/design-system/ui/Select";
 
 export type ModelChoice = Readonly<{
   /** The model ID saved in the type's config. */
@@ -15,6 +24,12 @@ export type ModelChoice = Readonly<{
   label: string;
   description?: string | undefined;
 }>;
+
+const CUSTOM_MODEL_ACTION: ModelChoice = {
+  id: "\0custom-model",
+  label: "Custom model",
+  description: "Enter a model ID",
+};
 
 /** Recognizes the vendor from a model's ID or name. */
 export function ModelIcon({ model }: { model: string }) {
@@ -27,146 +42,211 @@ export function ModelIcon({ model }: { model: string }) {
   return <Icon size={18} aria-hidden="true" />;
 }
 
-/** `value` is a model ID, or "" for the type's default, `defaultLabel`.
- * `compact` sizes it to its text, for the New agent dialog's corner. */
+/** The custom-model form. Create hosts it outside its closing menu; Settings
+ * renders it beside the field that opened it. */
+export function CustomModelDialog({
+  initialValue,
+  onSubmit,
+  onClose,
+  finalFocus = false,
+}: {
+  initialValue: string;
+  onSubmit(model: string): void;
+  onClose(): void;
+  finalFocus?: ComponentProps<typeof Dialog>["finalFocus"];
+}) {
+  const [model, setModel] = useState(initialValue);
+  const input = useRef<HTMLInputElement>(null);
+  const form = useId();
+  return (
+    <Dialog
+      open
+      onOpenChange={(open) => {
+        if (!open) onClose();
+      }}
+      title="Custom model"
+      headerGap="compact"
+      initialFocus={input}
+      finalFocus={finalFocus}
+      actions={
+        <>
+          <Button onClick={onClose}>Cancel</Button>
+          <Button
+            form={form}
+            type="submit"
+            variant="prominent"
+            disabled={!model.trim()}
+          >
+            Use model
+          </Button>
+        </>
+      }
+    >
+      <form
+        id={form}
+        onSubmit={(event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          const value = model.trim();
+          if (value) onSubmit(value);
+        }}
+      >
+        <Field label="Model ID" labelVisibility="hidden">
+          <Input
+            ref={input}
+            value={model}
+            placeholder="Enter a model ID"
+            required
+            autoCorrect="off"
+            autoCapitalize="none"
+            spellCheck={false}
+            onChange={(event) => setModel(event.target.value)}
+          />
+        </Field>
+      </form>
+    </Dialog>
+  );
+}
+
+/** `value` is a model ID, or "" for the type's default, `defaultLabel`. */
 export function ModelPicker({
   models,
+  allowCustomModel,
   value,
   defaultLabel,
+  defaultDescription,
   onChange,
   loading = false,
   disabled = false,
-  compact = false,
+  presentation = "field",
   description,
+  requestCustomModel,
+  active = true,
 }: {
   models: readonly ModelChoice[];
+  /** Whether text absent from `models` may be committed as its model ID. */
+  allowCustomModel: boolean;
   value: string;
   defaultLabel: string;
+  defaultDescription?: string;
   onChange(value: string): void;
   loading?: boolean;
   disabled?: boolean;
-  compact?: boolean;
+  presentation?: "field" | "menu";
   description?: string | undefined;
+  requestCustomModel?: (
+    initialValue: string,
+    onChange: (model: string) => void,
+  ) => void;
+  /** Whether this menu belongs to the provider currently selected by its host. */
+  active?: boolean;
 }) {
-  const [query, setQuery] = useState<string | null>(null);
-  const highlighted = useRef<ModelChoice | null>(null);
-  const measure = useRef<HTMLSpanElement>(null);
-  const [width, setWidth] = useState(0);
-  const fallback: ModelChoice = { id: "", label: defaultLabel };
+  const [customModel, setCustomModel] = useState<string | null>(null);
+  const control = useRef<HTMLDivElement>(null);
+  const fallback: ModelChoice = {
+    id: "",
+    label: defaultLabel,
+    description: defaultDescription,
+  };
   const items: ModelChoice[] = [fallback, ...models];
   if (value && !items.some((model) => model.id === value))
-    items.push({ id: value, label: value, description: "Custom model" });
-  const custom = query?.trim();
-  if (custom && !items.some((m) => m.id === custom || m.label === custom))
-    items.push({ id: custom, label: custom, description: "Custom model" });
-  const shown =
-    query === null
-      ? items
-      : items.filter((model) =>
-          `${model.label} ${model.id}`
-            .toLowerCase()
-            .includes(query.toLowerCase()),
-        );
+    items.push({
+      id: value,
+      label: value,
+      description: allowCustomModel ? "Custom model" : "Unavailable model",
+    });
   const selected = items.find((model) => model.id === value) ?? fallback;
-  const text = query ?? selected.label;
-  useLayoutEffect(() => {
-    const element = measure.current;
-    if (!compact || !element) return;
-    const update = () => setWidth(element.getBoundingClientRect().width);
-    update();
-    const observer = new ResizeObserver(update);
-    observer.observe(element);
-    return () => observer.disconnect();
-  }, [compact]);
-  const commit = () => {
-    if (query === null) return;
-    const match = items.find(
-      (model) => model.id === query || model.label === query,
-    );
-    onChange((match?.id ?? query).trim());
-    setQuery(null);
+  const choices = allowCustomModel ? [...items, CUSTOM_MODEL_ACTION] : items;
+  const openCustomDialog = () => {
+    const listed = !value || models.some((model) => model.id === value);
+    const initialValue = listed ? "" : value;
+    if (requestCustomModel) requestCustomModel(initialValue, onChange);
+    else setCustomModel(initialValue);
   };
   return (
-    <div className={compact ? styles.compactModel : undefined}>
-      {compact && (
-        <span ref={measure} aria-hidden="true" className={styles.measure}>
-          {text}
-        </span>
-      )}
-      <Combobox.Root<ModelChoice>
-        disabled={disabled}
-        items={shown}
-        filteredItems={shown}
-        value={selected}
-        inputValue={text}
-        modal={false}
-        itemToStringLabel={(model) => model.label}
-        isItemEqualToValue={(a, b) => a.id === b.id}
-        onItemHighlighted={(model) => {
-          highlighted.current = model ?? null;
-        }}
-        onInputValueChange={(next, details) => {
-          if (
-            details.reason === "input-change" ||
-            details.reason === "input-clear"
-          )
-            setQuery(next);
-        }}
-        onOpenChange={(open, details) => {
-          if (!open && details.reason === "escape-key") setQuery(null);
-        }}
-        onValueChange={(model) => {
-          if (model) onChange(model.id);
-          setQuery(null);
-        }}
-      >
-        <Combobox.Control
-          label="Model"
-          labelVisibility={compact ? "hidden" : "visible"}
-          triggerLabel="Browse models"
-          loading={loading}
-          description={compact ? undefined : description}
-          leading={<ModelIcon model={`${selected.id} ${selected.label}`} />}
-          appearance={compact ? "chip" : "field"}
-          placeholder="Choose or enter a model"
-          style={
-            compact
-              ? { width: width ? `${Math.ceil(width) + 2}px` : "12ch" }
-              : undefined
-          }
-          onBlur={commit}
-          onKeyDown={(event) => {
-            if (event.key === "Escape") setQuery(null);
-            if (
-              event.key === "Enter" &&
-              !highlighted.current &&
-              !event.nativeEvent.isComposing
-            ) {
-              event.preventDefault();
-              commit();
-            }
-          }}
-        />
-        <Combobox.Popup
-          className={styles.modelOptions}
-          empty="Type a model ID to use a custom model."
-        >
-          <Combobox.List>
-            {(model: ModelChoice) => (
-              <Combobox.Item
-                key={model.id || "default"}
-                value={model}
-                description={model.description}
+    <>
+      {presentation === "menu" ? (
+        <>
+          <MenuRadioGroup
+            value={active ? selected.id : "\0inactive-provider"}
+            onValueChange={(model) => onChange(model)}
+          >
+            {items.map((model) => (
+              <MenuRadioItem
+                key={model.id}
+                value={model.id}
+                disabled={disabled || loading}
+                closeOnClick
               >
-                <span className="flex items-center gap-2">
-                  <ModelIcon model={`${model.id} ${model.label}`} />
-                  {model.label}
-                </span>
-              </Combobox.Item>
-            )}
-          </Combobox.List>
-        </Combobox.Popup>
-      </Combobox.Root>
-    </div>
+                <ChoiceRow
+                  label={model.label}
+                  description={model.description}
+                  leading={<ModelIcon model={`${model.id} ${model.label}`} />}
+                />
+              </MenuRadioItem>
+            ))}
+          </MenuRadioGroup>
+          {allowCustomModel && (
+            <MenuItem
+              disabled={disabled || loading}
+              closeOnClick={Boolean(requestCustomModel)}
+              onClick={openCustomDialog}
+            >
+              <ChoiceRow
+                label={CUSTOM_MODEL_ACTION.label}
+                description={CUSTOM_MODEL_ACTION.description}
+                leading={<RobotIcon size={18} aria-hidden="true" />}
+              />
+            </MenuItem>
+          )}
+        </>
+      ) : (
+        <div ref={control}>
+          <Select
+            label="Model"
+            value={selected.id}
+            valueLabel={selected.label}
+            valueTitle={selected.label}
+            leading={<ModelIcon model={`${selected.id} ${selected.label}`} />}
+            variant="field"
+            groups={[
+              {
+                label: "",
+                options: choices.map((model) => ({
+                  value: model.id,
+                  label: model.label,
+                  description: model.description,
+                  leading: <ModelIcon model={`${model.id} ${model.label}`} />,
+                })),
+              },
+            ]}
+            disabled={disabled || loading}
+            description={description}
+            onValueChange={(model) => {
+              if (model === CUSTOM_MODEL_ACTION.id) openCustomDialog();
+              else onChange(model);
+            }}
+          />
+          {loading && <p className="buzz-field-description">Loading models…</p>}
+        </div>
+      )}
+      {allowCustomModel && customModel !== null && (
+        <CustomModelDialog
+          initialValue={customModel}
+          onClose={() => setCustomModel(null)}
+          onSubmit={(model) => {
+            onChange(model);
+            setCustomModel(null);
+          }}
+          finalFocus={() =>
+            presentation === "field"
+              ? (control.current?.querySelector<HTMLElement>(
+                  "[role=combobox]",
+                ) ?? false)
+              : false
+          }
+        />
+      )}
+    </>
   );
 }

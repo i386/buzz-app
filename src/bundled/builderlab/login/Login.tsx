@@ -7,11 +7,13 @@ export function Login({
   session,
   available,
   active,
+  showHeading = true,
   unavailableReason = "Open the Buzz desktop app to sign in with Builderlab.",
 }: {
   session: OAuthSession;
   available: boolean;
   active(): boolean;
+  showHeading?: boolean;
   unavailableReason?: string;
 }) {
   const state = useSyncExternalStore(
@@ -27,10 +29,17 @@ export function Login({
   );
   return (
     <div data-buzz-ui="" className="flex flex-col items-start gap-4">
-      <Header
-        title="Builderlab"
-        subtitle="Connect your Builderlab account. Your credential stays in memory until you sign out or close Buzz."
-      />
+      {showHeading ? (
+        <Header
+          title="Builderlab"
+          subtitle="Connect your Builderlab account. Your credential stays in memory until you sign out or close Buzz."
+        />
+      ) : (
+        <p className="m-0 text-body-sm text-secondary">
+          Connect your Builderlab account. Your credential stays in memory until
+          you sign out or close Buzz.
+        </p>
+      )}
       {!available ? (
         <p role="status" className="text-body-sm text-secondary">
           {unavailableReason}

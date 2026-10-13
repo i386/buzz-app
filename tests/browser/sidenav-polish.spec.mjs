@@ -682,6 +682,22 @@ test("shell toggle restores the shared sidebar for Channels and Agents", async (
   await expect(
     page.getByRole("region", { name: "Agents", exact: true }),
   ).toBeVisible();
+
+  // Portalled comboboxes temporarily hide outside regions from assistive tech.
+  // That accessibility state must not override the shell's visible layout state.
+  const accessibilityHiddenWidth = await shellNavigation.evaluate(
+    async (node) => {
+      node.setAttribute("aria-hidden", "true");
+      const transitions = node.getAnimations();
+      for (const transition of transitions) transition.finish();
+      await Promise.all(transitions.map((transition) => transition.finished));
+      return node.getBoundingClientRect().width;
+    },
+  );
+  await expect(shellNavigation).toHaveAttribute("data-sidebar-open", "true");
+  expect(accessibilityHiddenWidth).toBe(expandedWidth + gutterWidth);
+  await shellNavigation.evaluate((node) => node.removeAttribute("aria-hidden"));
+
   await page.getByRole("button", { name: "Hide Channel sidebar" }).click();
   await expect(sidebar).not.toBeVisible();
   await expect(rail).toBeVisible();

@@ -1,7 +1,9 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { AgentType } from "../../features/agents/service";
+import { CodexLogoIcon } from "../../shared/design-system/icons";
 import { CodexRuntime } from "./runtime";
+import { CodexProvider } from "./tabs";
 import { apply } from "./index";
 
 const desktop = vi.hoisted(() => ({ tauri: true }));
@@ -12,6 +14,7 @@ beforeEach(() => {
   vi.spyOn(navigator, "platform", "get").mockReturnValue("MacIntel");
 });
 afterEach(() => {
+  localStorage.clear();
   vi.restoreAllMocks();
 });
 
@@ -37,11 +40,17 @@ function applied() {
 }
 
 it("registers only where the desktop app can run codex and base64", () => {
-  expect(applied()).toMatchObject({
+  const check = vi.spyOn(CodexProvider.prototype, "check").mockResolvedValue();
+  const type = applied();
+  expect(check).not.toHaveBeenCalled();
+  expect(type).toMatchObject({
     id: "codex",
     title: "Codex",
     Create: expect.any(Function),
+    icon: CodexLogoIcon,
   });
+  expect(type?.provider).toBeDefined();
+  expect(type?.tabs?.map((tab) => tab.title)).toEqual(["Settings"]);
   vi.spyOn(navigator, "platform", "get").mockReturnValue("Linux x86_64");
   expect(applied()).toBeDefined();
   vi.spyOn(navigator, "platform", "get").mockReturnValue("Win32");
@@ -51,7 +60,7 @@ it("registers only where the desktop app can run codex and base64", () => {
   expect(applied()).toBeUndefined();
 });
 
-it("adopts a brought-over agent's instructions and workspace, nothing else", () => {
+it("adopts and carries an agent's instructions and workspace, nothing else", () => {
   const type = applied();
   const saved = type?.defaults().config;
   expect(
@@ -61,8 +70,48 @@ it("adopts a brought-over agent's instructions and workspace, nothing else", () 
     ...(saved as object),
     workspace: "/work/code",
   });
+  expect(type?.adopt?.({ workspace: "~/code" }, saved)).toEqual({
+    ...(saved as object),
+    workspace: "~/code",
+  });
   // A workspace Codex cannot run in stays the default.
-  expect(type?.adopt?.({ workspace: "~/code" }, saved)).toEqual(saved);
+  expect(type?.adopt?.({ workspace: "code" }, saved)).toEqual(saved);
+  expect(
+    type?.carry?.({ ...(saved as object), model: "gpt", instructions: " " }),
+  ).toEqual({});
+  expect(
+    type?.carry?.({ instructions: "Triage.", workspace: "/work/code" }),
+  ).toEqual({ instructions: "Triage.", workspace: "/work/code" });
+  expect(type?.describeMigration?.(saved)).toEqual([
+    { id: "model", label: "Model", isOverride: false },
+    { id: "thinking", label: "Thinking", isOverride: false },
+    {
+      id: "sessions",
+      label: "Sessions",
+      isOverride: false,
+      unchangedKey: "thread",
+    },
+  ]);
+  expect(
+    type?.describeMigration?.({
+      ...(saved as object),
+      model: "gpt-5",
+      effort: "high",
+      scope: "channel",
+    }),
+  ).toEqual([
+    { id: "model", label: "Model", isOverride: true },
+    { id: "thinking", label: "Thinking", isOverride: true },
+    {
+      id: "sessions",
+      label: "Sessions",
+      isOverride: true,
+      unchangedKey: "channel",
+    },
+  ]);
+  expect(type?.migrationWarning).toBe(
+    "Any commands Codex left running will stop.",
+  );
 });
 
 it("stops agents that stop running even when the agent list could not be read", () => {

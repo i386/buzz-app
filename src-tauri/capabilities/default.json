@@ -75,6 +75,7 @@
     "allow-app-agent-port",
     "allow-app-agent-rename",
     "allow-app-agent-set-picture",
+    "allow-app-agent-set-type",
     "allow-app-agent-delete",
     "allow-app-agent-forget",
     "allow-app-agent-publish",

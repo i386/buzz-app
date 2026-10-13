@@ -284,7 +284,9 @@
       grid-template-columns var(--duration-settle) ease-in-out,
       clip-path var(--duration-settle) step-end allow-discrete;
   }
-  .shell-navigation[data-sidebar-collapsible][aria-hidden="true"] {
+  /* Portalled controls may hide outside regions from assistive tech; only the
+     shell's own state controls whether this track visually collapses. */
+  .shell-navigation[data-sidebar-collapsible]:not([data-sidebar-open]) {
     grid-template-columns: 0fr;
     clip-path: inset(0);
     transition-timing-function: ease-in-out, step-start;

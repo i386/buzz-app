@@ -161,28 +161,17 @@
   text-align: center;
 }
 
-/* The type's compact controls, beside the type choice. */
-.corner {
-  position: absolute;
-  top: var(--space-4);
-  right: var(--space-4);
-  z-index: 3;
-  display: flex;
-  align-items: center;
-  justify-content: flex-end;
-  flex-wrap: wrap;
-  gap: var(--space-1);
-  width: max-content;
-  max-width: calc(100% - var(--space-4) * 2);
-}
 .details {
   position: absolute;
-  inset: auto calc(var(--space-6) * 2) calc(var(--space-6) + var(--space-4));
+  inset: auto calc(var(--space-6) * 2) calc(var(--space-6) + var(--space-8));
   z-index: 2;
 }
 .identity[data-editing] .details {
   top: 14.75rem;
   bottom: calc(var(--space-6) * 2);
+}
+.footerSelector {
+  display: flex;
 }
 
 @media (max-width: 540px) {

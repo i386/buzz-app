@@ -46,10 +46,12 @@ import { AgentDelete } from "../../features/agents/AgentManage";
 import { useAgent, useChannelChoices } from "../../features/agents/react";
 import type { Agents } from "../../features/agents/service";
 import { agentSections } from "../../features/agents/tabs";
+import { useAgentSettingsHost } from "../agents/AgentSettingsHost";
 
 const noSubscribe = () => () => {};
 const emptyPanels: readonly RegisteredPanel[] = [];
 const noPanels = () => emptyPanels;
+const emptyAgentTypes = Object.freeze([]);
 
 export function ProfilePanel({
   panels,
@@ -134,6 +136,17 @@ function ProfileDetails({
   >(initialTab);
   // An agent's sections come from its type and the app, not the harness.
   const plugin = useAgent(agents, pubkey);
+  const agentTypes = useSyncExternalStore(
+    agents?.subscribe ?? noSubscribe,
+    agents?.types ?? (() => emptyAgentTypes),
+    () => emptyAgentTypes,
+  );
+  const settings = useAgentSettingsHost({
+    agents,
+    agent: plugin?.agent,
+    type: plugin?.type,
+    types: agentTypes,
+  });
   const channelChoices = useChannelChoices(
     plugin ? session.channels : undefined,
   );
@@ -143,15 +156,19 @@ function ProfileDetails({
     noPanels,
   );
   const sections =
-    plugin && agents
+    settings.agent && agents
       ? agentSections({
           agents,
-          ...plugin,
+          agent: settings.agent,
+          type: settings.type,
           channels: channelChoices,
           conversation: context && {
             channelId: context.channelId,
             ...(context.rootId && { rootId: context.rootId }),
           },
+          ...(settings.settingsHost
+            ? { settingsHost: settings.settingsHost }
+            : {}),
         })
       : [];
   // Opened for activity, a plugin agent shows its type's own first tab (its

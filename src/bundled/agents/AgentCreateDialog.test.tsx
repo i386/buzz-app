@@ -13,6 +13,7 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, expect, it, vi } from "vitest";
 import { AgentInstructions } from "../../features/agents/AgentInstructions";
 import { agentAvatars, avatarPacks } from "../../features/agents/avatar-packs";
+import { ModelPicker } from "../../features/agents/ModelPicker";
 import type {
   Agent,
   Agents,
@@ -25,6 +26,7 @@ afterEach(cleanup);
 
 type Echo = { reply: string };
 type Notes = { notes: string; instructions: string };
+type Modeled = { model: string; instructions: string };
 
 const echo = {
   key: "test/echo",
@@ -82,6 +84,56 @@ const notes = {
         onChange={(instructions) => onChange({ ...config, instructions })}
       />
     </>
+  ),
+} as unknown as RegisteredAgentType;
+
+const modeled = {
+  key: "test/modeled",
+  pluginId: "test",
+  revision: "1",
+  id: "modeled",
+  title: "Modeled",
+  description: "Uses a model.",
+  defaults: () => ({ config: { model: "", instructions: "Start here." } }),
+  createModelLabel: (config: Modeled) =>
+    config.model === "fast" ? "Fast" : config.model || undefined,
+  CreateModelMenu: ({
+    config,
+    disabled,
+    onChange,
+    active,
+  }: {
+    config: Modeled;
+    disabled: boolean;
+    active: boolean;
+    onChange(config: Modeled): void;
+  }) => (
+    <ModelPicker
+      presentation="menu"
+      active={active}
+      models={[{ id: "fast", label: "Fast", description: "Quick answers" }]}
+      allowCustomModel
+      value={config.model}
+      defaultLabel="Modeled default"
+      defaultDescription="Following the provider default"
+      disabled={disabled}
+      onChange={(model) => onChange({ ...config, model })}
+    />
+  ),
+  Create: ({
+    config,
+    disabled,
+    onChange,
+  }: {
+    config: Modeled;
+    disabled: boolean;
+    onChange(config: Modeled): void;
+  }) => (
+    <AgentInstructions
+      value={config.instructions}
+      disabled={disabled}
+      onChange={(instructions) => onChange({ ...config, instructions })}
+    />
   ),
 } as unknown as RegisteredAgentType;
 
@@ -177,6 +229,52 @@ it("offers no type menu for a single type, only its title", () => {
   ).not.toBeInTheDocument();
 });
 
+it("exposes provider models as a submenu without switching on hover", async () => {
+  const { dialog, user } = setup([echo, modeled]);
+  const trigger = within(dialog).getByRole("button", {
+    name: "Agent provider and model: Echo",
+  });
+  await user.click(trigger);
+  expect(
+    await screen.findByRole("menuitemradio", { name: "Echo" }),
+  ).toBeChecked();
+  const provider = screen.getByRole("menuitemradio", { name: "Modeled" });
+  expect(provider).not.toBeChecked();
+  expect(provider).toHaveAttribute("aria-haspopup", "menu");
+  await user.hover(provider);
+  expect(
+    await screen.findByRole("menuitemradio", { name: /Modeled default/ }),
+  ).not.toBeChecked();
+  expect(within(dialog).getByLabelText("Reply")).toBeInTheDocument();
+});
+
+it("shows only the provider in the Create trigger for its default model", () => {
+  const { dialog } = setup([modeled]);
+  expect(
+    within(dialog).getByRole("button", {
+      name: "Agent provider and model: Modeled",
+    }),
+  ).toHaveTextContent("Modeled");
+  expect(
+    within(dialog).getByRole("button", { name: /Modeled/ }),
+  ).not.toHaveTextContent("default");
+});
+
+it("shows an explicit model in parentheses in the Create trigger", () => {
+  const selected = {
+    ...modeled,
+    defaults: () => ({
+      config: { model: "fast", instructions: "Start here." },
+    }),
+  } as unknown as RegisteredAgentType;
+  const { dialog } = setup([selected]);
+  expect(
+    within(dialog).getByRole("button", {
+      name: "Agent provider and model: Modeled (Fast)",
+    }),
+  ).toHaveTextContent("Modeled (Fast)");
+});
+
 it("disables Create agent with an empty name", async () => {
   const { agents, dialog, user } = setup([echo]);
   expect(createButton()).toBeDisabled();
@@ -190,18 +288,22 @@ it("disables Create agent with an empty name", async () => {
   expect(agents.create).not.toHaveBeenCalled();
 });
 
-it("switches type from the corner menu, resetting the config to the new type's defaults", async () => {
+it("switches provider from the combined menu, resetting its config", async () => {
   const { agents, dialog, user } = setup([echo, notes]);
   await user.type(within(dialog).getByLabelText("Reply"), "typed in echo");
   await user.type(within(dialog).getByLabelText("Name"), "Nova");
 
   await user.click(
-    within(dialog).getByRole("button", { name: "Agent type: Echo" }),
+    within(dialog).getByRole("button", {
+      name: "Agent provider and model: Echo",
+    }),
   );
   await user.click(await screen.findByRole("menuitemradio", { name: "Notes" }));
 
   expect(
-    within(dialog).getByRole("button", { name: "Agent type: Notes" }),
+    within(dialog).getByRole("button", {
+      name: "Agent provider and model: Notes",
+    }),
   ).toBeInTheDocument();
   expect(within(dialog).queryByLabelText("Reply")).not.toBeInTheDocument();
   expect(within(dialog).getByLabelText("Notes")).toHaveValue("start");
@@ -221,11 +323,11 @@ it("starts over again when switching back to the first type", async () => {
   const { agents, dialog, user } = setup([echo, notes]);
   await user.type(within(dialog).getByLabelText("Reply"), "typed");
   const switchTo = async (from: string, to: string) => {
-    // A radio item does not close its menu, so it may still be open.
-    if (!screen.queryByRole("menu"))
-      await user.click(
-        within(dialog).getByRole("button", { name: `Agent type: ${from}` }),
-      );
+    await user.click(
+      within(dialog).getByRole("button", {
+        name: `Agent provider and model: ${from}`,
+      }),
+    );
     await user.click(await screen.findByRole("menuitemradio", { name: to }));
   };
   await switchTo("Echo", "Notes");
@@ -290,6 +392,7 @@ it("keeps the new instructions on Done editing", async () => {
   await user.click(
     within(dialog).getByRole("button", { name: "Done editing" }),
   );
+  expect(agents.create).not.toHaveBeenCalled();
   expect(within(dialog).getByText("Be brief. And kind.")).toBeInTheDocument();
   expect(
     within(dialog).queryByRole("button", { name: "Back" }),
