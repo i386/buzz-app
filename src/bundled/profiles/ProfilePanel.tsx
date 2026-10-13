@@ -162,6 +162,7 @@ function ProfileDetails({
           agent: settings.agent,
           type: settings.type,
           channels: channelChoices,
+          memories: session.agentMemories,
           conversation: context && {
             channelId: context.channelId,
             ...(context.rootId && { rootId: context.rootId }),

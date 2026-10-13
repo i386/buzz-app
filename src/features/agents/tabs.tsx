@@ -1,10 +1,11 @@
 // An agent's sections, wherever they are shown (its Build view and its
-// profile panel): the type's own tabs, then the app's Attention tab, which every
-// agent here shares because the app is what wakes it. Hosted agents' tabs are
-// their type's alone; an agent on another device has none here.
+// profile panel): the type's own tabs, then the app's Attention and Memory tabs.
+// Hosted agents' tabs are their type's alone; an agent on another device has
+// none here.
 import { useState, type ReactNode } from "react";
 import type { ChannelChoice } from "./attention";
 import { AttentionPanel } from "./AttentionPanel";
+import { MemoryPanel, type AgentMemories } from "./MemoryPanel";
 import type {
   Agent,
   AgentConversation,
@@ -15,7 +16,7 @@ import type {
 import { Button } from "../../shared/design-system/ui/Button";
 
 export type AgentSection = Readonly<{
-  /** `agent:<type tab id>` or `agent:attention`; never collides with a host tab. */
+  /** `agent:<type tab id>`, `agent:attention` or `agent:memory`; never collides with a host tab. */
   value: `agent:${string}`;
   label: string;
   render(): ReactNode;
@@ -28,6 +29,7 @@ export function agentSections({
   channels,
   conversation,
   settingsHost,
+  memories,
 }: {
   agents: Agents;
   agent: Agent;
@@ -35,6 +37,8 @@ export function agentSections({
   channels: readonly ChannelChoice[];
   conversation?: AgentConversation | undefined;
   settingsHost?: AgentSettingsHost;
+  /** Memory reads through the owner's session; absent while it connects. */
+  memories: AgentMemories | undefined;
 }): readonly AgentSection[] {
   if (agent.place === "elsewhere") return [];
   const typeTabs = type?.tabs ?? [];
@@ -81,6 +85,11 @@ export function agentSections({
           channels={channels}
         />
       ),
+    },
+    {
+      value: "agent:memory",
+      label: "Memory",
+      render: () => <MemoryPanel agent={agent} memories={memories} />,
     },
   ];
 }

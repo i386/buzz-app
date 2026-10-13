@@ -110,20 +110,23 @@ export function memoryListing(input: unknown): MemoryListing {
 
 /** Each mounted consumer owns a view; session retirement revokes every view. */
 export function createAgentMemories(
-  read: MemoryReader | undefined,
+  source: MemoryReader | undefined,
   viewer: string,
   available: () => boolean,
   notify = (listener: () => void) => listener(),
 ) {
   const views = new Set<ReturnType<typeof open>>();
+  const reads = new Set<AbortController>();
   let closed = false;
+  let generation = 0;
+  let queued = Promise.resolve();
   function open(agent: string) {
     if (closed || views.size >= 4) throw new Error("Memory views unavailable");
     const eligible = memoryAgent(agent, viewer);
     let disposed = false;
     let controller: AbortController | undefined;
     let snapshot: MemorySnapshot = {
-      status: read && eligible ? "idle" : "unavailable",
+      status: source && eligible ? "idle" : "unavailable",
     };
     const listeners = new Set<() => void>();
     const publish = (next: MemorySnapshot) => {
@@ -135,7 +138,7 @@ export function createAgentMemories(
       controller = undefined;
       publish({
         status:
-          disposed || closed || !read || !eligible ? "unavailable" : "idle",
+          disposed || closed || !source || !eligible ? "unavailable" : "idle",
       });
     };
     const view = {
@@ -147,7 +150,7 @@ export function createAgentMemories(
         };
       },
       async refresh() {
-        if (disposed || closed || !read || !eligible || controller) return;
+        if (disposed || closed || !source || !eligible || controller) return;
         if (!available()) {
           publish({ status: "blocked" });
           return;
@@ -161,7 +164,7 @@ export function createAgentMemories(
             owned.signal,
             AbortSignal.timeout(10000),
           ]);
-          const listing = memoryListing(await read(agent, signal));
+          const listing = memoryListing(await source(agent, signal));
           signal.throwIfAborted();
           if (!owned.signal.aborted)
             publish(
@@ -192,13 +195,54 @@ export function createAgentMemories(
     views.add(view);
     return view;
   }
+  /** Runtime reads do not consume mounted-view capacity. They are serialized so
+   * bursts across agents still impose one bounded owner-view read per session. */
+  function read(agent: string, signal: AbortSignal) {
+    const admitted = generation;
+    const task = queued.then(async () => {
+      signal.throwIfAborted();
+      if (
+        admitted !== generation ||
+        closed ||
+        !source ||
+        !memoryAgent(agent, viewer) ||
+        !available()
+      )
+        throw new Error("Memory read unavailable");
+      const controller = new AbortController();
+      reads.add(controller);
+      try {
+        const combined = AbortSignal.any([
+          signal,
+          controller.signal,
+          AbortSignal.timeout(10000),
+        ]);
+        const listing = memoryListing(await source(agent, combined));
+        combined.throwIfAborted();
+        if (admitted !== generation || !available())
+          throw new Error("Memory read unavailable");
+        return listing;
+      } finally {
+        reads.delete(controller);
+      }
+    });
+    queued = task.then(
+      () => undefined,
+      () => undefined,
+    );
+    return task;
+  }
   return {
-    capability: Object.freeze({ open }),
+    capability: Object.freeze({ open, read }),
     clear() {
+      generation++;
+      for (const controller of reads) controller.abort();
       for (const view of views) view.clear();
     },
     dispose() {
       closed = true;
+      generation++;
+      for (const controller of reads) controller.abort();
       for (const view of views) view.dispose();
     },
   };

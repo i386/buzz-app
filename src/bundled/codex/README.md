@@ -21,13 +21,13 @@ BUZZODZ_PROFILE=codex-agents BUZZ_DEV_VIEWER= bin/just desktop
    keeps it off if the installed copy was off.
 2. Open **Agents → New agent**, choose **Codex** in the card's top corner, and
    optionally pick a model beside it and add instructions. Name the agent and
-   click **Create agent**. The Codex tab checks the installed CLI and existing
-   account. If needed, install Codex
-   and run `codex login` in a terminal, then click **Check again**.
-3. **Agents → More → Provider settings → Codex** manages the device connection and
-   explicit-save model/thinking defaults. A blank agent choice inherits those
-   defaults without changing its saved record. The **Workspace** defaults to
-   `~/.buzz`, like Claude. In the agent's
+   click **Create agent**.
+3. **Agents → More → Provider settings → Codex** checks Buzz's copy of Codex and
+   its account. If it says Codex is not installed, click **Install Codex**; if
+   it needs you to sign in, click **Sign in** and finish in the browser. It also
+   manages explicit-save model/thinking defaults. A blank agent choice inherits
+   those defaults without changing its saved record. The **Workspace** defaults
+   to `~/.buzz`, like Claude. In the agent's
    **Settings** tab, you can set an absolute or `~/…` path instead; clearing it
    restores the default. A disposable directory is useful for the first test.
    Choose model, thinking, session scope, and instructions, then **Save**.
@@ -105,6 +105,28 @@ Protocol tests cover chunking, request correlation, interactive request rejectio
 malformed output, and consumer exception containment. Runtime tests cover
 conversation routing, ordinary message delivery, persistence, defaults, failures,
 and cleanup.
+
+## Buzz's copy of Codex
+
+The plugin never runs the `codex` on PATH. It runs Buzz's own copy from
+`~/Library/Application Support/Buzz/codex/<version>/bin/codex`, or
+`${XDG_DATA_HOME:-~/.local/share}/buzz/codex` on Linux; a `current` file names
+the version in use. `~/.codex` is shared, so the sign-in and settings are the
+same as in the terminal. [`codex.sh`](codex.sh) is the launcher and installer;
+the plugin runs each step through the one declared `bash -c` process.
+
+Releases come from OpenAI's channel, `releases.openai.com/codex/channels/latest`,
+as `codex-package-<target>.tar.gz` with the sha256 the channel lists. After the
+checksum check, Buzz runs `--version` and checks that `app-server` lists models;
+only then does it switch `current`. A release that fails is skipped and the
+previous copy stays in use. Switching takes a lock shared by every Buzz build,
+which the system releases when the build holding it stops, and checks the copy
+again once it holds the lock. It keeps the new copy, the previous one and any
+newer one another build may be testing. A mention sent before Buzz has found a
+copy, or while it downloads the first one, waits for it. If that download
+failed, a mention tries it again.
+Buzz checks when the agents load and every 6 hours; the first download (about
+130 MB) waits until a Codex agent is running, or **Install Codex** is clicked.
 
 ## Limits and boundaries
 

@@ -542,25 +542,36 @@ test("comment actions revealed while the drawer slides realign when it settles",
     .getByRole("button", { name: "Hide comments", exact: true })
     .click();
   await expect(drawer).toBeHidden();
-  // Hold the opening slide early in its transform transition, once it exists.
+  // The role hides at once, but the closing slide runs on. Reopening before it
+  // ends reverses that slide from near the open position. Visibility turns
+  // hidden only once the slide has ended.
+  await expect
+    .poll(() =>
+      page
+        .locator('aside[aria-label="Media comments"]')
+        .evaluate((node) => getComputedStyle(node).visibility),
+    )
+    .toBe("hidden");
+  // Hold the opening slide early in its transform transition. transitionrun is
+  // dispatched after a frame, which can outlast the slide on a loaded runner.
+  // A mutation callback runs before any frame, and getAnimations() flushes
+  // style, so it creates the slide still at its start.
   await page.evaluate(() => {
+    const drawer = document.querySelector('aside[aria-label="Media comments"]');
+    const viewer = drawer.closest("[data-comments-hidden]");
     window.drawerHeld = new Promise((resolve) => {
-      const hold = (event) => {
-        if (
-          event.propertyName !== "transform" ||
-          !event.target.matches('aside[aria-label="Media comments"]')
-        )
-          return;
-        document.removeEventListener("transitionrun", hold);
-        const slide = event.target
+      const observer = new MutationObserver(() => {
+        if (viewer.hasAttribute("data-comments-hidden")) return;
+        observer.disconnect();
+        const slide = drawer
           .getAnimations()
           .find((animation) => animation.transitionProperty === "transform");
         slide.pause();
         slide.currentTime = 40;
         window.drawerSlide = slide;
         resolve();
-      };
-      document.addEventListener("transitionrun", hold);
+      });
+      observer.observe(viewer, { attributeFilter: ["data-comments-hidden"] });
     });
   });
   await review

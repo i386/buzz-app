@@ -3,15 +3,21 @@
   "name": "Codex",
   "apiVersion": 1,
   "host": {
+    "networkOrigins": ["https://releases.openai.com"],
     "processes": [
       {
         "id": "workspace",
         "program": "pwd"
       },
       {
-        "id": "app-server",
-        "program": "codex",
-        "args": ["app-server"]
+        "id": "codex-sh",
+        "program": "bash",
+        "args": ["-c"]
+      },
+      {
+        "id": "platform",
+        "program": "uname",
+        "args": ["-sm"]
       },
       {
         "id": "read",

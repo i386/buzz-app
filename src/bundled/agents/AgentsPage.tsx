@@ -39,6 +39,7 @@ import type {
   Team,
 } from "../../features/agents/service";
 import { useRelayConnection } from "../../features/relay/react";
+import type { AgentMemories } from "../../features/agents/MemoryPanel";
 import type { RelayData } from "../../features/relay/service";
 import type { Navigation } from "../../features/navigation/controller";
 import type { PageNavigation } from "../../features/navigation/service";
@@ -236,6 +237,11 @@ export function AgentsPage({
           type={typeOf(building)}
           types={types}
           channels={channels}
+          memories={
+            connection.status === "ready"
+              ? connection.session.agentMemories
+              : undefined
+          }
           onRemoved={() => browse()}
         />
       );
@@ -1211,6 +1217,7 @@ function AgentBuild({
   type,
   types,
   channels,
+  memories,
   onRemoved,
 }: {
   agents: Agents;
@@ -1218,6 +1225,7 @@ function AgentBuild({
   type: RegisteredAgentType | undefined;
   types: readonly RegisteredAgentType[];
   channels: readonly ChannelChoice[];
+  memories: AgentMemories | undefined;
   onRemoved(): void;
 }) {
   const [copied, setCopied] = useState(false);
@@ -1288,6 +1296,7 @@ function AgentBuild({
           type={settings.type}
           channels={channels}
           settingsHost={settings.settingsHost}
+          memories={memories}
         />
       </section>
     </div>

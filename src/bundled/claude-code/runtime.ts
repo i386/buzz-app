@@ -121,7 +121,7 @@ export class ClaudeRuntime {
   );
 
   constructor(
-    private readonly host: Host,
+    private readonly host: Pick<Host, "spawn">,
     /** The owner's connection to each agent's own community. */
     private readonly relay: (pubkey: string) => RelayData | undefined,
     private readonly storage: Storage = globalThis.localStorage,

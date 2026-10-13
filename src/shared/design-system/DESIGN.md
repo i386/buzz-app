@@ -678,7 +678,8 @@ form semantics exposed by those Base UI primitives rather than duplicating them.
 
 For finite choices, use Select: its inline layout fits compact toolbars and
 `variant="field"` fits labelled forms. The proposed `variant="compact"` fits
-trailing row choices: a small ghost trigger with a visually hidden accessible
+trailing row choices: a small outlined trigger with a quiet `border-standard`
+boundary and a visually hidden accessible
 label, bounded single-line value, and full choice text in the popup and value hint.
 Its popup has an 11.25rem minimum (bounded by the viewport) and reserves the
 selection-mark slot in every option so selecting the widest label cannot resize it.

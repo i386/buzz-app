@@ -25,6 +25,7 @@ import { sessionTag } from "./prompt";
 import { CodexProvider, createTabs } from "./tabs";
 import { CodexRuntime } from "./runtime";
 import type { Wire } from "./rpc";
+import { CodexSetup } from "./setup";
 function deferred<T>() {
   let resolve!: (value: T) => void;
   const promise = new Promise<T>((done) => {
@@ -50,18 +51,43 @@ afterEach(() => {
 });
 function fixture({
   signedIn = true,
+  installed = true,
   saved = {},
   turns = () => ({ result: { data: [] } }),
   threads = [],
 }: {
   signedIn?: boolean;
+  installed?: boolean;
   saved?: Record<string, unknown>;
   turns?: (threadId: string) => Wire;
   threads?: { id: string; name: string; updatedAt: number }[] | string;
 } = {}) {
   const processes: { end: ReturnType<typeof vi.fn> }[] = [];
-  const spawn = vi.fn(async (_id: string, options?: HostProcessOptions) => {
+  // Buzz's copy, as its launcher answers: `codex login` runs until it ends.
+  const disk = { signedIn, installed };
+  const logins: ReturnType<typeof deferred<number | null>>[] = [];
+  const spawn = vi.fn(async (id: string, options?: HostProcessOptions) => {
     const exit = deferred<number | null>();
+    if (id === "codex") {
+      const args = options?.args?.join(" ");
+      if (args === "login") logins.push(exit);
+      else if (!disk.installed) exit.resolve(127);
+      else if (args === "login status") exit.resolve(disk.signedIn ? 0 : 1);
+      else {
+        queueMicrotask(() => options?.onStdout?.("codex-cli 0.162.1\n"));
+        exit.resolve(0);
+      }
+      return {
+        write: async (_text: string) => {},
+        end: vi.fn(async () => {
+          exit.resolve(0);
+        }),
+        kill: vi.fn(async () => {
+          exit.resolve(null);
+        }),
+        exited: exit.promise,
+      };
+    }
     const process = {
       write: async (text: string) => {
         const wire: Wire = JSON.parse(text);
@@ -90,7 +116,7 @@ function fixture({
         }
         if (wire.method === "account/read")
           result = {
-            account: signedIn
+            account: disk.signedIn
               ? { type: "chatgpt", email: "test@example.com" }
               : null,
           };
@@ -154,13 +180,24 @@ function fixture({
     sessions,
     (raw) => provider.resolve(raw),
   );
-  const tabs = createTabs(provider, runtime, spawn);
+  const setup = new CodexSetup(spawn);
+  const tabs = createTabs(provider, runtime, spawn, setup);
   const props = (settings = defaults, save = vi.fn(async () => {})) =>
     ({
       agent: { pubkey: "a".repeat(64), name: "Sol", config: settings },
       save,
     }) as unknown as AgentViewProps<Config>;
-  return { spawn, processes, provider, tabs, props };
+  return {
+    spawn,
+    processes,
+    provider,
+    runtime,
+    setup,
+    tabs,
+    props,
+    disk,
+    logins,
+  };
 }
 it("lists saved conversations and shows one's Codex thread, or that Codex no longer has it", async () => {
   const root = "e".repeat(64);
@@ -448,19 +485,7 @@ it("keeps provider readiness quiet and shows recovery when needed", async () => 
     readiness: "attention",
     attentionLabel: "Log in to Codex",
   });
-  const copy = vi.fn(async () => undefined);
-  Object.defineProperty(navigator, "clipboard", {
-    configurable: true,
-    value: { writeText: copy },
-  });
-  expect(screen.getByLabelText("Terminal command")).toHaveValue("codex login");
-  fireEvent.click(
-    screen.getByRole("button", { name: "Copy terminal command" }),
-  );
-  await waitFor(() => expect(copy).toHaveBeenCalledWith("codex login"));
-  expect(
-    screen.getByRole("button", { name: "Copied terminal command" }),
-  ).toBeVisible();
+  expect(screen.getByRole("button", { name: "Sign in" })).toBeVisible();
   expect(screen.queryByText("Connection")).not.toBeInTheDocument();
 });
 it("applies provider precedence without rewriting records and falls back for incompatible thinking", async () => {
@@ -860,4 +885,51 @@ it("shows the default workspace and restores it when the field is cleared", asyn
   });
   fireEvent.click(screen.getByRole("button", { name: "Save" }));
   await waitFor(() => expect(save).toHaveBeenCalledWith(expected));
+});
+
+it("installs and signs in Buzz's copy of Codex from its provider settings", async () => {
+  const f = fixture({ installed: false, signedIn: false });
+  const provider = new CodexProvider(f.spawn, localStorage, f.setup);
+  const { ProviderDialogBody } = createTabs(
+    provider,
+    f.runtime,
+    f.spawn,
+    f.setup,
+  );
+  render(<ProviderDialogBody onClose={vi.fn()} />);
+  expect(await screen.findByRole("alert")).toHaveTextContent(
+    "Codex is not installed.",
+  );
+  expect(provider.snapshot()).toMatchObject({
+    readiness: "attention",
+    attentionLabel: "Install Codex",
+  });
+  expect(screen.getByText(/about 130 MB/)).toBeVisible();
+  // A failed download leaves the offer in place, with what went wrong.
+  fireEvent.click(screen.getByRole("button", { name: "Install Codex" }));
+  expect(
+    await screen.findByRole("log", { name: "Setup output" }),
+  ).toHaveTextContent("Codex downloads need the desktop app");
+  expect(
+    await screen.findByRole("button", { name: "Install Codex" }),
+  ).toBeVisible();
+
+  f.disk.installed = true;
+  await provider.check();
+  expect(provider.snapshot()).toMatchObject({
+    readiness: "attention",
+    attentionLabel: "Log in to Codex",
+  });
+  fireEvent.click(await screen.findByRole("button", { name: "Sign in" }));
+  expect(await screen.findByText("Waiting for Codex sign-in…")).toBeVisible();
+  expect(provider.snapshot().blocking).toBe(true);
+
+  f.disk.signedIn = true;
+  f.logins[0]?.resolve(0);
+  expect(
+    await screen.findByRole("combobox", { name: "Default model" }),
+  ).toBeVisible();
+  expect(provider.snapshot()).toMatchObject({ readiness: "ready" });
+  expect(provider.snapshot()).not.toHaveProperty("blocking");
+  provider.dispose();
 });
