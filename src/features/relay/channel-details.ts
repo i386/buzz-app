@@ -112,7 +112,10 @@ export function createChannelDetails({
       details.name !== draft.name ||
       details.description !== draft.description ||
       details.visibility !== draft.visibility ||
-      details.ttlSeconds !== draft.ttlSeconds
+      details.ttlSeconds !== draft.ttlSeconds ||
+      (draft.labels !== undefined &&
+        JSON.stringify([...new Set(draft.labels)].sort()) !==
+          JSON.stringify([...(details.labels ?? [])].sort()))
     )
       throw new Error(uncertain);
     attempts.delete(id);

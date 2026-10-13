@@ -238,3 +238,44 @@ it("rejects plugin placement metadata in channel creation", () => {
     }),
   ).toBe(false);
 });
+
+it("admits NIP-CL labels at the end of a channel creation, before the client id", () => {
+  const create = (labels) => ({
+    kind: 9007,
+    created_at: 1,
+    content: "",
+    tags: [
+      ["h", id],
+      ["name", "Records"],
+      ["visibility", "private"],
+      ["channel_type", "stream"],
+      ["about", "For You records"],
+      ...labels,
+      ["client-id", "22222222-2222-4222-8222-222222222222"],
+    ],
+  });
+  expect(validChannelCommand(create([]))).toBe(true);
+  expect(
+    validChannelCommand(
+      create([
+        ["t", "for-you"],
+        ["t", "app:records"],
+      ]),
+    ),
+  ).toBe(true);
+  for (const labels of [
+    [["t", "system"]],
+    [["t", "Upper"]],
+    [["t", ""]],
+    [
+      ["t", "a"],
+      ["t", "a"],
+    ],
+    [
+      ["t", "a"],
+      ["about", "late"],
+    ],
+    Array.from({ length: 9 }, (_, n) => ["t", `l${n}`]),
+  ])
+    expect(validChannelCommand(create(labels))).toBe(false);
+});

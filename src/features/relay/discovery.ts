@@ -3,6 +3,7 @@ import { sessionMetadata } from "../sessions/metadata";
 import { objectBody } from "./body";
 import { newer, hasTag, tag, type RelayEvent } from "./events";
 import type { ChannelSummary } from "./contracts";
+import { channelIdentity } from "./channel-labels";
 
 /** Display name from signed channel metadata; the content body overrides the tag. */
 export function metadataName(event: RelayEvent): string | undefined {
@@ -210,6 +211,7 @@ export class DiscoveryState {
         : undefined;
     const roster = this.rosters.get(id);
     const parentId = event && sessionMetadata(tag(event, "about"))?.parentId;
+    const identity = event && channelIdentity(event);
     return {
       id,
       ...(!this.authorized(id) || this.cached.has(id)
@@ -250,6 +252,11 @@ export class DiscoveryState {
           }
         : {}),
       ...(event && hasTag(event, "archived", "true") ? { archived: true } : {}),
+      ...(identity?.labels.length ? { labels: identity.labels } : {}),
+      ...(identity?.creator ? { creator: identity.creator } : {}),
+      ...(identity?.createdAt !== undefined
+        ? { createdAt: identity.createdAt }
+        : {}),
       ...(channelType === "dm"
         ? {
             participants: [

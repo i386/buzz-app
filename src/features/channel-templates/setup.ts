@@ -14,6 +14,8 @@ export type ChannelCreationInput = Readonly<{
   description?: string | undefined;
   visibility: "open" | "private";
   ttlSeconds?: number | undefined;
+  /** NIP-CL labels to create the channel with. */
+  labels?: readonly string[] | undefined;
   setup?: ChannelSetup | undefined;
 }>;
 type Progress = {

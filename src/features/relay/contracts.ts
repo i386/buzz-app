@@ -40,6 +40,12 @@ export type ChannelSummary = Readonly<{
   archived?: true;
   /** Exact members from the relay-signed roster; absent means unknown. */
   members?: readonly string[];
+  /** Relay-published NIP-CL labels. Any channel admin can set them: grouping, never trust. */
+  labels?: readonly string[];
+  /** Relay-written creator (NIP-CL `P`): the kind:9007 signer. Ownership can move later. */
+  creator?: string;
+  /** Relay-written creation time in Unix seconds; compare channel age with this. */
+  createdAt?: number;
   /** Other DM members from the authorized roster; empty for a self-DM. */
   participants?: readonly string[];
 }>;
@@ -205,6 +211,13 @@ export interface ChannelQueries {
     query: string,
     options?: ReadOptions & { limit?: number; exact?: boolean },
   ): Promise<PublicChannelSearch>;
+  /** NIP-CL lookup of the channels `creator` made with `label`, oldest first.
+   * Includes the system channels the viewer can read, since `#P` asks for them.
+   * Matches become readable through `get`; they never enter list(). */
+  findLabeled?(
+    query: Readonly<{ creator: string; label: string }>,
+    options?: ChannelReadOptions,
+  ): Promise<readonly ChannelSummary[]>;
   /** Synchronous: the last `searchPublic` answer's channels that still match
    * `query` and are still open previews. Keeps rows while the next search
    * runs, even across a remount. */

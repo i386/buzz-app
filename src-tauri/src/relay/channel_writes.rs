@@ -30,7 +30,7 @@ fn details(event: &EventTemplate) -> bool {
                         == name
             });
     }
-    if event.kind != 9002 || !common(event) || !(3..=5).contains(&event.tags.len()) {
+    if event.kind != 9002 || !common(event) || !(3..=13).contains(&event.tags.len()) {
         return false;
     }
     let (Some(id), Some(name), Some(about)) = (
@@ -57,7 +57,23 @@ fn details(event: &EventTemplate) -> bool {
         }
         index += 1;
     }
+    // NIP-CL: trailing `t` tags replace the label set; one `["t", ""]` clears it.
+    let labels = &event.tags[index..];
+    let labels_valid = match labels {
+        [] => true,
+        [only] if only.len() == 2 && only[0] == "t" && only[1].is_empty() => true,
+        _ => {
+            labels.len() <= 8
+                && labels.iter().enumerate().all(|(n, t)| {
+                    t.len() == 2
+                        && t[0] == "t"
+                        && channel_label(&t[1])
+                        && labels[..n].iter().all(|prior| prior[1] != t[1])
+                })
+        }
+    };
     uuid(id)
+        && labels_valid
         && !name.is_empty()
         && name.chars().count() <= 120
         && name
@@ -66,7 +82,6 @@ fn details(event: &EventTemplate) -> bool {
             == name
         && about.chars().count() <= 1000
         && !about.contains("Buzz session (")
-        && index == event.tags.len()
 }
 fn lifecycle(event: &EventTemplate) -> bool {
     if !matches!(event.kind, 9002 | 9008 | 9021 | 9022 | 41012)
@@ -335,7 +350,7 @@ pub(crate) async fn relay_direct_message(
 }
 
 pub(super) fn creation(event: &EventTemplate) -> bool {
-    if event.kind != 9007 || !event.content.is_empty() || !(4..=7).contains(&event.tags.len()) {
+    if event.kind != 9007 || !event.content.is_empty() || !(4..=15).contains(&event.tags.len()) {
         return false;
     }
     let (Some(id), Some(name), Some(visibility), Some(channel_type)) = (
@@ -382,6 +397,24 @@ pub(super) fn creation(event: &EventTemplate) -> bool {
             t.first().is_some_and(|s| s == "about") && session_metadata(&event.tags[4][1])
         }) || ttl.starts_with('0')
             || !ttl.parse::<u32>().is_ok_and(|n| n <= 2_147_483_647)
+        {
+            return false;
+        }
+        index += 1;
+    }
+    // NIP-CL labels: up to 8 distinct `t` tags after `about`/`ttl`.
+    let first_label = index;
+    while event
+        .tags
+        .get(index)
+        .is_some_and(|t| t.first().is_some_and(|s| s == "t"))
+    {
+        let Some(label) = tag(event, index, "t") else {
+            return false;
+        };
+        if index - first_label >= 8
+            || !channel_label(label)
+            || event.tags[first_label..index].iter().any(|t| t[1] == label)
         {
             return false;
         }
@@ -621,6 +654,77 @@ mod boundary_tests {
         event.tags[3][1] = "dm".into();
         assert!(!creation(&event));
     }
+
+    #[test]
+    fn creation_and_details_admit_only_valid_label_tails() {
+        let t = |label: &str| vec!["t".to_string(), label.to_string()];
+        let create = |labels: Vec<Vec<String>>| EventTemplate {
+            kind: 9007,
+            created_at: 1700000010,
+            content: String::new(),
+            tags: [
+                vec![
+                    vec!["h".into(), uuid::Uuid::new_v4().to_string()],
+                    vec!["name".into(), "Records".into()],
+                    vec!["visibility".into(), "private".into()],
+                    vec!["channel_type".into(), "stream".into()],
+                    vec!["about".into(), "For You records".into()],
+                    vec!["ttl".into(), "60".into()],
+                ],
+                labels,
+                vec![vec!["client-id".into(), uuid::Uuid::new_v4().to_string()]],
+            ]
+            .concat(),
+        };
+        let edit = |labels: Vec<Vec<String>>| EventTemplate {
+            kind: 9002,
+            created_at: 1700000010,
+            content: String::new(),
+            tags: [
+                vec![
+                    vec!["h".into(), uuid::Uuid::new_v4().to_string()],
+                    vec!["name".into(), "Records".into()],
+                    vec!["about".into(), String::new()],
+                    vec!["visibility".into(), "open".into()],
+                ],
+                labels,
+            ]
+            .concat(),
+        };
+        let eight: Vec<_> = (0..8).map(|n| t(&format!("l{n}"))).collect();
+        let nine: Vec<_> = (0..9).map(|n| t(&format!("l{n}"))).collect();
+        for labels in [vec![], vec![t("for-you"), t("app:records")], eight.clone()] {
+            assert!(creation(&create(labels.clone())));
+            assert!(details(&edit(labels)));
+        }
+        // An empty `t` clears labels on an edit; a creation has nothing to clear.
+        assert!(details(&edit(vec![t("")])));
+        assert!(!creation(&create(vec![t("")])));
+        for labels in [
+            vec![t("system")],
+            vec![t("Upper")],
+            vec![t(&"x".repeat(65))],
+            vec![t("a"), t("a")],
+            vec![t(""), t("a")],
+            vec![vec!["t".into(), "a".into(), "extra".into()]],
+            nine,
+        ] {
+            assert!(!creation(&create(labels.clone())));
+            assert!(!details(&edit(labels)));
+        }
+        let mut late = edit(vec![t("a")]);
+        late.tags.push(vec!["ttl".into(), String::new()]);
+        assert!(!details(&late));
+    }
+}
+
+/// NIP-CL label: 1–64 of `[a-z0-9.:-]`, never a channel type name.
+pub(super) fn channel_label(label: &str) -> bool {
+    (1..=64).contains(&label.len())
+        && label
+            .bytes()
+            .all(|b| matches!(b, b'a'..=b'z' | b'0'..=b'9' | b'.' | b':' | b'-'))
+        && !matches!(label, "stream" | "forum" | "dm" | "workflow" | "system")
 }
 
 fn session_metadata(description: &str) -> bool {

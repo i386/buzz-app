@@ -732,3 +732,107 @@ it("ranks public name matches before the cut and reuses one metadata page while 
   await h.clearCache();
   expect(h.channels.matchPublic?.("ops")).toEqual([]);
 });
+
+it("finds one creator's labeled channels oldest first and admits only relay-proven matches", async () => {
+  const h = setup();
+  h.channels.ensureList();
+  await h.rosters(0);
+  await h.settled();
+  const creator = keypair().pubkey;
+  const id = (n: number) =>
+    `20000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
+  const labeled = (
+    n: number,
+    extra: readonly string[][],
+    author: typeof relay = relay,
+  ) =>
+    metadata(author, id(n), `labeled ${n}`, 1_700_000_000, [
+      ["public"],
+      ["t", "stream"],
+      ...extra,
+    ]);
+  const page = [
+    labeled(1, [
+      ["t", "for-you"],
+      ["P", creator],
+      ["created_at", "200"],
+    ]),
+    labeled(2, [
+      ["t", "for-you"],
+      ["P", creator],
+      ["created_at", "100"],
+    ]),
+    // No creation time ranks last; the relay returned it, so it still counts.
+    labeled(3, [
+      ["t", "for-you"],
+      ["P", creator],
+    ]),
+    // Same creation time breaks the tie by channel ID.
+    labeled(0, [
+      ["t", "for-you"],
+      ["P", creator],
+      ["created_at", "200"],
+    ]),
+    // The relay's answer is checked: wrong creator, a type that only looks
+    // like the label, and metadata signed by someone else are all dropped.
+    labeled(4, [
+      ["t", "for-you"],
+      ["P", keypair().pubkey],
+    ]),
+    metadata(relay, id(5), "typed", 1_700_000_000, [
+      ["public"],
+      ["t", "for-you"],
+      ["P", creator],
+    ]),
+    labeled(
+      6,
+      [
+        ["t", "for-you"],
+        ["P", creator],
+      ],
+      keypair(),
+    ),
+  ];
+  const done = h.channels.findLabeled?.({ creator, label: "for-you" });
+  assert.exists(done);
+  const request = await h.next(39000);
+  expect(request.filters).toEqual([
+    {
+      kinds: [39000],
+      authors: [relay.pubkey],
+      "#P": [creator],
+      "#t": ["for-you"],
+      limit: 100,
+    },
+  ]);
+  request.respond(page);
+  const resolve = await h.next(39000);
+  const ids = resolve.filters[0]?.["#d"] ?? [];
+  expect([...ids].sort()).toEqual([id(0), id(1), id(2), id(3)]);
+  resolve.respond(page.filter((event) => ids.includes(tag(event, "d") ?? "")));
+  const found = await done;
+  expect(found.map((channel) => channel.id)).toEqual([
+    id(2),
+    id(0),
+    id(1),
+    id(3),
+  ]);
+  expect(found[0]).toMatchObject({
+    labels: ["for-you"],
+    creator,
+    createdAt: 100,
+  });
+  expect(h.channels.get?.(id(2))?.labels).toEqual(["for-you"]);
+  // Lookup admits channels for reading; it never adds them to the sidebar.
+  const listed = h.channels.list();
+  expect(
+    listed.status === "ready" &&
+      listed.channels.some((channel) => ids.includes(channel.id)),
+  ).toBe(false);
+  await expect(
+    h.channels.findLabeled?.({ creator, label: "System" }),
+  ).rejects.toThrow(/channel labels/);
+  await expect(
+    h.channels.findLabeled?.({ creator: "nope", label: "for-you" }),
+  ).rejects.toThrow(/creator/);
+});

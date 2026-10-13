@@ -7,6 +7,11 @@ import {
   lifecycleRecord,
   lifecycleSettings,
 } from "./channel-lifecycle-protocol.ts";
+import {
+  channelIdentity,
+  channelLabelTags,
+  validChannelLabel,
+} from "./channel-labels.ts";
 
 export type ChannelDetailsDraft = Readonly<{
   name: string;
@@ -14,6 +19,8 @@ export type ChannelDetailsDraft = Readonly<{
   visibility: "public" | "private";
   /** Absent means ongoing; retain existing custom temporary intervals. */
   ttlSeconds?: number | undefined;
+  /** NIP-CL labels. Absent leaves the relay's set unchanged; empty clears it. */
+  labels?: readonly string[] | undefined;
 }>;
 export type ChannelDetails = ChannelDetailsDraft &
   Readonly<{
@@ -72,7 +79,28 @@ export function detailsDraftErrors(draft: ChannelDetailsDraft) {
       (draft.visibility !== "public" && draft.visibility !== "private")
         ? "Channel visibility could not be verified."
         : undefined,
+    labels: labelsError(draft?.labels),
   };
+}
+
+function labelsError(labels: unknown): string | undefined {
+  if (labels === undefined) return undefined;
+  if (!Array.isArray(labels)) return "Channel labels could not be verified.";
+  try {
+    channelLabelTags(labels);
+    return undefined;
+  } catch (error) {
+    return (error as Error).message;
+  }
+}
+
+/** Same label set, ignoring order and duplicates. */
+function sameLabels(a: readonly string[], b: readonly string[]) {
+  const left = new Set(a);
+  const right = new Set(b);
+  return (
+    left.size === right.size && [...left].every((label) => right.has(label))
+  );
 }
 
 export function validateDetailsDraft(
@@ -83,6 +111,8 @@ export function validateDetailsDraft(
   if (metadata && !metadata.parentId && draft.description !== "") {
     if (
       draft.description !== base?.description ||
+      (draft.labels !== undefined &&
+        !sameLabels(draft.labels, base.labels ?? [])) ||
       draft.visibility !== base.visibility ||
       draft.ttlSeconds !== base.ttlSeconds
     )
@@ -91,7 +121,11 @@ export function validateDetailsDraft(
   }
   const errors = detailsDraftErrors(draft);
   const error =
-    errors.name ?? errors.description ?? errors.visibility ?? errors.lifetime;
+    errors.name ??
+    errors.description ??
+    errors.visibility ??
+    errors.lifetime ??
+    errors.labels;
   if (error) throw new Error(error);
 }
 
@@ -124,6 +158,7 @@ export function detailsSettings(
     description,
     visibility,
     ...(ttlSeconds !== undefined ? { ttlSeconds } : {}),
+    labels: channelIdentity(metadata).labels,
     canEdit:
       authority.channelType !== "dm" &&
       exactLifecycleTag(metadata, "archived") !== "true" &&
@@ -173,8 +208,29 @@ export function detailsTemplate(
             ],
           ]
         : []),
+      // NIP-CL: `t` tags replace the set; one empty `t` clears it; none keeps it.
+      ...(draft.labels !== undefined &&
+      !sameLabels(draft.labels, base.labels ?? [])
+        ? draft.labels.length
+          ? channelLabelTags(draft.labels)
+          : [["t", ""]]
+        : []),
     ],
   };
+}
+
+/** The `t` tags that end a full details command: one `["t", ""]` clears the
+ * set, otherwise 1–8 distinct labels. */
+function detailsLabels(tags: readonly (readonly string[])[]): string[] {
+  const values = tags.map(([, value]) => value ?? "");
+  if (values.length === 1 && values[0] === "") return [];
+  if (
+    values.length > 8 ||
+    new Set(values).size !== values.length ||
+    !values.every(validChannelLabel)
+  )
+    throw new Error("Invalid channel details command.");
+  return values;
 }
 
 /** A relay metadata TTL must be an unambiguous positive i32; only absence is ongoing. */
@@ -216,7 +272,7 @@ export function validateDetailsTemplate(event: EventTemplate): void {
     !Number.isSafeInteger(event.created_at) ||
     event.created_at < 0 ||
     !Array.isArray(event.tags) ||
-    ![3, 4, 5].includes(event.tags.length) ||
+    event.tags.length < 3 ||
     !event.tags.every(
       (tag) =>
         Array.isArray(tag) &&
@@ -228,11 +284,12 @@ export function validateDetailsTemplate(event: EventTemplate): void {
     ) ||
     ![[], ["visibility"], ["ttl"], ["visibility", "ttl"]].some(
       (keys) =>
-        keys.length === event.tags.length - 3 &&
-        keys.every((key, index) => event.tags[index + 3]?.[0] === key),
+        keys.every((key, index) => event.tags[index + 3]?.[0] === key) &&
+        event.tags.slice(keys.length + 3).every(([key]) => key === "t"),
     )
   )
     throw new Error("Invalid channel details command.");
+  const labels = detailsLabels(event.tags.filter(([key]) => key === "t"));
   const visibility = event.tags.find(([key]) => key === "visibility");
   if (visibility && !["private", "open"].includes(visibility[1] ?? ""))
     throw new Error("Invalid channel details command.");
@@ -243,5 +300,6 @@ export function validateDetailsTemplate(event: EventTemplate): void {
     description: event.tags[2]?.[1] ?? "",
     visibility: visibility?.[1] === "private" ? "private" : "public",
     ttlSeconds: ttl === "" ? undefined : parseDetailsTtl(ttl),
+    ...(event.tags.some(([key]) => key === "t") ? { labels } : {}),
   });
 }

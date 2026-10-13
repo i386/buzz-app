@@ -104,6 +104,7 @@ it.each([
         ["channel_type", "stream"],
         ["about", "Updates for the team"],
         ["ttl", "604800"],
+        ["t", "release"],
       ],
     });
     const sessionCreation = signed(viewer, {
@@ -170,6 +171,7 @@ it.each([
           description: "Updates for the team",
           visibility: "private",
           ttlSeconds: 604800,
+          labels: ["release"],
         }),
       );
       await expect(
@@ -184,6 +186,7 @@ it.each([
           description: "Updates for the team",
           visibility: "private",
           ttlSeconds: 604800,
+          labels: ["release"],
         }),
       ).rejects.toThrow(/connection lost/);
       expect(sign).not.toHaveBeenCalled();
@@ -201,6 +204,7 @@ it.each([
           description: "Updates for the team",
           visibility: "private",
           ttlSeconds: 604800,
+          labels: ["release"],
         }),
       ).resolves.toBe(id);
       expect(sign).not.toHaveBeenCalled();
@@ -1668,4 +1672,49 @@ it("rejects an addition cancelled during delivery readback", async () => {
     test.service.delivered(event.id, () => active, true),
   ).rejects.toMatchObject({ name: "AbortError" });
   expect(test.outbox.retry).not.toHaveBeenCalled();
+});
+
+it("creates a stream with NIP-CL labels after about and ttl, and rejects bad labels before sending", () => {
+  const test = setup();
+  const id = "11111111-1111-4111-8111-111111111111";
+  test.service.createChannel(
+    id,
+    "Records",
+    "private",
+    "For You records",
+    604800,
+    undefined,
+    { labels: ["for-you", "app:records", "for-you"] },
+  );
+  expect(test.outbox.send).toHaveBeenLastCalledWith(
+    {
+      kind: 9007,
+      content: "",
+      tags: [
+        ["h", id],
+        ["name", "Records"],
+        ["visibility", "private"],
+        ["channel_type", "stream"],
+        ["about", "For You records"],
+        ["ttl", "604800"],
+        ["t", "for-you"],
+        ["t", "app:records"],
+      ],
+    },
+    undefined,
+    undefined,
+  );
+  for (const labels of [["system"], ["Upper"], [""]])
+    expect(() =>
+      test.service.createChannel(
+        id,
+        "Records",
+        "private",
+        undefined,
+        undefined,
+        undefined,
+        { labels },
+      ),
+    ).toThrow(/channel labels/);
+  expect(test.outbox.send).toHaveBeenCalledTimes(1);
 });

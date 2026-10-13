@@ -778,3 +778,65 @@ it.each([
     expect(h.sign).not.toHaveBeenCalled();
   },
 );
+
+it("writes NIP-CL labels only when the set changes, and admits only valid label tails", () => {
+  const base = { ...draft, labels: ["for-you", "demo"] };
+  const tagsOf = (labels?: readonly string[]) =>
+    detailsTemplate(id, { ...draft, labels }, base).tags;
+  // Absent or the same set (any order) sends no `t`, so the relay keeps it.
+  expect(tagsOf(undefined).some(([key]) => key === "t")).toBe(false);
+  expect(tagsOf(["demo", "for-you"]).some(([key]) => key === "t")).toBe(false);
+  // A new set replaces it; an empty set clears it with one empty `t`.
+  expect(tagsOf(["for-you", "app:records"]).slice(3)).toEqual([
+    ["t", "for-you"],
+    ["t", "app:records"],
+  ]);
+  expect(tagsOf([]).slice(3)).toEqual([["t", ""]]);
+  for (const labels of [["for-you"], [], ["a", "b", "c"]]) {
+    const template = detailsTemplate(id, { ...draft, labels }, base);
+    expect(() => validateDetailsTemplate(template)).not.toThrow();
+  }
+  for (const labels of [["System"], ["stream"], ["x".repeat(65)], ["a b"]])
+    expect(() => tagsOf(labels)).toThrow(/channel labels/);
+  expect(() => tagsOf(Array.from({ length: 9 }, (_, n) => `l${n}`))).toThrow(
+    /at most 8/,
+  );
+  const head = [
+    ["h", id],
+    ["name", "renamed"],
+    ["about", ""],
+  ];
+  for (const tail of [
+    [["t", "system"]],
+    [
+      ["t", "a"],
+      ["t", "a"],
+    ],
+    [
+      ["t", ""],
+      ["t", "a"],
+    ],
+    [
+      ["t", "a"],
+      ["visibility", "open"],
+    ],
+    [["t", "a", "extra"]],
+    Array.from({ length: 9 }, (_, n) => ["t", `l${n}`]),
+  ])
+    expect(() =>
+      validateDetailsTemplate({
+        kind: 9002,
+        created_at: 1,
+        content: "",
+        tags: [...head, ...tail],
+      }),
+    ).toThrow();
+  expect(() =>
+    validateDetailsTemplate({
+      kind: 9002,
+      created_at: 1,
+      content: "",
+      tags: [...head, ["visibility", "open"], ["ttl", ""], ["t", "a"]],
+    }),
+  ).not.toThrow();
+});

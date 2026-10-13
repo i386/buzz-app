@@ -1,4 +1,5 @@
 import { canonicalDetailsName } from "./channel-details-protocol";
+import { channelLabelTags } from "./channel-labels";
 import { sessionDescription } from "../sessions/metadata";
 import type { Outbox } from "./outbox";
 import type { ChannelQueries } from "./contracts";
@@ -505,9 +506,11 @@ export function createWorkSessions(
       description?: string,
       ttlSeconds?: number,
       active?: () => boolean,
+      options: Readonly<{ labels?: readonly string[] | undefined }> = {},
     ) {
       writer();
       identifier(id);
+      const labelTags = channelLabelTags(options.labels ?? []);
       const name = canonicalDetailsName(title);
       const about = description?.trim();
       if (!name || [...name].length > 120)
@@ -534,6 +537,7 @@ export function createWorkSessions(
             ["channel_type", "stream"],
             ...(about ? [["about", about]] : []),
             ...(ttlSeconds ? [["ttl", String(ttlSeconds)]] : []),
+            ...labelTags,
           ],
         },
         undefined,
