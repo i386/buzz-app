@@ -2182,26 +2182,41 @@ async function authorizedSession(staff: Staff) {
   return createSession(staff, context, access.probe);
 }
 const reportsRead = { route: "listReports", query: { scope: "all" } } as const;
+/** Reports reads whose response the test releases. */
+function heldRead() {
+  let answer: (outcome: StaffOutcome<unknown>) => void = () => {};
+  routes.listReports = () =>
+    new Promise((resolve) => {
+      answer = resolve;
+    });
+  return (outcome: StaffOutcome<unknown>) => answer(outcome);
+}
 
 it("a 401 or 403 that arrives after Settings closes starts no role check", async () => {
-  routes.listReports = denied;
+  const answer = heldRead();
   const staff = createStaff(backend, () => ({ relay, signer }));
   const release = staff.ensure();
   const session = await authorizedSession(staff);
+  const read = session.request(reportsRead);
+  expect(sent("listReports")).toHaveLength(1);
   release();
-  await session.request(reportsRead);
+  answer(denied());
+  await read;
   expect(calls.map((c) => c.route)).toEqual(["probe", "listReports"]);
 });
 
 it("a 401 or 403 for a context that is no longer selected starts no role check for it", async () => {
-  routes.listReports = denied;
+  const answer = heldRead();
   const selection = { relay, signer };
   const staff = createStaff(backend, () => ({ ...selection }));
   staff.ensure();
   const session = await authorizedSession(staff);
+  const read = session.request(reportsRead);
+  expect(sent("listReports")).toHaveLength(1);
   selection.signer = member;
   staff.refresh();
-  await session.request(reportsRead);
+  answer(denied());
+  await read;
   expect(
     contexts.filter((_, i) => calls[i]?.route === "probe").map((c) => c.signer),
   ).toEqual([signer, member]);

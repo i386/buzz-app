@@ -24,10 +24,12 @@ connection" section of [identity.md](identity.md) for the address rules.
    for the current identity, before any entry is opened. Reports, Feedback and
    Communities appear only for an authorized result; Staff also needs the
    `operator` role. Settings lists only entries whose visibility is `true`, so
-   the group is hidden while discovering or probing and after access denied,
-   no admin API or an unreachable host, the same as Membership. An entry opened
-   directly gets the host's loading screen, then its unavailable screen with
-   Retry.
+   the group is hidden while first discovering or checking, with no remembered
+   authorization, and after access denied, no admin API or an unreachable host,
+   the same as Membership. A re-check of a remembered authorization keeps the
+   group visible. An entry opened directly gets the host's loading screen; it
+   opens if the check succeeds, and shows the host's unavailable screen with
+   Retry only if access can't be established.
    While Settings stays open, each (identity, admin host, relay) is probed
    once: switching identity or relay probes the new one, and opening an entry
    reuses the result instead of probing again. Closing and reopening Settings
