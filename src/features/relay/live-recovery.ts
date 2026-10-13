@@ -9,17 +9,30 @@ export type LiveRecoveryView = LiveSnapshot &
     previews?: "checking" | "suspended";
   }>;
 
-/** A CLOSED reason that a later attempt can clear. NIP-01 machine prefixes:
- * `rate-limited:` and `error:` are transient; `restricted:`, `blocked:` and
- * `invalid:` need someone to act. Local setup timeouts and exhausted quota
- * retries are transient too. */
+/** NIP-01 CLOSED prefixes that mean someone has to act: the same request
+ * fails again until access, the request or the client changes. */
+const PERMANENT_PREFIXES = [
+  "restricted:",
+  "blocked:",
+  "invalid:",
+  "auth-required:",
+  "unsupported:",
+  "pow:",
+  "duplicate:",
+];
+/** Deterministic local failures (live.ts): retrying sends the same thing. */
+const PERMANENT_LOCAL = new Set([
+  "Relay supplied invalid live traffic",
+  "Unsupported live cooldown; automatic setup stopped",
+]);
+/** A route failure that a later attempt can clear. Anything not known to
+ * need action counts: relays use other and unprefixed reasons for outages,
+ * and a capped retry costs little next to a live view that never recovers. */
 export function isTransientLiveError(reason: string | undefined): boolean {
+  if (reason === undefined) return true;
   return (
-    !!reason &&
-    (reason.startsWith("rate-limited:") ||
-      reason.startsWith("error:") ||
-      reason === "Live subscription setup timed out; retry available" ||
-      reason === "Live request cooldown retries exhausted; retry available")
+    !PERMANENT_LOCAL.has(reason) &&
+    !PERMANENT_PREFIXES.some((prefix) => reason.startsWith(prefix))
   );
 }
 

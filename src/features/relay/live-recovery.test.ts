@@ -36,6 +36,24 @@ it("classifies only failures a retry can fix as transient", () => {
   ).toBe(true);
   // Native IPC rejects with the host's plain transport strings.
   expect(isTransientFailure("Relay request could not be confirmed")).toBe(true);
+  // A context wrapper keeps its cause's classification.
+  expect(
+    isTransientFailure(
+      new Error("Preference decode: Local decoder failed (HTTP 502)", {
+        cause: new ReadError("unavailable", "Local decoder failed (HTTP 502)"),
+      }),
+    ),
+  ).toBe(true);
+  expect(
+    isTransientFailure(
+      new Error("Preference decode: Local decoder failed (HTTP 400)", {
+        cause: new ReadError(
+          "invalid-response",
+          "Local decoder failed (HTTP 400)",
+        ),
+      }),
+    ),
+  ).toBe(false);
   expect(
     isTransientFailure(new ReadError("denied", "Relay read failed (403)")),
   ).toBe(false);
@@ -57,6 +75,20 @@ it("lets recovery own transient live failures and leaves the rest visible", () =
   expect(liveRecoveryStatus({ ...healthy, status: "retrying" })).toBe("failed");
   expect(liveRecoveryStatus(route("error: relay busy"))).toBe("failed");
   expect(liveRecoveryStatus(route("rate-limited: slow down"))).toBe("failed");
+  // Reasons outside the known needs-action set are outages until shown
+  // otherwise.
+  expect(
+    liveRecoveryStatus(route("temporary: fixture stream interrupted")),
+  ).toBe("failed");
+  expect(liveRecoveryStatus(route("Relay closed live subscription"))).toBe(
+    "failed",
+  );
+  expect(liveRecoveryStatus(route("auth-required: sign in"))).toBe("settled");
+  expect(
+    liveRecoveryStatus(
+      route("Unsupported live cooldown; automatic setup stopped"),
+    ),
+  ).toBe("settled");
   expect(
     liveRecoveryStatus({
       ...healthy,

@@ -50,11 +50,16 @@ export function isTransientFailure(error: unknown): boolean {
     return error.kind === "unavailable" || error.kind === "cancelled";
   if (typeof error === "string") return NATIVE_TRANSIENT.has(error);
   // fetch rejects with TypeError when the network is unreachable.
-  return (
+  if (
     error instanceof TypeError ||
     (error instanceof Error &&
       (error.name === "AbortError" ||
         error.name === "TimeoutError" ||
         NATIVE_TRANSIENT.has(error.message)))
-  );
+  )
+    return true;
+  // A wrapper that only adds context (Preference decode: …) keeps its cause.
+  return error instanceof Error && error.cause !== undefined
+    ? isTransientFailure(error.cause)
+    : false;
 }
