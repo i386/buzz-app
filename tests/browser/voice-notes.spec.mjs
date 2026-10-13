@@ -99,10 +99,10 @@ test.beforeEach(async ({ page }) => {
     page.getByRole("button", { name: "Play voice note", exact: true }),
   ).toBeVisible();
 });
-// Attachments upload eagerly, so previews can still be fetching media through
-// the route above when a test ends. Let those handlers finish on a live page.
+// Attachments upload eagerly, so a preview can still be fetching media through
+// the route above when a test ends. Its late errors cannot affect the result.
 test.afterEach(async ({ page }) => {
-  await page.unrouteAll({ behavior: "wait" });
+  await page.unrouteAll({ behavior: "ignoreErrors" });
 });
 async function record(page) {
   await page
