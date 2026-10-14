@@ -731,14 +731,20 @@ function scrollerOf(element: HTMLElement) {
   return null;
 }
 
-/** One reveal per linked comment: scroll to and focus its row once it mounts. */
+/**
+ * One reveal per linked comment: scroll to and focus its row once it mounts.
+ * The key is withheld while a source is loading, since an earlier event can
+ * regroup the folded run and remount the row; the last revealed key is kept so
+ * a later page load toggling that gate does not reveal again.
+ */
 function useAnchorReveal(
   conversation: RefObject<HTMLElement | null>,
   key: string | undefined,
 ) {
+  const revealed = useRef<string>(undefined);
   useLayoutEffect(() => {
     const container = conversation.current;
-    if (!key || !container) return;
+    if (!key || !container || revealed.current === key) return;
     let frame = 0;
     const reveal = () => {
       const row = [
@@ -746,6 +752,7 @@ function useAnchorReveal(
       ].find((element) => element.dataset.eventKey === key);
       if (!row) return; // A folded run mounts its rows after opening; observe the mount.
       observer.disconnect();
+      revealed.current = key;
       // The row lands at the scroller's bottom with the conversation leading to
       // it above; native alignment clamps near the end, so it never overscrolls.
       // A row taller than the scroller keeps its top visible instead.
@@ -800,7 +807,10 @@ function Conversation({
     anchor &&
     !anchored &&
     !(anchor.kind === "review" ? reviews : discussion).loading;
-  useAnchorReveal(conversation, anchored ? anchorKey : undefined);
+  useAnchorReveal(
+    conversation,
+    anchored && !discussion.loading && !reviews.loading ? anchorKey : undefined,
+  );
   return (
     <section
       className={styles.conversation}

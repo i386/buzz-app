@@ -1838,6 +1838,69 @@ it("reveals the linked comment inside a folded run in full, then moves to a late
   outside.remove();
 });
 
+it("reveals the linked comment once both sources answer, surviving the run regrouping an earlier review causes", async () => {
+  using stub = stubScrollIntoView();
+  let finishReviews!: (response: Response) => void;
+  vi.stubGlobal(
+    "fetch",
+    vi.fn((target: string) =>
+      target.includes("/reviews?")
+        ? new Promise<Response>((resolve) => {
+            finishReviews = resolve;
+          })
+        : Promise.resolve(
+            response([
+              { id: 20, body: "First discussion", created_at: date(13) },
+              { id: 21, body: "Second discussion", created_at: date(15) },
+            ]),
+          ),
+    ),
+  );
+  render(
+    <GitHubConversation
+      details={{ ...details, mergedAt: date(17), mergedBy: "maintainer" }}
+      url={url}
+      anchor={{ kind: "discussion", id: "21" }}
+    />,
+  );
+  const early = await waitFor(() => {
+    const element = anchoredRow("discussion-21");
+    if (!element) throw new Error("Discussion not loaded yet");
+    return element;
+  });
+  expect(
+    screen.getByRole("button", { name: "Hide 2 earlier messages" }),
+  ).toHaveAttribute("aria-expanded", "true");
+  await waitFor(() => expect(finishReviews).toBeDefined());
+  // Reviews are still pending, so the row may yet move; the reveal waits.
+  expect(stub.scroll).not.toHaveBeenCalled();
+  expect(early).not.toHaveFocus();
+  await act(async () =>
+    finishReviews(
+      response([
+        {
+          id: 9,
+          state: "COMMENTED",
+          body: "Early review",
+          user: { login: "reviewer" },
+          submitted_at: date(12),
+        },
+      ]),
+    ),
+  );
+  // The run now starts at the review, so React mounted a fresh row for the comment.
+  const row = anchoredRow("discussion-21");
+  if (!row) throw new Error("Missing anchored row");
+  expect(row).not.toBe(early);
+  await waitFor(() => expect(row).toHaveFocus());
+  expect(row).toHaveAttribute("data-anchored", "true");
+  expect(
+    screen.getByRole("button", { name: "Hide 3 earlier messages" }),
+  ).toHaveAttribute("aria-expanded", "true");
+  expect(stub.scroll).toHaveBeenCalledOnce();
+  expect(stub.scroll.mock.contexts[0]).toBe(row);
+});
+
 it("keeps the top of a linked comment taller than its scroller visible", async () => {
   using stub = stubScrollIntoView();
   vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockReturnValue({
