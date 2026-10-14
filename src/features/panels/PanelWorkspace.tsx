@@ -24,6 +24,8 @@ type Item = {
   label: string;
   icon?: ReactNode;
   content: ReactNode;
+  /** Increment when an opening returns to this existing tab. */
+  attentionRequest?: number | undefined;
   /** Stable for one opening, including retained exit content. */
   instance?: object;
   /** Omit for a permanent tab such as a channel's own conversation. */
@@ -302,6 +304,8 @@ export function PanelWorkspace({
               label: tab.label,
               icon: tab.icon,
               panelId: panelId(tab.id),
+              attentionRequest:
+                "attentionRequest" in tab ? tab.attentionRequest : undefined,
               onMove: "move" in tab ? tab.move : undefined,
               draggable: !!drag && "move" in tab && !!tab.move,
               onClose: tab.close

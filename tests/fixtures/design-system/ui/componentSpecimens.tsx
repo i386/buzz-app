@@ -763,6 +763,7 @@ function TabsSpecimen() {
     "Harness log",
   ]);
   const [selectedClosable, setSelectedClosable] = useState("Thread");
+  const [attentionRequest, requestAttention] = useState(0);
   const [destination, setDestination] = useState<Destination>("messages");
   const [panelDestination, setPanelDestination] =
     useState<Destination>("messages");
@@ -773,6 +774,15 @@ function TabsSpecimen() {
   }));
   return (
     <div className="component-specimen-stack">
+      <Button
+        disabled={!closable.includes("Thread")}
+        onClick={() => {
+          setSelectedClosable("Thread");
+          requestAttention((value) => value + 1);
+        }}
+      >
+        Reopen thread
+      </Button>
       <SpecimenGroup
         label="Closable navigation tabs — shared sidebar control"
         code={`{closable.length ? (
@@ -821,6 +831,8 @@ function TabsSpecimen() {
             items={closable.map((label) => ({
               value: label,
               label,
+              attentionRequest:
+                label === "Thread" ? attentionRequest : undefined,
               icon:
                 label === "Profile" ? (
                   <Avatar alt="" fallback="Ada" size="fill" />

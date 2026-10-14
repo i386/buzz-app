@@ -1028,12 +1028,30 @@
     max-width: min(12rem, 100%);
   }
   .buzz-tabs[data-variant="navigation"] .navigation-item {
+    position: relative;
+    isolation: isolate;
     border-radius: var(--radius-icon-button);
     padding-inline-start: var(--space-2);
     padding-inline-end: var(--space-2);
   }
   .buzz-tabs[data-variant="navigation"] .navigation-item[data-selected] {
     background: var(--affordance-subtle);
+  }
+  /* Reopening an existing tab identifies it without changing selection or focus. */
+  .buzz-tabs-attention {
+    position: absolute;
+    inset: 0;
+    z-index: -1;
+    border-radius: inherit;
+    pointer-events: none;
+    background: var(--affordance-subtle-pressed);
+    animation: workspace-tab-arrival calc(var(--duration-settle) * 3)
+      var(--easing-state) both;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .buzz-tabs-attention {
+      animation-timing-function: steps(1, end);
+    }
   }
   .buzz-tabs[data-variant="navigation"][data-selection-hidden]
     .navigation-item {

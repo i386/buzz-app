@@ -74,13 +74,46 @@ test("Back restores each thread visit before the previous channel", async ({
   const openThread = await panel
     .getByRole("region", { name: "Thread messages", exact: true })
     .elementHandle();
-  await threadButton(roots[1]).click();
-  await page.evaluate(
-    () =>
-      new Promise((resolve) =>
-        requestAnimationFrame(() => requestAnimationFrame(resolve)),
-      ),
+  // A real browser proves the host loads and paints repeat-open feedback,
+  // then delivers animationend. The lower-layer tests own the state matrix.
+  const selectedTab = page.locator(
+    `[role="tab"][data-tab-value="thread:alpha:${roots[1].id}"]`,
   );
+  const feedback = await selectedTab.evaluateHandle((tab) => {
+    const state = { cue: null };
+    tab.addEventListener(
+      "animationstart",
+      (event) => {
+        if (!event.target.classList.contains("buzz-tabs-attention")) return;
+        state.cue = event.target;
+        for (const animation of state.cue.getAnimations()) {
+          animation.pause();
+          animation.currentTime = 0;
+        }
+      },
+      { once: true },
+    );
+    return state;
+  });
+  await threadButton(roots[1]).click();
+  try {
+    await expect
+      .poll(() => feedback.evaluate((state) => !!state.cue))
+      .toBe(true);
+    const paint = await feedback.evaluate(({ cue }) => ({
+      tint: getComputedStyle(cue).backgroundColor,
+      resting: getComputedStyle(cue.parentElement).backgroundColor,
+      opacity: Number(getComputedStyle(cue).opacity),
+    }));
+    expect(paint.tint).not.toBe(paint.resting);
+    expect(paint.opacity).toBeGreaterThan(0);
+  } finally {
+    await feedback.evaluate(({ cue }) => {
+      for (const animation of cue?.getAnimations() ?? []) animation.finish();
+    });
+    await feedback.dispose();
+  }
+  await expect(selectedTab.locator(".buzz-tabs-attention")).toHaveCount(0);
   await expect(panel.getByText("Thread root 1", { exact: true })).toBeVisible();
   expect(await openThread.evaluate((node) => node.isConnected)).toBe(true);
   await beta.click();

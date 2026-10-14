@@ -2,7 +2,7 @@ import { Tabs as BaseTabs } from "@base-ui/react/tabs";
 import { NavigationItem } from "./NavigationItem";
 import { IconButton } from "./IconButton";
 import { XIcon } from "../icons";
-import type { ReactNode } from "react";
+import { useLayoutEffect, useRef, useState, type ReactNode } from "react";
 
 export type TabItem<Value extends string> = {
   value: Value;
@@ -11,6 +11,8 @@ export type TabItem<Value extends string> = {
   trailing?: ReactNode;
   /** Link a retained, externally owned tab panel. */
   panelId?: string;
+  /** Increment to briefly identify an already-open navigation tab. */
+  attentionRequest?: number | undefined;
   onClose?: (() => void) | undefined;
   /** Option/Alt+Shift+Arrow moves this tab one position; the caller places it. */
   draggable?: boolean | undefined;
@@ -82,11 +84,14 @@ export function Tabs<Value extends string>({
                   <NavigationItem
                     label={item.label}
                     icon={
-                      item.icon && (
-                        <span className="buzz-tabs-icon" aria-hidden="true">
-                          {item.icon}
-                        </span>
-                      )
+                      <>
+                        <TabAttention request={item.attentionRequest} />
+                        {item.icon && (
+                          <span className="buzz-tabs-icon" aria-hidden="true">
+                            {item.icon}
+                          </span>
+                        )}
+                      </>
                     }
                     trailing={item.trailing}
                     selected={showSelection && item.value === value}
@@ -190,5 +195,37 @@ export function Tabs<Value extends string>({
           </BaseTabs.Panel>
         ))}
     </BaseTabs.Root>
+  );
+}
+
+/** Restart only the paint layer, never the focused tab or retained panel. */
+function TabAttention({ request }: { request: number | undefined }) {
+  const previous = useRef(request);
+  const [active, setActive] = useState<number>();
+  const overlay = useRef<HTMLSpanElement>(null);
+  useLayoutEffect(() => {
+    if (previous.current === request) return;
+    previous.current = request;
+    setActive(request);
+  }, [request]);
+  useLayoutEffect(() => {
+    if (active === undefined) return;
+    const element = overlay.current;
+    element?.parentElement?.scrollIntoView?.({
+      block: "nearest",
+      inline: "nearest",
+      behavior: "instant",
+    });
+    const finish = () => setActive(undefined);
+    element?.addEventListener("animationend", finish);
+    return () => element?.removeEventListener("animationend", finish);
+  }, [active]);
+  return active === undefined ? null : (
+    <span
+      key={active}
+      ref={overlay}
+      className="buzz-tabs-attention"
+      aria-hidden="true"
+    />
   );
 }

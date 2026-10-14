@@ -212,6 +212,7 @@ test("opening a thread selects it, deduplicates its root and restores each chann
       channelId: "alpha",
       messageId: "reply-b",
       replyRequest: 2,
+      attentionRequest: 1,
       pane: "side",
     },
     {

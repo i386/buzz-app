@@ -1033,6 +1033,12 @@ channel header uses the same control with a single non-closable tab with `showSe
 actions remain in the header action slot. The settings launcher uses
 `data-highlight-expanded="false"` to preserve disclosure semantics without a
 sticky pressed treatment; the selected tab owns the open-state indicator.
+Reopening an existing thread increments its navigation tab's `attentionRequest`:
+the tab briefly uses `affordance-subtle-pressed`, then returns to its selected
+fill. The shared tab owns this paint-only cue and reveals an overflowed tab
+without moving focus. Repeated openings restart only the cue; mounting retained
+tabs and ordinary selection do not replay it. Reduced motion holds the tint
+briefly and removes it without fading.
 
 NavigationItem
 offers an `option` variant for picker rows with even 8px padding and immediate

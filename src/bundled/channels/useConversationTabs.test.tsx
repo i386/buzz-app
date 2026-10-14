@@ -1,5 +1,16 @@
 // @vitest-environment jsdom
-import { act, cleanup, renderHook } from "@testing-library/react";
+import "@testing-library/jest-dom/vitest";
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render,
+  renderHook,
+  screen,
+} from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import { StrictMode } from "react";
+import { PanelWorkspace } from "../../features/panels/PanelWorkspace";
 import { afterEach, expect, it } from "vitest";
 import type { RelaySession } from "../../features/relay/session";
 import type { RelayData } from "../../features/relay/service";
@@ -238,3 +249,137 @@ it("the current verified read-only preview owns its thread host, but unrelated p
   h.rerender({ cached: true });
   expect(h.result.current.workspace.hosts).toHaveLength(0);
 });
+
+// The real state -> workspace -> Tabs boundary owns repeat-open feedback.
+// CSS paint is inspected in-browser; here we protect triggering and lifetime.
+it.each(["side", "main"] as const)(
+  "identifies a reopened %s thread repeatedly without remounting its editor or replaying on history restore",
+  async (pane) => {
+    const user = userEvent.setup();
+    const current = { id: "alpha", name: "Alpha" };
+    const session = {
+      viewer: "viewer",
+      channels: { window: () => ({ rows: [] }) },
+    } as unknown as RelaySession;
+    const available: RegisteredPanel[] = [];
+    const panels = {
+      snapshot: () => available,
+      subscribe: () => () => {},
+    } as unknown as Panels;
+    const relay = {
+      snapshot: () => ({ status: "ready", session }),
+    } as unknown as RelayData;
+    function Fixture() {
+      const state = useChannelTabState(session, "alpha");
+      const workspace = useConversationTabs({
+        state,
+        relay,
+        session,
+        panels,
+        current,
+        channels: [current],
+        scope: "scope:viewer",
+        conversationIcon: () => null,
+        leadingIds: [],
+        continuingVisit: true,
+        isLive: () => true,
+        openLink: () => false,
+        mainPane: true,
+      });
+      const items = pane === "main" ? workspace.mainItems : workspace.items;
+      return (
+        <>
+          <button
+            type="button"
+            onClick={() =>
+              state.openThreadTab("alpha", "root", "root", "select", pane)
+            }
+          >
+            Open thread
+          </button>
+          <button
+            type="button"
+            onClick={() =>
+              state.enterVisit("history", {
+                channelId: "alpha",
+                messageId: "root",
+                rootId: "root",
+              })
+            }
+          >
+            Restore history
+          </button>
+          <PanelWorkspace
+            main={pane === "main"}
+            value={
+              pane === "main"
+                ? (state.mainSelected ?? "conversation")
+                : state.selected
+            }
+            select={pane === "main" ? state.selectMain : state.select}
+            items={[
+              ...items.map((item) => ({
+                ...item,
+                content: <input aria-label="Retained reply" />,
+              })),
+              { id: "other", label: "Other", content: null },
+            ]}
+          />
+        </>
+      );
+    }
+    const mount = () =>
+      render(
+        <StrictMode>
+          <Fixture />
+        </StrictMode>,
+      );
+    const mounted = mount();
+    const open = screen.getByRole("button", { name: "Open thread" });
+    fireEvent.click(open);
+    const tab = screen.getByRole("tab", { name: "Thread · Alpha" });
+    const cue = () => tab.querySelector(".buzz-tabs-attention");
+    expect(cue()).toBeNull();
+    const editor = screen.getByRole("textbox", { name: "Retained reply" });
+    fireEvent.change(editor, { target: { value: "Keep my reply" } });
+    editor.focus();
+    fireEvent.click(open);
+    const first = cue();
+    expect(first).not.toBeNull();
+    expect(editor).toHaveFocus();
+    fireEvent.click(open);
+    expect(cue()).not.toBe(first);
+    expect(screen.getByRole("tab", { name: "Thread · Alpha" })).toBe(tab);
+    expect(screen.getByRole("textbox", { name: "Retained reply" })).toBe(
+      editor,
+    );
+    expect(editor).toHaveValue("Keep my reply");
+    const activeCue = cue();
+    if (!activeCue) throw new Error("Expected repeat-open feedback");
+    fireEvent.animationEnd(activeCue);
+    expect(cue()).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Restore history" }));
+    expect(cue()).toBeNull();
+    const other = screen.getByRole("tab", { name: "Other" });
+    await user.click(other);
+    expect(other).toHaveAttribute("aria-selected", "true");
+    await user.click(tab);
+    expect(tab).toHaveAttribute("aria-selected", "true");
+    expect(cue()).toBeNull();
+    expect(other.querySelector(".buzz-tabs-attention")).toBeNull();
+    // Retained session counters are not a new request when the page remounts.
+    mounted.unmount();
+    mount();
+    expect(
+      screen
+        .getByRole("tab", { name: "Thread · Alpha" })
+        .querySelector(".buzz-tabs-attention"),
+    ).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Open thread" }));
+    expect(
+      screen
+        .getByRole("tab", { name: "Thread · Alpha" })
+        .querySelector(".buzz-tabs-attention"),
+    ).not.toBeNull();
+  },
+);
