@@ -1343,24 +1343,37 @@ button.mediaPreview {
   line-height: var(--text-mono-sm--line-height);
   letter-spacing: var(--text-mono-sm--letter-spacing);
 }
+/* The code scrolls inside its frame so the copy action stays in the corner. */
 .text pre {
+  position: relative;
   max-width: 100%;
-  overflow-x: auto;
+  overflow: hidden;
   border: 1px solid var(--border-standard);
   border-radius: var(--radius-row);
   background: var(--surface-panel);
-  padding: var(--space-3) var(--space-3);
-  scrollbar-width: thin;
 }
 .text pre code {
   display: block;
-  width: max-content;
-  min-width: 100%;
+  overflow-x: auto;
   border-radius: 0;
   background: transparent;
-  padding: 0;
+  padding: var(--space-3) var(--space-3);
+  scrollbar-width: thin;
   white-space: pre;
   overflow-wrap: normal;
+}
+.codeCopy {
+  position: absolute;
+  top: var(--space-1h);
+  right: var(--space-1h);
+  border-radius: var(--radius-icon-button);
+  background: var(--surface-panel);
+  user-select: none;
+}
+@media (hover: hover) and (pointer: fine) {
+  .text pre:not(:hover, :focus-within) .codeCopy {
+    opacity: 0;
+  }
 }
 .text table {
   display: block;

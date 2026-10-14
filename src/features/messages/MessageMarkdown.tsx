@@ -20,7 +20,13 @@ import {
   channelLinkLabel,
   emptyReferenceDirectory,
 } from "./ReferenceText";
-import { AtIcon, RobotIcon } from "../../shared/design-system/icons/index";
+import {
+  AtIcon,
+  CopyIcon,
+  RobotIcon,
+} from "../../shared/design-system/icons/index";
+import { IconButton } from "../../shared/design-system/ui/IconButton";
+import { useToastNotification } from "../../shared/design-system/ui/Toast";
 import { profileKey } from "../profiles/target";
 import referenceStyles from "../../shared/InlineReference.module.css";
 import Markdown, {
@@ -365,7 +371,7 @@ const labelText = (children: ReactNode): string =>
     .join("");
 
 type MessageComponents = {
-  [Tag in "p" | "a" | "img" | "span"]: (
+  [Tag in "p" | "a" | "img" | "span" | "pre"]: (
     props: ComponentPropsWithoutRef<Tag> & ExtraProps,
   ) => ReactNode;
 };
@@ -382,6 +388,7 @@ const markdownComponents: Components = {
   a: (props) => useMessageComponents().a(props),
   img: (props) => useMessageComponents().img(props),
   span: (props) => useMessageComponents().span(props),
+  pre: (props) => useMessageComponents().pre(props),
 };
 
 export function MessageMarkdown({
@@ -647,6 +654,14 @@ function PreparedMessageMarkdown({
         <span {...props}>{children}</span>
       );
     },
+    pre: ({ node: _node, children, ...props }) => (
+      <pre {...props}>
+        {children}
+        {interactive && (
+          <CopyCodeButton code={labelText(children).replace(/\n$/, "")} />
+        )}
+      </pre>
+    ),
   };
 
   const markdown = (
@@ -711,6 +726,32 @@ function MessageSpoiler({
       >
         {children}
       </span>
+    </span>
+  );
+}
+
+function CopyCodeButton({ code }: { code: string }) {
+  const notify = useToastNotification();
+  const [copying, setCopying] = useState(false);
+  return (
+    <span className={styles.codeCopy}>
+      <IconButton
+        aria-label="Copy code block"
+        title="Copy code"
+        disabled={copying}
+        focusableWhenDisabled
+        icon={<CopyIcon />}
+        onClick={() => {
+          setCopying(true);
+          void Promise.resolve()
+            .then(() => navigator.clipboard.writeText(code))
+            .then(
+              () => notify("Copied code to clipboard", "success"),
+              () => notify("Failed to copy code", "error"),
+            )
+            .finally(() => setCopying(false));
+        }}
+      />
     </span>
   );
 }

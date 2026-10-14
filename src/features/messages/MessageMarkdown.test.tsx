@@ -6,7 +6,10 @@ import {
   fireEvent,
   render as renderDom,
   screen,
+  waitFor,
 } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import { ToastProvider } from "../../shared/design-system/ui/Toast";
 import { renderToStaticMarkup } from "react-dom/server";
 import { LockIcon, RobotIcon } from "../../shared/design-system/icons/index";
 import referenceStyles from "../../shared/InlineReference.module.css";
@@ -565,7 +568,7 @@ describe("Markdown profile mentions", () => {
     "does not create profile controls from excluded raw context: %s",
     (content) => {
       const html = render(content);
-      expect(html).not.toContain("<button");
+      expect(html).not.toContain("data-mention-kind");
       expect(html).not.toMatch(/[\uE000-\uE002]/);
     },
   );
@@ -726,7 +729,7 @@ describe("Markdown inline extensions", () => {
     );
     expect(html).not.toContain("<img");
     expect(html).not.toContain("<mark");
-    expect(html).not.toContain("<button");
+    expect(html).not.toContain("data-mention-kind");
     expect(html).not.toMatch(/[\uE000-\uE002]/);
     expect(html).toContain('href="https://example.test/ref"');
     expect(html).toContain(":party_parrot: PLUGIN @Mic</code>");
@@ -1034,6 +1037,62 @@ describe("text spoilers", () => {
     expect(html).not.toContain("<a ");
     expect(html).toContain('aria-hidden="true"');
     expect(html).toContain('inert=""');
+  });
+});
+
+describe("code block copy", () => {
+  const fenced = "Before\n\n```ts\nconst x = 1\n\nreturn x\n```";
+
+  it("copies only the code, reports failure, and allows retry", async () => {
+    const user = userEvent.setup();
+    const write = vi
+      .spyOn(navigator.clipboard, "writeText")
+      .mockRejectedValueOnce(new Error("denied"))
+      .mockResolvedValueOnce();
+    const view = renderDom(<MessageMarkdown {...props(fenced)} />, {
+      wrapper: ToastProvider,
+    });
+    // Native and timeline selection copy read the block's text unchanged.
+    expect(view.container.querySelector("pre")?.textContent).toBe(
+      "const x = 1\n\nreturn x\n",
+    );
+    const copy = screen.getByRole("button", { name: "Copy code block" });
+    await user.click(copy);
+    await screen.findByText("Failed to copy code");
+    await user.click(copy);
+    await screen.findByText("Copied code to clipboard");
+    expect(write).toHaveBeenCalledTimes(2);
+    expect(write).toHaveBeenLastCalledWith("const x = 1\n\nreturn x");
+  });
+
+  it("blocks repeat copies until the first settles", async () => {
+    const user = userEvent.setup();
+    let finish!: () => void;
+    const write = vi.spyOn(navigator.clipboard, "writeText").mockImplementation(
+      () =>
+        new Promise<void>((resolve) => {
+          finish = resolve;
+        }),
+    );
+    renderDom(<MessageMarkdown {...props(fenced)} />, {
+      wrapper: ToastProvider,
+    });
+    const copy = screen.getByRole("button", { name: "Copy code block" });
+    await user.click(copy);
+    await waitFor(() => expect(write).toHaveBeenCalledTimes(1));
+    try {
+      expect(copy).toHaveAttribute("aria-disabled", "true");
+      await user.click(copy);
+      expect(write).toHaveBeenCalledTimes(1);
+    } finally {
+      finish();
+    }
+    await screen.findByText("Copied code to clipboard");
+    expect(copy).not.toHaveAttribute("aria-disabled", "true");
+  });
+
+  it("omits the copy action in noninteractive previews", () => {
+    expect(render(fenced, { interactive: false })).not.toContain("<button");
   });
 });
 
