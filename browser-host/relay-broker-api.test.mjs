@@ -7,7 +7,7 @@ import { getLogger, setLogLevel } from "../src/features/developer/logging.ts";
 import { brokerSocket, openBrokerSocket } from "../tests/broker-socket.mjs";
 import { fixtureRelayUrl, fixtureAliases } from "../tests/relay-config.ts";
 import { createRelayReader } from "../src/features/relay/reader.ts";
-import { createServer, get } from "node:http";
+import { createServer, get, request } from "node:http";
 import { createHash, createHmac } from "node:crypto";
 import { schnorr } from "@noble/curves/secp256k1.js";
 import { ReadableStream } from "node:stream/web";
@@ -106,6 +106,7 @@ async function harness(
   const base = `http://127.0.0.1:${server.address().port}`;
   return {
     base,
+    server,
     event,
     calls,
     publications: socket.publications,
@@ -1030,6 +1031,121 @@ test("foreground profile publication starts while background I/O is outstanding;
     await h.close();
   }
 });
+
+// Delivers bytes in two HTTP chunks, the second only after the broker has read the first.
+async function postSplit(h, path, bytes, at) {
+  const read = new Promise((resolve) =>
+    h.server.once("request", (req) => resolve(vi.spyOn(req, "read"))),
+  );
+  const client = request(`${h.base}${path}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+  });
+  const response = new Promise((resolve, reject) =>
+    client.once("response", resolve).once("error", reject),
+  );
+  client.write(bytes.subarray(0, at));
+  const spy = await read;
+  await vi.waitFor(() =>
+    expect(spy.mock.results.some(({ value }) => value?.length)).toBe(true),
+  );
+  client.end(bytes.subarray(at));
+  const res = await response;
+  const chunks = [];
+  for await (const chunk of res) chunks.push(chunk);
+  return {
+    status: res.statusCode,
+    body: JSON.parse(Buffer.concat(chunks).toString("utf8")),
+  };
+}
+
+const profileName = "café €🛩";
+const profileBody = Buffer.from(
+  JSON.stringify({ name: profileName, picture: "" }),
+);
+// Every interior byte of each 2-, 3- and 4-byte UTF-8 sequence.
+const profileSplits = [...profileName]
+  .filter((char) => Buffer.byteLength(char) > 1)
+  .flatMap((char) =>
+    Array.from({ length: Buffer.byteLength(char) - 1 }, (_, byte) => [
+      char,
+      byte + 1,
+      profileBody.indexOf(char) + byte + 1,
+    ]),
+  );
+
+test.each(profileSplits)(
+  "signed profile text survives %s split after byte %i across HTTP chunks",
+  async (_char, _byte, at) => {
+    const h = await harness(success);
+    try {
+      const response = await postSplit(
+        h,
+        "/api/relay/profile",
+        profileBody,
+        at,
+      );
+      expect(response.status).toBe(200);
+      const [published] = h.calls.filter((call) =>
+        call.url.endsWith("/events"),
+      );
+      expect(published.body.kind).toBe(0);
+      expect(verifyEvent(published.body)).toBe(true);
+      expect(JSON.parse(published.body.content).name).toBe(profileName);
+    } finally {
+      await h.close();
+    }
+  },
+);
+
+test.each([
+  ["/api/builderlab/delete", 4096, "chars", "Request too large"],
+  ["/api/relay/register", 4096, "chars", "Relay URL too large"],
+  [
+    "/api/relay/prepare-remote-agent-authorization",
+    4096,
+    "bytes",
+    "Authorization request is too large",
+  ],
+  ["/api/relay/archive", 4096, "bytes", "Archive request too large"],
+  ["/api/relay/stream-presence", 256, "bytes", "Live control too large"],
+  ["/api/relay/stream", 300000, "bytes", "Live interests too large"],
+  ["/api/relay/query", 65536, "chars", "Filter body too large"],
+  ["/api/relay/presence-snapshot", 20 * 1024, "bytes", "Filter body too large"],
+])(
+  "%s measures a split multibyte body exactly at its %i %s limit",
+  async (path, limit, unit, tooLarge) => {
+    const size = (body) =>
+      unit === "bytes" ? Buffer.byteLength(body) : body.length;
+    const padded = (extra) =>
+      Buffer.from(
+        JSON.stringify({
+          pad: `é${"a".repeat(limit - size(JSON.stringify({ pad: "é" })) + extra)}`,
+        }),
+      );
+    const at = padded(0).indexOf("é") + 1;
+    const h = await harness(success);
+    try {
+      const whole = await fetch(`${h.base}${path}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: padded(0),
+      });
+      const split = await postSplit(h, path, padded(0), at);
+      expect(split.status).not.toBe(413);
+      expect(split).toEqual({
+        status: whole.status,
+        body: await whole.json(),
+      });
+      expect(await postSplit(h, path, padded(1), at)).toEqual({
+        status: 413,
+        body: { error: tooLarge },
+      });
+    } finally {
+      await h.close();
+    }
+  },
+);
 
 test("local capacity is explicitly unsent, not relay quota; unknown upstream publication is never resent", async () => {
   let release;
