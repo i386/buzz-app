@@ -15,12 +15,13 @@ import {
   type ToolServer,
   type TurnPick,
 } from "./claude";
+import { WAKE_DEADLINE_MS } from "../../features/agents/wakes";
 
 /** A conversation's process stops after this long without a message. */
 export const IDLE_MS = 15 * 60_000;
 /** How long a one-off turn can run before it is given up; Janet's turn
  * deadline. */
-export const ONCE_DEADLINE_MS = 5 * 60_000;
+export const ONCE_DEADLINE_MS = WAKE_DEADLINE_MS;
 /** Saved sessions per agent; the least recently used are forgotten. */
 const SAVED_LIMIT = 200;
 

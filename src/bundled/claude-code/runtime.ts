@@ -22,17 +22,16 @@ import type { RelayData } from "../../features/relay/service";
 import { threadReference } from "../../features/relay/thread-reference";
 import type { Settled, Spawn, ToolServer } from "./claude";
 import { appClient } from "../../buzz-mcp/app-client";
+import { ATTENTION_REVIEW } from "../../buzz-mcp/attention-prompt";
 import { coreOf, MemoryReads } from "../../features/agent-harness/core-memory";
-import { Lanes } from "./lanes";
+import { Lanes } from "../../features/agents/lanes";
+import { wake } from "../../features/agents/wakes";
 import {
-  ATTENTION_REVIEW,
   CONTEXT_LIMIT,
   type Scope,
   steerPrompt,
   systemPrompt,
-  timerPrompt,
   turnPrompt,
-  watchPrompt,
 } from "./prompt";
 import { AgentSessions, localSessions, Spare } from "./sessions";
 import { readTranscript, type Conversation } from "./transcript";
@@ -371,7 +370,20 @@ export class ClaudeRuntime {
     entry.handle = agent;
     entry.team = team ?? "";
     if (trigger.type !== "mention") {
-      workingUntil(this.wake(entry, agent, trigger, current));
+      workingUntil(
+        wake(
+          entry.lanes,
+          agent,
+          trigger,
+          current,
+          (key, text) => {
+            const done = entry.sessions.runOnce(key, text);
+            this.notify();
+            return done.finally(() => this.notify());
+          },
+          "Claude",
+        ),
+      );
       return;
     }
     const { event } = trigger;
@@ -461,103 +473,6 @@ export class ClaudeRuntime {
     this.watch(done, async (error) => {
       if (error) await this.report(agent, channel, event, error, topLevel);
     });
-  }
-
-  /** A watch or timer wake: a one-off turn in its Interest's lane, as in
-   * Janet. It joins no conversation, and nothing about it is saved. The host
-   * says whether it is still `current`, asked when its lane starts it and
-   * again once it has a process: a wake whose watch or timer was disabled or
-   * removed, whose watch changed or no longer matches, or whose agent's
-   * attention went off, while it waited does not run. Its prompt is built
-   * then, from the attention as it is. */
-  private wake(
-    entry: Entry,
-    agent: AgentHandle,
-    trigger: Exclude<Delivery["trigger"], { type: "mention" }>,
-    current: () => boolean,
-  ): Promise<Settled> {
-    const { slug } = trigger;
-    const id = slug.replace(/^watch\//, "");
-    const lane = (trigger.type === "watch" ? trigger.watch : trigger.timer)
-      .interest_id;
-    let settle!: (result: Settled) => void;
-    const settled = new Promise<Settled>((resolve) => {
-      settle = resolve;
-    });
-    const dropped = (why: string) => {
-      console.warn(`Claude dropped a ${trigger.type} turn: ${why}`);
-      settle({ ok: true });
-    };
-    const queued = entry.lanes.add(
-      lane,
-      async () => {
-        try {
-          if (!current()) return settle({ ok: true });
-          const done = entry.sessions.runOnce(`${trigger.type}/${id}`, () =>
-            this.wakePrompt(agent, trigger, id, current),
-          );
-          this.notify();
-          const result = await done;
-          this.notify();
-          if (!result.ok)
-            console.warn(
-              `Claude ${trigger.type} turn failed: ${id}`,
-              result.error,
-            );
-          settle(result);
-        } finally {
-          // Settled already, unless something above threw.
-          settle({ ok: false, error: "The turn failed" });
-        }
-      },
-      () => dropped("attention was turned off or the agent stopped"),
-    );
-    if (queued !== "queued")
-      dropped(
-        queued === "full"
-          ? `too many are waiting (Interest ${lane})`
-          : "the agent stopped",
-      );
-    return settled;
-  }
-
-  /** The prompt for a wake as its watch now is, or undefined when it should
-   * no longer run. */
-  private async wakePrompt(
-    agent: AgentHandle,
-    trigger: Exclude<Delivery["trigger"], { type: "mention" }>,
-    id: string,
-    stillCurrent: () => boolean,
-  ) {
-    const { attention } = agent;
-    if (!stillCurrent()) return undefined;
-    const current = (await attention.show(trigger.slug)).object;
-    const type = trigger.type === "watch" ? "event" : "timer";
-    if (!current || current.type !== type) return undefined;
-    const interest = (await attention.show(`interest/${current.interest_id}`))
-      .object;
-    const instructions =
-      interest?.type === "interest"
-        ? { instructions: interest.instructions }
-        : {};
-    const text =
-      trigger.type === "watch"
-        ? watchPrompt({
-            id,
-            interest: current.interest_id,
-            ...instructions,
-            event: trigger.event,
-            ...(trigger.classifier ? { classifier: trigger.classifier } : {}),
-          })
-        : timerPrompt({
-            id,
-            interest: current.interest_id,
-            prompt: current.type === "timer" ? current.prompt : "",
-            ...instructions,
-            spent: trigger.spent,
-          });
-    // Asked again: the attention can change while it is read.
-    return stillCurrent() ? `${text}\n\n${ATTENTION_REVIEW}` : undefined;
   }
 
   /** `text` with Janet's end-of-turn attention review, when attention is on. */

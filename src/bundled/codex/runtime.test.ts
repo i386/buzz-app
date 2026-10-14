@@ -298,6 +298,14 @@ function fixture(
   }));
   const workingUntil = vi.fn<Delivery["workingUntil"]>();
   const media = vi.fn(async () => btoa("\x89PNG\r\n"));
+  /** The owner's attention switch, and the objects the host holds. */
+  const attention = { on: false };
+  const objects = new Map<string, Record<string, unknown>>();
+  const attentionWrite = vi.fn(async (slug: string) => ({
+    result: "found",
+    object: objects.get(slug) ?? null,
+    expected_state: "object-v1:written",
+  }));
   const agent = {
     pubkey,
     owner,
@@ -307,6 +315,23 @@ function fixture(
     upload,
     media,
     remember,
+    attention: {
+      enabled: () => attention.on,
+      classifier: () => "unavailable" as const,
+      show: vi.fn(async (slug: string) => {
+        const object = objects.get(slug) ?? null;
+        return {
+          result: object ? "found" : "not-found",
+          object,
+          expected_state: "object-v1:test",
+        };
+      }),
+      interests: vi.fn(() =>
+        [...objects.keys()].filter((slug) => slug.startsWith("interest/")),
+      ),
+      watches: vi.fn(() => []),
+      write: attentionWrite,
+    },
   };
   runtime.sync([{ pubkey } as Agent]);
   let id = 0;
@@ -433,6 +458,9 @@ function fixture(
   return {
     runtime,
     tool,
+    attention,
+    objects,
+    attentionWrite,
     query,
     fileReads,
     memoryOpen,
@@ -2106,10 +2134,15 @@ it("keeps each thread's activity in a shared session and does not move it to wat
       },
     },
   });
+  // The watch runs as a one-off turn of its own, never steered into a
+  // conversation; this one has no saved watch, so it does not run at all.
+  const wakeDone = f.workingUntil.mock.calls.at(-1)?.[0];
+  await expect(wakeDone).resolves.toEqual({ ok: true });
   await vi.waitFor(() =>
-    expect(f.sent.filter((w) => w.method === "turn/steer")).toHaveLength(2),
+    expect(f.sent.filter((w) => w.method === "turn/steer")).toHaveLength(1),
   );
-  // A tool call waits for the steering chain, establishing that the watch was taken.
+  expect(f.sent.filter((w) => w.method === "thread/start")).toHaveLength(1);
+  // A tool call waits for the steering chain, establishing that it was taken.
   await f.tool("send", {
     audience: "everyone",
     text: "Progress",
@@ -2346,6 +2379,220 @@ it("lists saved conversations newest first from storage, and moves a started one
   );
   expect(stored.at(-1)).toBe(latest?.key);
   await f.complete();
+});
+
+it("offers the attention tools, guidance and review only while attention is on", async () => {
+  const f = fixture();
+  f.attention.on = true;
+  f.objects.set("interest/ops", {
+    type: "interest",
+    instructions: "Watch ops",
+  });
+  await f.runtime.run(f.delivery("@Codex with attention"));
+  await vi.waitFor(() => expect(f.starts()).toHaveLength(1));
+  const thread = (index: number) =>
+    f.sent.filter((wire) => wire.method === "thread/start")[index]?.params as {
+      developerInstructions: string;
+      dynamicTools: { tools: { name: string }[] }[];
+    };
+  const names = (index: number) =>
+    thread(index)?.dynamicTools[0]?.tools.map((tool) => tool.name) ?? [];
+  expect(names(0)).toEqual(expect.arrayContaining(["send", "interest_show"]));
+  expect(thread(0)?.developerInstructions).toContain("## Attention");
+  const start = f.starts()[0]?.params as {
+    input: { text: string }[];
+    additionalContext: Record<string, { value: string }>;
+  };
+  expect(start.input[0]?.text).toMatch(
+    /<attention>\nHandle the work that caused this turn/,
+  );
+  expect(start.additionalContext["buzz.instructions"]?.value).toContain(
+    "## Attention",
+  );
+  // An attention call goes to the agent's attention, through the shared tools.
+  const shown = await f.tool("interest_show", { id: "ops" });
+  expect(JSON.stringify(shown?.result)).toContain("Watch ops");
+  // Turned off mid-turn, the listed tools refuse rather than write.
+  f.attention.on = false;
+  const refused = await f.tool("interest_remove", {
+    id: "ops",
+    expected_state: "object-v1:test",
+  });
+  expect(JSON.stringify(refused?.result)).toContain("Attention is off");
+  expect(f.attentionWrite).not.toHaveBeenCalled();
+  await f.complete();
+  await vi.waitFor(() =>
+    expect(f.runtime.sessions(pubkey)[0]?.status).toBe("Idle"),
+  );
+  // A thread started with attention is not resumed without it: the next one
+  // starts fresh, with no attention tools, guidance or review.
+  await f.runtime.run(f.delivery("@Codex without attention"));
+  await vi.waitFor(() => expect(f.starts()).toHaveLength(2));
+  expect(f.sent.filter((wire) => wire.method === "thread/resume")).toEqual([]);
+  expect(names(1)).toContain("send");
+  expect(names(1)).not.toContain("interest_show");
+  expect(thread(1)?.developerInstructions).not.toContain("## Attention");
+  const next = f.starts()[1]?.params as { input: { text: string }[] };
+  expect(next.input[0]?.text).not.toContain("<attention>");
+  const unlisted = await f.tool("interest_show", { id: "ops" });
+  expect(JSON.stringify(unlisted)).toContain("No active Buzz tool");
+  await f.complete();
+});
+
+it("runs a watch or timer as a one-off ephemeral turn with the attention tools, and saves nothing", async () => {
+  const f = fixture();
+  f.attention.on = true;
+  f.objects.set("interest/ops", {
+    type: "interest",
+    instructions: "Watch ops",
+  });
+  const watch = {
+    type: "event",
+    enabled: true,
+    interest_id: "ops",
+    since: 0,
+    channels: "all",
+    kinds: [9],
+  } as const;
+  f.objects.set("watch/deploys", watch);
+  const base = f.delivery("someone else's message");
+  if (base.trigger.type !== "mention") throw new Error("Expected mention");
+  const event = { ...base.trigger.event, pubkey: "f".repeat(64) };
+  const acknowledged = vi.fn();
+  await f.runtime.run({
+    ...base,
+    acknowledged,
+    trigger: { type: "watch", event, slug: "watch/deploys", watch },
+  });
+  await vi.waitFor(() => expect(f.starts()).toHaveLength(1));
+  const started = f.sent.find((wire) => wire.method === "thread/start")
+    ?.params as {
+    ephemeral?: boolean;
+    dynamicTools: { tools: { name: string }[] }[];
+  };
+  expect(started.ephemeral).toBe(true);
+  expect(started.dynamicTools[0]?.tools.map((tool) => tool.name)).toContain(
+    "watch_update",
+  );
+  const text = (
+    f.starts()[0]?.params as { input: { text: string }[] } | undefined
+  )?.input[0]?.text;
+  expect(text).toContain(
+    '<watch-task>\nThis turn was started by watch "deploys"',
+  );
+  expect(text).toContain('<interest id="ops">\nWatch ops\n</interest>');
+  expect(text).toContain("<observed-message>");
+  expect(text).toMatch(/<attention>\nHandle the work/);
+  // The observed author is not the owner, and the watch still runs; it
+  // answers no one, so `send` has no default destination.
+  const send = await f.tool("send", { audience: "everyone", text: "x" });
+  expect(JSON.stringify(send)).not.toContain("No active Buzz tool");
+  expect(f.publish).not.toHaveBeenCalled();
+  const shown = await f.tool("interest_show", { id: "ops" });
+  expect(JSON.stringify(shown?.result)).toContain("Watch ops");
+  await f.complete(0, "");
+  await expect(f.workingUntil.mock.calls[0]?.[0]).resolves.toEqual({
+    ok: true,
+  });
+  expect(acknowledged).not.toHaveBeenCalled();
+  await vi.waitFor(() =>
+    expect(f.sent.some((wire) => wire.method === "thread/unsubscribe")).toBe(
+      true,
+    ),
+  );
+  expect(f.runtime.sessions(pubkey)).toEqual([]);
+  expect([...f.storage.values()].join()).not.toContain("thread-1");
+  // After the turn, its tools no longer answer.
+  const late = await f.tool("interest_show", { id: "ops" }, 0);
+  expect(JSON.stringify(late)).toContain("No active Buzz tool");
+  // A timer runs the same way, on a thread of its own.
+  const timer = {
+    type: "timer",
+    enabled: true,
+    interest_id: "ops",
+    prompt: "Check the deploys",
+  };
+  // Timers live with watches, under `watch/`.
+  f.objects.set("watch/daily", timer);
+  await f.runtime.run({
+    ...base,
+    trigger: {
+      type: "timer",
+      slug: "watch/daily",
+      timer,
+      spent: false,
+    } as unknown as Delivery["trigger"],
+  });
+  await vi.waitFor(() => expect(f.starts()).toHaveLength(2));
+  const timed = (
+    f.starts()[1]?.params as { input: { text: string }[] } | undefined
+  )?.input[0]?.text;
+  expect(timed).toContain("Timer: daily");
+  expect(timed).toContain("Prompt: Check the deploys");
+  expect(
+    (f.starts()[1]?.params as { threadId: string } | undefined)?.threadId,
+  ).toBe("thread-2");
+  await f.complete(1, "");
+  await expect(f.workingUntil.mock.calls[1]?.[0]).resolves.toEqual({
+    ok: true,
+  });
+});
+
+it("drops a waiting wake that is no longer current, and queues wakes per Interest", async () => {
+  const f = fixture();
+  f.attention.on = true;
+  const watch = {
+    type: "event",
+    enabled: true,
+    interest_id: "ops",
+    since: 0,
+    channels: "all",
+    kinds: [9],
+  } as const;
+  f.objects.set("interest/ops", {
+    type: "interest",
+    instructions: "Watch ops",
+  });
+  f.objects.set("watch/deploys", watch);
+  const deliver = (current: () => boolean) => {
+    const base = f.delivery("watched");
+    if (base.trigger.type !== "mention") throw new Error("Expected mention");
+    return f.runtime.run({
+      ...base,
+      current,
+      trigger: {
+        type: "watch",
+        event: base.trigger.event,
+        slug: "watch/deploys",
+        watch,
+      },
+    });
+  };
+  let second = true;
+  await deliver(() => true);
+  await deliver(() => second);
+  await vi.waitFor(() => expect(f.starts()).toHaveLength(1));
+  // The second waits in the Interest's lane while the first runs ...
+  await new Promise((resolve) => setTimeout(resolve, 50));
+  expect(f.starts()).toHaveLength(1);
+  // ... and is dropped once its watch is no longer wanted.
+  second = false;
+  await f.complete(0, "");
+  await expect(f.workingUntil.mock.calls[1]?.[0]).resolves.toEqual({
+    ok: true,
+  });
+  expect(f.sent.filter((wire) => wire.method === "thread/start")).toHaveLength(
+    1,
+  );
+  // A watch that was removed does not run either.
+  f.objects.delete("watch/deploys");
+  await deliver(() => true);
+  await expect(f.workingUntil.mock.calls[2]?.[0]).resolves.toEqual({
+    ok: true,
+  });
+  expect(f.sent.filter((wire) => wire.method === "thread/start")).toHaveLength(
+    1,
+  );
 });
 
 describe("codexStep", () => {

@@ -2,7 +2,7 @@ import { npubEncode } from "nostr-tools/nip19";
 import { expect, it } from "vitest";
 import type { EventData } from "../../features/relay/events";
 import { BUZZ_PROMPT } from "../../buzz-mcp/prompt";
-import { steerPrompt, systemPrompt, timerPrompt, turnPrompt } from "./prompt";
+import { steerPrompt, systemPrompt, turnPrompt } from "./prompt";
 
 const alice = "a".repeat(64);
 const bob = "b".repeat(64);
@@ -181,26 +181,9 @@ it("shows a DM's recent messages as conversation context", () => {
   expect(prompt).toContain('<conversation-context included="1" total="2"');
 });
 
-it("wraps a message that arrives mid-turn and frames a timer", () => {
+it("wraps a message that arrives mid-turn", () => {
   expect(steerPrompt("<buzz-event>x</buzz-event>")).toMatch(
     /^<new-message-arrived-while-you-were-working>\n<buzz-event>x<\/buzz-event>\n<\/new-message-arrived-while-you-were-working>\n\nNote: A new message arrived/,
-  );
-  const timer = timerPrompt({
-    id: "daily",
-    interest: "ops",
-    prompt: "Summarize",
-    instructions: "Be brief",
-    spent: false,
-  });
-  expect(timer).toContain("Timer: daily");
-  expect(timer).toContain("Prompt: Summarize");
-  expect(timer).not.toContain("spent: true");
-  expect(timer).toContain('<interest id="ops">\nBe brief\n</interest>');
-  // A timer whose Interest is gone says so, rather than running without one.
-  expect(
-    timerPrompt({ id: "daily", interest: "o<p", prompt: "x", spent: true }),
-  ).toContain(
-    '<interest id="o&lt;p" missing="true">\nThis timer names Interest "o&lt;p", which does not exist.',
   );
 });
 

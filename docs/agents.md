@@ -37,6 +37,21 @@ Harness plugins register agent types with the Agents service. An agent type owns
 the defaults, migration policy, per-agent settings tabs, model discovery and run
 behavior for its agents. The host appends the shared Attention tab.
 
+Attention is shared by every harness. `src/buzz-mcp/session-tools.ts` lists a
+session's tools (the Buzz tools, plus the attention tools when the owner has
+attention on) and dispatches each call, refusing attention calls once attention
+is off. `src/buzz-mcp/attention-prompt.ts` holds the attention guidance, the
+end-of-turn review and the watch and timer prompts.
+`src/features/agents/wakes.ts` runs a watch or timer wake: it queues the wake in
+its Interest's lane, checks that it is still current before and while its
+prompt is built, and adds the review. A harness supplies only two pieces: a
+bridge that lists `sessionTools` in its tool format and passes calls to
+`callSessionTool` (Claude: an in-process MCP server; Codex: app-server dynamic
+tools), and a `RunOnce` that runs one turn with no saved conversation and stops
+it after `WAKE_DEADLINE_MS` (Claude: a one-off process; Codex: an ephemeral
+thread). A session lists its tools once, so a harness must not reuse a saved
+session whose tool set differs from the one a turn needs.
+
 A type marks its primary configuration tab with `role: "settings"`. In the
 Agents build view and profile panel, the host keeps that tab at a stable
 `Settings` destination and supplies the current type identity plus retype
