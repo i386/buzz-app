@@ -84,7 +84,7 @@ export default defineConfig(async ({ command, mode }) => {
       // each worktree has its own stable default. The CLI's --port still wins.
       port: worktreePort(fileURLToPath(new URL(".", import.meta.url))),
       strictPort: false,
-      watch: { ignored: ["**/src-tauri/**", "**/target/**"] },
+      watch: { ignored: ["**/src-tauri/**", "**/target/**", "**/.scratch/**"] },
     },
   };
 });

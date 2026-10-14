@@ -20,7 +20,11 @@ import type { PageNavigation } from "../navigation/service";
 import { createNavigationController } from "../navigation/controller";
 import { createMemoryHistory } from "../navigation/history";
 import type { ThreadSnapshot, ThreadView } from "../relay/threads";
-import type { ChannelMessage } from "../relay/contracts";
+import type {
+  ChannelList,
+  ChannelMessage,
+  ChannelSummary,
+} from "../relay/contracts";
 import { formatPublicKey } from "../../shared/identity/public-key";
 
 // Real React owns effects, refs and subscriptions. Only independent child UI is
@@ -1186,6 +1190,83 @@ it("passes the Me recipient, readiness and direct Activity contract through to t
   view.rerender(<ThreadPanel {...h.props} />);
   expect(composer).not.toHaveAttribute("data-personal");
   expect(composer).not.toHaveAttribute("data-direct-activity");
+});
+
+it.each([
+  { channelType: "stream" as const, joinable: true },
+  { channelType: "forum" as const, joinable: true },
+  { channelType: "stream" as const, archived: true as const, joinable: false },
+  { channelType: "session" as const, joinable: false },
+])(
+  "replaces the reply composer for a $channelType preview (joinable: $joinable)",
+  ({ joinable, ...metadata }) => {
+    const h = messagesHarness();
+    const channel: ChannelSummary = {
+      id: "channel",
+      name: "General",
+      readOnly: true,
+      ...metadata,
+    };
+    const list: ChannelList = { status: "ready", channels: [] };
+    Object.assign(h.session, {
+      channels: {
+        list: () => list,
+        get: () => channel,
+        subscribeList: () => () => {},
+      },
+      channelLifecycle: { available: true, run: vi.fn() },
+    });
+    h.render();
+    expect(
+      screen.getByRole("region", { name: "Channel preview" }),
+    ).toBeVisible();
+    expect(screen.queryByRole("region", { name: "Composer" })).toBeNull();
+    expect(!!screen.queryByRole("button", { name: "Join" })).toBe(joinable);
+  },
+);
+
+it("keeps a thread preview until membership arrives, with failed joins retryable", async () => {
+  const h = messagesHarness();
+  const channel: ChannelSummary = {
+    id: "channel",
+    name: "General",
+    channelType: "stream",
+    readOnly: true,
+  };
+  let list: ChannelList = { status: "ready", channels: [] };
+  const listeners = new Set<() => void>();
+  const run = vi
+    .fn()
+    .mockRejectedValueOnce(new Error("Try again."))
+    .mockResolvedValue(undefined);
+  Object.assign(h.session, {
+    channels: {
+      list: () => list,
+      get: () => channel,
+      subscribeList: (listener: () => void) => {
+        listeners.add(listener);
+        return () => listeners.delete(listener);
+      },
+    },
+    channelLifecycle: { available: true, run },
+  });
+  h.render();
+  fireEvent.click(screen.getByRole("button", { name: "Join" }));
+  expect(await screen.findByRole("alert")).toHaveTextContent("Try again.");
+  await act(async () => {
+    fireEvent.click(screen.getByRole("button", { name: "Join" }));
+  });
+  expect(run).toHaveBeenCalledTimes(2);
+  expect(screen.queryByRole("region", { name: "Composer" })).toBeNull();
+  act(() => {
+    list = {
+      status: "ready",
+      channels: [{ id: "channel", name: "General", channelType: "stream" }],
+    };
+    for (const listener of listeners) listener();
+  });
+  expect(screen.queryByRole("region", { name: "Channel preview" })).toBeNull();
+  expect(screen.getByRole("region", { name: "Composer" })).toBeVisible();
 });
 
 it("retained navigation keeps the mounted editor when another message belongs to the open thread", async () => {

@@ -317,3 +317,19 @@ it("preserves a toast action's focus destination after the toast host leaves", a
     screen.queryByRole("region", { name: "App notifications" }),
   ).toBeNull();
 });
+
+it("cancels a dismissed toast's pending removal when its host unmounts", async () => {
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+  const view = render(
+    <ToastProvider>
+      <ToastNotice title="Update ready" onDismiss={() => {}} />
+    </ToastProvider>,
+  );
+  await act(() => vi.advanceTimersByTimeAsync(1));
+  const notice = screen.getByRole("dialog", { name: "Update ready" });
+  fireEvent.keyDown(notice, { key: "Escape", code: "Escape" });
+  // Escape begins Sonner's delayed removal; tear down the host before it fires.
+  expect(vi.getTimerCount()).toBeGreaterThan(0);
+  view.unmount();
+  expect(vi.getTimerCount()).toBe(0);
+});

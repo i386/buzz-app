@@ -12,11 +12,13 @@ import {
 import userEvent from "@testing-library/user-event";
 import { afterEach, expect, test, vi } from "vitest";
 import closeRequest from "../../../src-tauri/src/close-request.js?raw";
+import switchTabRequest from "../../../src-tauri/src/switch-tab-request.js?raw";
 import { PanelWorkspace, usePanelTabTitle } from "./PanelWorkspace";
 import { PanelSubview } from "./PanelSubview";
 import { PanelDock } from "./PanelDock";
 
 afterEach(() => {
+  delete document.documentElement.dataset.keyboardNavigation;
   cleanup();
   vi.restoreAllMocks();
 });
@@ -315,7 +317,7 @@ const visibleWorkspace = () =>
     .spyOn(HTMLElement.prototype, "getClientRects")
     .mockReturnValue([{ width: 500, height: 500 }] as unknown as DOMRectList);
 
-test("native Close closes the active tab from outside the pane, commits each request, and falls back only on the next press", () => {
+test("native Close closes the active tab from outside the pane, commits each request, and reports when no tab is left", () => {
   visibleWorkspace();
   render(
     <StrictMode>
@@ -408,6 +410,88 @@ test("a consumed native Close request cannot close another workspace", () => {
   act(() => expect(requestClose()).toBe("handled"));
   expect(screen.getAllByRole("tab", { name: "Thread" })).toHaveLength(1);
   expect(screen.getAllByRole("tab", { name: "Ada" })).toHaveLength(2);
+});
+
+// The exact script the native Show Next/Previous Tab items evaluate; Windows
+// and Linux shortcuts dispatch the same events.
+const switchTab = (tabEvent: "buzz:next-tab" | "buzz:previous-tab") =>
+  new Function(
+    "window",
+    "document",
+    "Event",
+    "tabEvent",
+    `return eval(${JSON.stringify(switchTabRequest)})`,
+  )(window, document, Event, tabEvent);
+const selectedTab = () =>
+  within(tabs()).getByRole("tab", { selected: true }).textContent;
+
+test("next and previous tab requests cycle tabs, wrapping, including local details", async () => {
+  visibleWorkspace();
+  const user = userEvent.setup();
+  render(<Fixture />);
+  await user.click(tab("Ada"));
+  await user.click(screen.getByRole("button", { name: "Open log" }));
+  await user.click(tab("Thread"));
+  expect(selectedTab()).toBe("Thread");
+  expect(document.documentElement.dataset.keyboardNavigation).toBeUndefined();
+  act(() => {
+    // No async yield: a held accelerator must see the previous selection.
+    switchTab("buzz:next-tab");
+    expect(selectedTab()).toBe("Ada");
+    switchTab("buzz:next-tab");
+    expect(selectedTab()).toBe("Harness log");
+    switchTab("buzz:next-tab");
+    expect(selectedTab()).toBe("Thread");
+    switchTab("buzz:previous-tab");
+    expect(selectedTab()).toBe("Harness log");
+    switchTab("buzz:previous-tab");
+    expect(selectedTab()).toBe("Ada");
+  });
+  // Without a main-document keydown, the request itself marks keyboard
+  // navigation so the focused fallback tab shows its ring.
+  expect(document.documentElement.dataset.keyboardNavigation).toBe("");
+});
+
+test("tab switching does nothing behind a modal or with a single tab", () => {
+  visibleWorkspace();
+  const view = render(
+    <>
+      <dialog open aria-label="Dialog" />
+      <Fixture />
+    </>,
+  );
+  act(() => switchTab("buzz:next-tab"));
+  expect(tab("Thread")).toHaveAttribute("aria-selected", "true");
+  expect(document.documentElement.dataset.keyboardNavigation).toBeUndefined();
+  view.rerender(
+    <PanelWorkspace
+      value="one"
+      select={() => {}}
+      items={[{ id: "one", label: "One", content: null }]}
+    />,
+  );
+  const request = new Event("buzz:next-tab", { cancelable: true });
+  act(() => {
+    window.dispatchEvent(request);
+  });
+  expect(request.defaultPrevented).toBe(false);
+});
+
+test("a consumed tab switch request cannot switch another workspace", () => {
+  visibleWorkspace();
+  render(
+    <>
+      <Fixture />
+      <Fixture />
+    </>,
+  );
+  act(() => switchTab("buzz:next-tab"));
+  expect(
+    screen
+      .getAllByRole("tab", { name: "Thread" })
+      .map((tab) => tab.getAttribute("aria-selected"))
+      .sort(),
+  ).toEqual(["false", "true"]);
 });
 
 test("background tab selection does not take focus from a modal", () => {

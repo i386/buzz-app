@@ -105,11 +105,9 @@ test.describe("public channel preview", () => {
     await page
       .getByRole("option", { name: /crew-search exact public reply/ })
       .click();
-    await expect(
-      page.getByText(
-        "Read-only preview · You haven’t joined this conversation.",
-      ),
-    ).toBeVisible();
+    await expect(page.getByText("Join channel to send messages")).toHaveCount(
+      2,
+    );
     const thread = page.getByRole("complementary", {
       name: "Thread",
       exact: true,
@@ -141,7 +139,10 @@ test.describe("public channel preview", () => {
     await expect(dialog).toHaveCount(0);
     await expect(
       thread.getByRole("textbox", { name: "Reply to thread", exact: true }),
-    ).toHaveAttribute("aria-disabled", "true");
+    ).toHaveCount(0);
+    await expect(
+      thread.getByRole("button", { name: "Join", exact: true }),
+    ).toBeVisible();
     await expect(
       page
         .getByRole("complementary", { name: "Channel sidebar" })

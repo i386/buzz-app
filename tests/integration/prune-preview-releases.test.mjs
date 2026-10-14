@@ -53,11 +53,19 @@ function fixture(t) {
   }));
   const manifest = {
     version: "0.0.0-preview.1.1",
-    platforms: {
-      "darwin-aarch64": {
-        url: `https://github.com/${repository}/releases/download/${tag(1)}/Buzz_0.0.0-preview.1.1_aarch64.app.tar.gz`,
-      },
-    },
+    platforms: Object.fromEntries(
+      Object.entries({
+        "darwin-aarch64": "aarch64.app.tar.gz",
+        "windows-x86_64": "x64_unsigned.exe",
+        "linux-x86_64-deb": "amd64.deb",
+        "linux-x86_64-appimage": "x86_64.AppImage",
+      }).map(([target, asset]) => [
+        target,
+        {
+          url: `https://github.com/${repository}/releases/download/${tag(1)}/Buzz_0.0.0-preview.1.1_${asset}`,
+        },
+      ]),
+    ),
   };
   writeFileSync(join(directory, "clock.mjs"), `Date.now = () => ${now};\n`);
   writeFileSync(
@@ -184,13 +192,24 @@ test("unavailable or invalid feed/listing aborts before any deletion", (t) => {
     {
       manifest: {
         ...manifest,
-        platforms: { ...manifest.platforms, "windows-x86_64": {} },
+        platforms: { ...manifest.platforms, "linux-aarch64": {} },
       },
     },
     {
       manifest: {
         ...manifest,
-        platforms: { "darwin-aarch64": { url: "https://example.com/archive" } },
+        platforms: {
+          ...manifest.platforms,
+          "linux-x86_64-deb": { url: "https://example.com/archive" },
+        },
+      },
+    },
+    {
+      manifest: {
+        ...manifest,
+        platforms: {
+          "darwin-aarch64": manifest.platforms["darwin-aarch64"],
+        },
       },
     },
     { pages: [[...releases, { ...releases[2], published_at: null }]] },

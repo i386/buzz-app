@@ -1,16 +1,21 @@
-//! Cmd+W is a menu action, not a window-close request: the red button must
-//! continue closing the window even when a tab is open.
+//! Cmd+W is a menu action that only ever closes a tab, never the window: with
+//! no tab to close it does nothing. The red button still closes the window.
+//! Ctrl+Tab and Ctrl+Shift+Tab switch tabs from the same menu, so they also
+//! work while a raw guest webview (the browser panel) owns keyboard focus.
 use tauri::{
-    menu::{Menu, MenuItem, PredefinedMenuItem},
+    menu::{Menu, MenuItem, PredefinedMenuItem, WINDOW_SUBMENU_ID},
     AppHandle, Manager, Runtime,
 };
 
 const CLOSE: &str = "buzz-close";
+const NEXT: &str = "buzz-next-tab";
+const PREVIOUS: &str = "buzz-previous-tab";
 const REQUEST: &str = include_str!("close-request.js");
+const SWITCH: &str = include_str!("switch-tab-request.js");
 
 pub(crate) fn menu<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<Menu<R>> {
     let menu = Menu::default(app)?;
-    let close = MenuItem::with_id(app, CLOSE, "Close", true, Some("CmdOrCtrl+W"))?;
+    let close = MenuItem::with_id(app, CLOSE, "Close Tab", true, Some("CmdOrCtrl+W"))?;
     // Tauri's default has Close Window in both File and Window. Preserve all
     // other native items (especially editing/services), replacing both routes.
     // Predefined items expose their label, but not their native action type.
@@ -30,13 +35,32 @@ pub(crate) fn menu<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<Menu<R>> {
         }
     }
     debug_assert_eq!(replaced, 2, "Tauri default Close menu structure changed");
+    if let Some(window) = menu.get(WINDOW_SUBMENU_ID) {
+        if let Some(window) = window.as_submenu() {
+            window.append_items(&[
+                &PredefinedMenuItem::separator(app)?,
+                &MenuItem::with_id(app, NEXT, "Show Next Tab", true, Some("Ctrl+Tab"))?,
+                &MenuItem::with_id(
+                    app,
+                    PREVIOUS,
+                    "Show Previous Tab",
+                    true,
+                    Some("Ctrl+Shift+Tab"),
+                )?,
+            ])?;
+        }
+    }
     Ok(menu)
 }
 
 pub(crate) fn handle<R: Runtime>(app: &AppHandle<R>, event: tauri::menu::MenuEvent) {
-    if event.id().as_ref() != CLOSE {
-        return;
-    }
+    let script = match event.id().as_ref() {
+        CLOSE => REQUEST.to_owned(),
+        // A block keeps the binding out of the page's global scope.
+        NEXT => format!("{{ const tabEvent = \"buzz:next-tab\";\n{SWITCH}}}"),
+        PREVIOUS => format!("{{ const tabEvent = \"buzz:previous-tab\";\n{SWITCH}}}"),
+        _ => return,
+    };
     let Some(window) = app.get_webview_window("main") else {
         return;
     };
@@ -49,21 +73,8 @@ pub(crate) fn handle<R: Runtime>(app: &AppHandle<R>, event: tauri::menu::MenuEve
         return;
     }
     // Evaluate only in the trusted main view, even when a raw guest webview
-    // owns keyboard focus. One synchronous decision avoids stale tab state,
-    // startup/reload subscription gaps, and timeout-driven double closes.
-    let target = window.clone();
-    if let Err(error) = window.eval_with_callback(REQUEST, move |result| {
-        // Only an explicit unhandled result permits fallback. Evaluation errors
-        // must not turn a handled tab close into a second, window-level close.
-        if result == r#""unhandled""#
-            && target.is_visible().unwrap_or(false)
-            && target.is_focused().unwrap_or(false)
-        {
-            if let Err(error) = target.close() {
-                eprintln!("Could not close Buzz window: {error}");
-            }
-        }
-    }) {
-        eprintln!("Could not request Buzz close: {error}");
+    // owns keyboard focus.
+    if let Err(error) = window.eval(script) {
+        eprintln!("Could not send Buzz tab request: {error}");
     }
 }

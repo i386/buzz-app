@@ -1,11 +1,12 @@
 // Prompts in the harness's format (buzz-acp), so a Claude agent here reads the
 // same sections and follows the same base prompt as a harness agent.
 import { npubEncode } from "nostr-tools/nip19";
-import { BUZZ_PROMPT, coreMemory } from "../../buzz-mcp/prompt";
+import { BUZZ_PROMPT, TOP_LEVEL_PROMPT } from "../../buzz-mcp/prompt";
 import type { EventData } from "../../features/relay/events";
 import type { ClassifierSkip } from "../../features/agents/service";
+import { BASE_PROMPT } from "../../features/agent-harness/base-prompt";
+import { coreMemorySection } from "../../features/agent-harness/core-memory";
 import attentionPrompt from "./attention_prompt.md?raw";
-import basePrompt from "./base_prompt.md?raw";
 import channelModel from "./session_model_channel.md?raw";
 import threadModel from "./session_model_thread.md?raw";
 
@@ -33,7 +34,7 @@ export function systemPrompt(
 ) {
   const model = input.scope === "thread" ? threadModel : channelModel;
   const base = [
-    basePrompt,
+    BASE_PROMPT,
     BUZZ_PROMPT,
     model,
     ...(input.attention ? [attentionPrompt] : []),
@@ -51,7 +52,7 @@ export function systemPrompt(
       ? section("agent-instructions", input.instructions)
       : "",
     input.team?.trim() ?? "",
-    coreMemory(input.memory),
+    coreMemorySection(input.memory),
   ]
     .filter(Boolean)
     .join("\n\n");
@@ -69,6 +70,8 @@ export type TurnInput = Readonly<{
   event: EventData;
   channel: Channel;
   scope: Scope;
+  /** An owner's Me chat: one channel conversation, posted at its top level. */
+  topLevel?: boolean;
   /** The thread the event belongs to, absent for a top-level message. */
   thread?: Readonly<{ rootId: string; parentId: string }>;
   /** Earlier messages of the conversation the session has not been shown. */
@@ -97,18 +100,22 @@ export function turnPrompt(input: TurnInput) {
   // thread a reply is for, so it names the thread itself.
   const root = thread?.rootId ?? event.id;
   const shared = channel.dm || input.scope === "channel";
-  const reply = shared
-    ? `IMPORTANT: For ordinary replies in this turn, pass \`reply: "${root}"\` to \`send\` so the conversation stays threaded. Do NOT reply into any other (older) thread. If the human explicitly asks for a channel-root, top-level, or broadcast post, leave out \`reply\`.`
-    : thread
-      ? "IMPORTANT: `send` replies in this thread by default, so the conversation stays threaded. If the human explicitly asks for a channel-root, top-level, or broadcast post, pass `channel`. If the requested destination is ambiguous, ask before sending."
-      : "IMPORTANT: This is a new top-level message. `send` replies in its thread by default — the triggering message is the thread root. Do NOT reply into any other (older) thread. If the human explicitly asks for a channel-root, top-level, or broadcast post, pass `channel`.";
-  const fetch = shared
-    ? thread
-      ? `Use \`read\` with \`thread: "${root}"\` for full history if truncated.`
-      : "Use `read` for recent messages if needed."
-    : thread
-      ? "Use `read` for full history if truncated."
-      : "Use `read` with `channel` for recent messages if needed.";
+  const reply = input.topLevel
+    ? `IMPORTANT: ${TOP_LEVEL_PROMPT}`
+    : shared
+      ? `IMPORTANT: For ordinary replies in this turn, pass \`reply: "${root}"\` to \`send\` so the conversation stays threaded. Do NOT reply into any other (older) thread. If the human explicitly asks for a channel-root, top-level, or broadcast post, leave out \`reply\`.`
+      : thread
+        ? "IMPORTANT: `send` replies in this thread by default, so the conversation stays threaded. If the human explicitly asks for a channel-root, top-level, or broadcast post, pass `channel`. If the requested destination is ambiguous, ask before sending."
+        : "IMPORTANT: This is a new top-level message. `send` replies in its thread by default — the triggering message is the thread root. Do NOT reply into any other (older) thread. If the human explicitly asks for a channel-root, top-level, or broadcast post, pass `channel`.";
+  const fetch = input.topLevel
+    ? "Use `read` for recent messages if needed."
+    : shared
+      ? thread
+        ? `Use \`read\` with \`thread: "${root}"\` for full history if truncated.`
+        : "Use `read` for recent messages if needed."
+      : thread
+        ? "Use `read` for full history if truncated."
+        : "Use `read` with `channel` for recent messages if needed.";
   const context = input.context.slice(-CONTEXT_LIMIT);
   const hint = context.length
     ? `Thread context included below. ${fetch}`
@@ -121,7 +128,7 @@ export function turnPrompt(input: TurnInput) {
         "Session scope: dm conversation",
         `Channel: ${channelLabel}`,
       ]
-    : thread || input.scope === "thread"
+    : !input.topLevel && (thread || input.scope === "thread")
       ? [
           "Scope: thread",
           `Session scope: ${input.scope}`,
@@ -145,7 +152,9 @@ export function turnPrompt(input: TurnInput) {
   if (context.length)
     parts.push(
       section(
-        channel.dm && !thread ? "conversation-context" : "thread-context",
+        (channel.dm && !thread) || input.topLevel
+          ? "conversation-context"
+          : "thread-context",
         context
           .map(
             (message, index) =>

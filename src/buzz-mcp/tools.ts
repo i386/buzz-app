@@ -116,6 +116,10 @@ const HANDLERS: Readonly<Record<string, Handler>> = {
         : undefined) ??
       context.channel;
     if (!channel) throw new Error("channel is required here.");
+    if (reply && context.topLevel && channel === context.channel)
+      throw new Error(
+        "This chat stays at the top level: send again without reply.",
+      );
     if (args.audience !== "everyone" && args.audience !== "agents")
       throw new Error("audience must be everyone or agents.");
     const files = await tools.attach(list(args.files));

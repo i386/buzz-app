@@ -209,6 +209,9 @@ export function EditableInput({
     disabled,
     placeholder,
   };
+  const tokenClassName = styles.token ?? "";
+  const tokenClass = useRef(tokenClassName);
+  tokenClass.current = tokenClassName;
   const hosts = useRef(
     new Map<
       HTMLElement,
@@ -1197,7 +1200,7 @@ export function EditableInput({
         nodeViews: {
           token(node, _view, getPos) {
             const dom = document.createElement("span");
-            dom.className = styles.token ?? "";
+            dom.className = tokenClass.current;
             dom.contentEditable = "false";
             dom.dataset.source = node.attrs.source;
             hosts.current.set(dom, {
@@ -1739,6 +1742,11 @@ export function EditableInput({
       );
   }, [decorationRanges]);
   useLayoutEffect(() => {
+    // Node views survive CSS-module hot updates; keep their imperative hosts
+    // on the current class just like React-owned editor elements.
+    for (const host of hosts.current.keys()) host.className = tokenClassName;
+  }, [tokenClassName]);
+  useLayoutEffect(() => {
     // Token portals acquire their real geometry at React commit, after the
     // transaction's first scroll. Keep the same editor-owned caret visible.
     if (!scrollAfterTokens.current) return;
@@ -1757,7 +1765,7 @@ export function EditableInput({
         aria-label={events["aria-label"] ?? placeholder}
         aria-disabled={disabled || undefined}
         tabIndex={disabled ? -1 : 0}
-        className={styles.input}
+        className={`ProseMirror ${styles.input ?? ""}`}
         onPointerDown={(event) => {
           pointing.current = true;
           events.onPointerDown?.(event as never);

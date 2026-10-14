@@ -3192,6 +3192,24 @@ it("keeps custom emoji text readable and sends repeated shortcodes unchanged", (
   );
 });
 
+it.each([
+  ["  :party: \n\t :party:  ", true],
+  [":party:".repeat(24), true],
+  [Array(24).fill(":party:").join(" ") + " 😀", false],
+])(
+  "classifies images-only emoji drafts without changing their text: %s",
+  (draft, imagesOnly) => {
+    const h = mount();
+    h.setEmoji([{ shortcode: "party", url: "https://emoji.test/party.png" }]);
+    h.fill(draft);
+    expect(h.input()).toHaveValue(draft);
+    expect(h.input()).toHaveAttribute("data-single-emoji", "true");
+    if (imagesOnly)
+      expect(h.input()).toHaveAttribute("data-emoji-images-only", "true");
+    else expect(h.input()).not.toHaveAttribute("data-emoji-images-only");
+  },
+);
+
 it("renders a leading custom emoji inline without changing trailing text", () => {
   const h = mount();
   h.setEmoji([{ shortcode: "bufo", url: "https://emoji.test/bufo.png" }]);

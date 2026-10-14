@@ -9,12 +9,21 @@ const {
   GITHUB_RUN_NUMBER: run,
   GITHUB_RUN_ATTEMPT: attempt,
   RUNNER_TEMP: temp,
+  BUZZ_UPDATER_PUBLIC_KEY: pubkey,
+  BUZZ_UPDATER_ENDPOINT: endpoint,
 } = process.env;
 assert.match(run ?? "", /^[1-9]\d*$/);
 assert.match(attempt ?? "", /^[1-9]\d*$/);
 const version = `${base}-preview.${run}.${attempt}`;
 writeFileSync(
   join(temp, "candidate.json"),
-  JSON.stringify({ version, bundle: { createUpdaterArtifacts: false } }),
+  JSON.stringify({
+    version,
+    bundle: { createUpdaterArtifacts: false },
+    // Matches build.rs: the updater is registered only when both are set.
+    ...(pubkey && endpoint
+      ? { plugins: { updater: { pubkey, endpoints: [endpoint] } } }
+      : {}),
+  }),
 );
 appendFileSync(process.env.GITHUB_ENV, `VERSION=${version}\n`);

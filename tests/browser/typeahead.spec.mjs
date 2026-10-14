@@ -594,6 +594,41 @@ test("emoji completion starts at the first ranked result when Unicode joins comm
   }
 });
 
+test("custom emoji completion keeps the large preview and caret on one line", async ({
+  page,
+}, testInfo) => {
+  await page.route("**/emoji-media/**", (route) =>
+    route.fulfill({
+      contentType: "image/svg+xml",
+      body: '<svg xmlns="http://www.w3.org/2000/svg" width="42" height="42"><circle cx="21" cy="21" r="20" fill="purple"/></svg>',
+    }),
+  );
+  await page.goto("/tests/fixtures/emoji.html");
+  const input = page.getByRole("textbox", { name: "Message #general" });
+  for (const method of ["click", "Enter", "Tab", ":"]) {
+    await input.fill("");
+    await input.pressSequentially(":party");
+    const option = page.getByRole("option", { name: ":party:", exact: true });
+    await expect(option).toBeVisible();
+    if (method === "click") await option.click();
+    else await input.press(method === ":" ? "Shift+Semicolon" : method);
+    await expect(input).toHaveJSProperty("value", ":party:");
+    await expect(input.locator("img[data-copy-emoji]")).toHaveCSS(
+      "width",
+      "42px",
+    );
+    await expect(input.locator(":scope > p")).toHaveCount(1);
+    await input.screenshot({
+      path: testInfo.outputPath(
+        `custom-completion-${method === ":" ? "colon" : method}.png`,
+      ),
+      caret: "initial",
+    });
+    await input.pressSequentially("x");
+    await expect(input).toHaveJSProperty("value", ":party:x");
+  }
+});
+
 test("current custom catalog drives typeahead and signed tags across community replacement", async ({
   page,
 }, testInfo) => {

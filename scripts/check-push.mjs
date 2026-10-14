@@ -55,9 +55,9 @@ if (base.status === 0) {
       .filter(Boolean);
   const files = changed();
   const source =
-    /^(?:(?:src|browser-host)\/.*\.(?:[cm]?[jt]sx?)|scripts\/(?:developer-settings(?:\.test)?\.(?:ts|mjs)|live-setup-probe(?:\.test)?\.mjs))$/s;
+    /^(?:vite\.config\.ts|(?:src|browser-host)\/.*\.(?:[cm]?[jt]sx?)|scripts\/(?:developer-settings(?:\.test)?\.(?:ts|mjs)|live-setup-probe(?:\.test)?\.mjs))$/s;
   const shared =
-    /^(?:package\.json|pnpm-lock\.yaml|(?:vitest|vite)\.config\.[cm]?[jt]s|tsconfig[^/]*\.json|tests\/relay-config\.ts|bin\/)/;
+    /^(?:package\.json|pnpm-lock\.yaml|vitest\.config\.[cm]?[jt]s|tsconfig[^/]*\.json|tests\/relay-config\.ts|bin\/)/;
   const rust =
     /^(?:crates\/|src-tauri\/|bin\/|rust-toolchain[^/]*|Cargo\.(?:toml|lock)|clippy\.toml)/;
   if (clippy) {
@@ -87,6 +87,8 @@ if (base.status === 0) {
     related.add("src/shared/theme/tokens.test.ts");
   if (files.includes("public/appearance-init.js"))
     related.add("src/shared/theme/service.test.ts");
+  if (files.includes("vite.config.ts"))
+    related.add("browser-host/vite-config.test.mjs");
   if (files.some((file) => file.startsWith("src/")))
     related.add("src/app/pages.integration.test.mjs");
   if (!design && !clippy && !full && !related.size) {

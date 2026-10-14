@@ -61,7 +61,7 @@ test("channel settings owns its responsive side panel and returns keyboard focus
   });
   await expect(settingsTab).toHaveClass(/navigation-item/);
   await expect(settingsTab).toHaveAttribute("aria-selected", "true");
-  await conversation
+  await workspace
     .getByRole("button", { name: "Toggle tab pane", exact: true })
     .click();
   await expect(workspace).toBeHidden();

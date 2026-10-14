@@ -2,7 +2,7 @@ import { readFile } from "node:fs/promises";
 import { DatabaseSync } from "node:sqlite";
 import { openChannelDetails } from "./channel-details.mjs";
 import { test, expect } from "./fixture.mjs";
-import { open, settle } from "./timeline.mjs";
+import { open, settle, wheel } from "./timeline.mjs";
 import { npubEncode } from "nostr-tools/nip19";
 import { finalizeEvent, generateSecretKey, getPublicKey } from "nostr-tools";
 test.use({
@@ -239,6 +239,11 @@ test("channel activity consumes telemetry, isolates mixed batches, selects agent
   await trigger.focus();
   await page.keyboard.press("Enter");
   await expect(popup).toBeVisible();
+  // Keyboard opening focuses the first row a frame later. Rows can be in either
+  // order, so wait for that focus, then Tab to this agent's icon.
+  await expect(
+    popup.getByRole("button", { name: /^Open conversation for / }).first(),
+  ).toBeFocused();
   const firstAction = agentActivityAction(popup, first);
   for (let step = 0; step < 3 && !(await isFocused(firstAction)); step++)
     await page.keyboard.press("Tab");
@@ -400,120 +405,143 @@ test("channel activity consumes telemetry, isolates mixed batches, selects agent
   await expect(trigger).toHaveCount(0);
 });
 
+// Enough history for real scrolling to expose Jump alongside the activity pill.
+const layoutTest = test.extend({ historyCounts: { alpha: 30, beta: 1 } });
 for (const mode of ["light", "dark"]) {
-  test(`channel activity control and raw disclosure fit wide and narrow layouts in ${mode}`, async ({
-    page,
-    app,
-  }, testInfo) => {
-    await page.addInitScript((mode) => {
-      localStorage.setItem("buzz-appearance.v1", mode);
-    }, mode);
-    await open(page, app);
-    await expect
-      .poll(() => app.relay.hasRoute("primary", "observer"))
-      .toBe(true);
-    const agentKey = generateSecretKey();
-    const agent = getPublicKey(agentKey);
-    const secondKey = generateSecretKey();
-    app.observer(
-      activity("turn_liveness", "alpha", "second-layout"),
-      secondKey,
-    );
-    app.observer(
-      activity("acp_read", "alpha", "layout", {
-        text: "A long literal raw record. ".repeat(40),
-      }),
-      agentKey,
-    );
-    const composer = channelComposer(page);
-    const trigger = activityTrigger(composer);
-    const popup = workingNow(page);
-    await expect(trigger).toHaveAccessibleName("Activity: 2 agents working");
-    for (const width of [1280, 390]) {
-      await page.setViewportSize({ width, height: 844 });
-      // The shell applies its media-query change in React. Wait for that commit
-      // before measuring; otherwise these reads can straddle sidebar collapse.
-      await expect(page.locator("[data-shell-sidebar-toggle]")).toHaveAttribute(
-        "aria-label",
-        width <= 650 ? "Show navigation" : "Hide Channel sidebar",
-      );
-      await expect(trigger).toBeVisible();
-      const triggerBox = await trigger.boundingBox();
-      const formBox = await page
-        .getByRole("form", { name: "Send a message to Alpha", exact: true })
-        .boundingBox();
-      // Floats in its own lane above the composer, at the composer's end edge.
-      expect(triggerBox.y + triggerBox.height).toBeLessThanOrEqual(formBox.y);
-      expect(triggerBox.x).toBeGreaterThanOrEqual(formBox.x);
-      expect(triggerBox.x + triggerBox.width).toBeCloseTo(
-        formBox.x + formBox.width,
-        0,
-      );
-      const avatar = trigger.locator(".buzz-avatar").first();
-      // Production CSS must retain a loadable SVG mask after bundling. A valid
-      // mask-image string alone can still point to the HTML fallback route.
+  layoutTest(
+    `channel activity control and raw disclosure fit wide and narrow layouts in ${mode}`,
+    async ({ page, app }, testInfo) => {
+      await page.addInitScript((mode) => {
+        localStorage.setItem("buzz-appearance.v1", mode);
+      }, mode);
+      await open(page, app);
       await expect
-        .poll(() =>
-          avatar.evaluate(async (element) => {
-            const mask = getComputedStyle(element).maskImage;
-            const image = new Image();
-            image.src = mask.slice(4, -1).replace(/^["']|["']$/g, "");
-            try {
-              await image.decode();
-              return image.naturalWidth > 0;
-            } catch {
-              return false;
-            }
-          }),
-        )
+        .poll(() => app.relay.hasRoute("primary", "observer"))
         .toBe(true);
-      await expect(page.locator("html")).toHaveAttribute(
-        "data-color-mode",
-        mode,
+      const agentKey = generateSecretKey();
+      const agent = getPublicKey(agentKey);
+      const secondKey = generateSecretKey();
+      app.observer(
+        activity("turn_liveness", "alpha", "second-layout"),
+        secondKey,
       );
-      expect(
-        await page.evaluate(() => document.documentElement.scrollWidth),
-      ).toBe(width);
-      // Escape suppresses hover until the pointer leaves the trigger. A viewport
-      // resize can keep WebKit's pointer over it, so make the next entry explicit.
-      await page.mouse.move(0, 0);
-      await openWorkingNow(page, composer);
-      await expect(agentRow(popup, agent)).toBeVisible();
-      await expect(popup).not.toHaveAttribute("data-starting-style", "");
-      const popupBox = await popup.boundingBox();
-      expect(popupBox.x).toBeGreaterThanOrEqual(0);
-      expect(popupBox.x + popupBox.width).toBeLessThanOrEqual(width);
-      expect(popupBox.y + popupBox.height).toBeLessThanOrEqual(triggerBox.y);
-      expect(
-        await page.evaluate(() => document.documentElement.scrollWidth),
-      ).toBe(width);
-      await page.screenshot({
-        path: testInfo.outputPath(`activity-entry-${mode}-${width}.png`),
-      });
-      await page.keyboard.press("Escape");
-      // Escape starts Base UI's asynchronous unmount. The closing portal still
-      // has its wide-screen position and can overflow the next narrow viewport.
-      await expect(
-        page.getByRole("dialog", { name: "Working now", includeHidden: true }),
-      ).toHaveCount(0);
-    }
+      app.observer(
+        activity("acp_read", "alpha", "layout", {
+          text: "A long literal raw record. ".repeat(40),
+        }),
+        agentKey,
+      );
+      const composer = channelComposer(page);
+      const trigger = activityTrigger(composer);
+      const popup = workingNow(page);
+      await expect(trigger).toHaveAccessibleName("Activity: 2 agents working");
+      for (const width of [1280, 390]) {
+        await page.setViewportSize({ width, height: 844 });
+        // The shell applies its media-query change in React. Wait for that commit
+        // before measuring; otherwise these reads can straddle sidebar collapse.
+        await expect(
+          page.locator("[data-shell-sidebar-toggle]"),
+        ).toHaveAttribute(
+          "aria-label",
+          width <= 650 ? "Show navigation" : "Hide Channel sidebar",
+        );
+        await expect(trigger).toBeVisible();
+        // Real scrolling and floating-control geometry cannot be proven in jsdom.
+        // The recovery wrapper must preserve the activity lane for channel history.
+        const history = page.getByRole("region", {
+          name: "Channel message history",
+        });
+        await history.hover();
+        await wheel(page, -500, history);
+        const jump = history.getByRole("button", { name: "Jump to latest" });
+        await expect(jump).toBeVisible();
+        await expect
+          .poll(async () => {
+            const jumpBox = await jump.boundingBox();
+            const activityBox = await trigger.boundingBox();
+            return jumpBox.y + jumpBox.height <= activityBox.y;
+          })
+          .toBe(true);
+        const triggerBox = await trigger.boundingBox();
+        const formBox = await page
+          .getByRole("form", { name: "Send a message to Alpha", exact: true })
+          .boundingBox();
+        // Floats in its own lane above the composer, at the composer's end edge.
+        expect(triggerBox.y + triggerBox.height).toBeLessThanOrEqual(formBox.y);
+        expect(triggerBox.x).toBeGreaterThanOrEqual(formBox.x);
+        expect(triggerBox.x + triggerBox.width).toBeCloseTo(
+          formBox.x + formBox.width,
+          0,
+        );
+        const avatar = trigger.locator(".buzz-avatar").first();
+        // Production CSS must retain a loadable SVG mask after bundling. A valid
+        // mask-image string alone can still point to the HTML fallback route.
+        await expect
+          .poll(() =>
+            avatar.evaluate(async (element) => {
+              const mask = getComputedStyle(element).maskImage;
+              const image = new Image();
+              image.src = mask.slice(4, -1).replace(/^["']|["']$/g, "");
+              try {
+                await image.decode();
+                return image.naturalWidth > 0;
+              } catch {
+                return false;
+              }
+            }),
+          )
+          .toBe(true);
+        await expect(page.locator("html")).toHaveAttribute(
+          "data-color-mode",
+          mode,
+        );
+        expect(
+          await page.evaluate(() => document.documentElement.scrollWidth),
+        ).toBe(width);
+        // Escape suppresses hover until the pointer leaves the trigger. A viewport
+        // resize can keep WebKit's pointer over it, so make the next entry explicit.
+        await page.mouse.move(0, 0);
+        await openWorkingNow(page, composer);
+        await expect(agentRow(popup, agent)).toBeVisible();
+        await expect(popup).not.toHaveAttribute("data-starting-style", "");
+        const popupBox = await popup.boundingBox();
+        expect(popupBox.x).toBeGreaterThanOrEqual(0);
+        expect(popupBox.x + popupBox.width).toBeLessThanOrEqual(width);
+        expect(popupBox.y + popupBox.height).toBeLessThanOrEqual(triggerBox.y);
+        expect(
+          await page.evaluate(() => document.documentElement.scrollWidth),
+        ).toBe(width);
+        await page.screenshot({
+          path: testInfo.outputPath(`activity-entry-${mode}-${width}.png`),
+        });
+        await page.keyboard.press("Escape");
+        // Escape starts Base UI's asynchronous unmount. The closing portal still
+        // has its wide-screen position and can overflow the next narrow viewport.
+        await expect(
+          page.getByRole("dialog", {
+            name: "Working now",
+            includeHidden: true,
+          }),
+        ).toHaveCount(0);
+      }
 
-    await page.mouse.move(0, 0);
-    await viewAgentActivity(page, composer, agent);
-    const panel = activityPanel(page);
-    await showRaw(panel);
-    await panel.getByRole("button", { name: /acp_read/ }).click();
-    for (const width of [1280, 390]) {
-      await page.setViewportSize({ width, height: 844 });
-      await expect(panel.locator("pre code")).toBeVisible();
-      expect(
-        await page.evaluate(() => document.documentElement.scrollWidth),
-      ).toBe(width);
-      await page.screenshot({
-        path: testInfo.outputPath(`activity-${mode}-${width}.png`),
-      });
-    }
-  });
+      await page.mouse.move(0, 0);
+      await viewAgentActivity(page, composer, agent);
+      const panel = activityPanel(page);
+      await showRaw(panel);
+      await panel.getByRole("button", { name: /acp_read/ }).click();
+      for (const width of [1280, 390]) {
+        await page.setViewportSize({ width, height: 844 });
+        await expect(panel.locator("pre code")).toBeVisible();
+        expect(
+          await page.evaluate(() => document.documentElement.scrollWidth),
+        ).toBe(width);
+        await page.screenshot({
+          path: testInfo.outputPath(`activity-${mode}-${width}.png`),
+        });
+      }
+    },
+  );
 }
 
 const profileChannelId = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
@@ -1006,11 +1034,9 @@ test.describe("thread activity", () => {
     await page.keyboard.press("Enter");
     await expect(popup).toBeVisible();
     await expect(agentRow(popup, agent)).toBeVisible();
-    // WebKit focuses the first row on open; Chromium leaves it one Tab away.
-    const keyboardRow = agentRow(popup, agent);
-    for (let step = 0; step < 2 && !(await isFocused(keyboardRow)); step++)
-      await page.keyboard.press("Tab");
-    await expect(keyboardRow).toBeFocused();
+    // Keyboard opening focuses the first row a frame later. Tabbing before then
+    // can skip past it and leave the non-modal popup, which closes it.
+    await expect(agentRow(popup, agent)).toBeFocused();
     await page.keyboard.press("Enter");
     await expect(popup).toHaveCount(0);
     await expect(

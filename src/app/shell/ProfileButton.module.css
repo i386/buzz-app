@@ -84,10 +84,10 @@
 
 /* biome-ignore lint/correctness/noUnknownPseudoClass: CSS Modules scopes the profile menu without changing shared menus. */
 :global(.buzz-menu-popup[data-profile-menu]) {
-  --floating-inset: var(--space-3);
+  --floating-inset: var(--space-2);
   --interaction-row-hover: var(--affordance-subtle-hover);
   width: 18rem;
-  padding: var(--space-3);
+  padding: var(--space-2);
 }
 /* biome-ignore lint/correctness/noUnknownPseudoClass: Direct profile actions match the compact sidenav rows. */
 :global(.buzz-menu-popup[data-profile-menu] > .buzz-menu-item) {

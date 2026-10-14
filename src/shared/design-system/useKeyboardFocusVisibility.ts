@@ -27,7 +27,8 @@ export function useKeyboardFocusVisibility() {
       if (
         KEYBOARD_NAVIGATION_KEYS.has(event.key) &&
         !event.metaKey &&
-        !event.ctrlKey &&
+        // Alt+Tab and Ctrl+Tab move focus between windows and tabs.
+        (!event.ctrlKey || event.key === "Tab") &&
         (!event.altKey || event.key === "Tab")
       ) {
         root.dataset.keyboardNavigation = "";

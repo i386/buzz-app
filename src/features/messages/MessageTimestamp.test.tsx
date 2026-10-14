@@ -141,6 +141,13 @@ it.each([
     expect(container.querySelector(`[data-day="${day}"]`)).toHaveTextContent(
       new RegExp(`^${label}$`),
     );
+    expect(container.querySelector("svg")).toHaveAttribute(
+      "aria-hidden",
+      "true",
+    );
+    expect(container.querySelector("svg text")).toHaveTextContent(
+      new RegExp(`^${date.getDate()}$`),
+    );
   },
 );
 
@@ -160,20 +167,22 @@ function renderQuietRow() {
   const { container } = render(<QuietRow createdAt={createdAt} />);
   const divider = () => container.querySelector("[data-day]");
   const byline = () => container.querySelector('time [aria-hidden="true"]');
+  const calendar = () => container.querySelector("svg text");
   expect(divider()).toHaveTextContent(/^Today$/);
   expect(byline()).toHaveTextContent(/^9:05 AM$/);
-  return { divider, byline };
+  return { divider, byline, calendar };
 }
 
 it("relabels a mounted quiet row at local midnight", () => {
-  const { divider, byline } = renderQuietRow();
+  const { divider, byline, calendar } = renderQuietRow();
   act(() => vi.advanceTimersByTime(60_000));
   expect(divider()).toHaveTextContent(/^Yesterday$/);
+  expect(calendar()).toHaveTextContent(/^24$/);
   expect(byline()).toHaveTextContent(/^Yesterday at 9:05 AM$/);
 });
 
 it("relabels a mounted quiet row when the window wakes after midnight", () => {
-  const { divider, byline } = renderQuietRow();
+  const { divider, byline, calendar } = renderQuietRow();
   // Sleep: the clock moves on but the midnight timer has not fired yet.
   vi.setSystemTime(new Date(2026, 8, 26, 8));
   expect(divider()).toHaveTextContent(/^Today$/);
@@ -181,5 +190,6 @@ it("relabels a mounted quiet row when the window wakes after midnight", () => {
     document.dispatchEvent(new Event("visibilitychange"));
   });
   expect(divider()).toHaveTextContent(/^Thursday$/);
+  expect(calendar()).toHaveTextContent(/^24$/);
   expect(byline()).toHaveTextContent(/^Thursday at 9:05 AM$/);
 });

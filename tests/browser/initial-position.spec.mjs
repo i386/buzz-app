@@ -11,6 +11,17 @@ const short = test.extend({ historyCounts: { alpha: 20, beta: 1 } });
 const history = (page) =>
   page.getByRole("region", { name: "Channel message history" });
 async function bottom(page, app, label) {
+  // Quiet geometry can precede Virtua's deferred initial positioning. Observe
+  // that positioning first, then verify it remains settled without user input.
+  await expect
+    .poll(
+      () =>
+        history(page).evaluate(
+          (e) => e.scrollHeight - e.clientHeight - e.scrollTop,
+        ),
+      { message: label },
+    )
+    .toBeLessThan(4);
   await settle(page);
   const metrics = await history(page).evaluate((e) => ({
     top: e.scrollTop,

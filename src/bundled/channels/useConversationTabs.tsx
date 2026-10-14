@@ -101,6 +101,14 @@ export function useConversationTabs({
   );
   const canOpenLink = (target: string) => !!panels.resolve(target);
   const splitTrigger = useRef<HTMLButtonElement>(null);
+  const focusSplit = useRef(false);
+  // The opening control remounts in the main header when the pane closes.
+  useLayoutEffect(() => {
+    if (focusSplit.current && splitTrigger.current) {
+      splitTrigger.current.focus({ preventScroll: true });
+      focusSplit.current = false;
+    }
+  });
   const panelTrigger = useRef<HTMLElement | null>(null);
   const mounted = useRef(false);
   const visit = useMemo(() => ({ queries, currentId }), [queries, currentId]);
@@ -286,13 +294,11 @@ export function useConversationTabs({
     const index = rootTabIds.indexOf(id);
     const remaining = rootTabIds.filter((tab) => tab !== id);
     selectPanelTab(remaining[Math.min(index, remaining.length - 1)] ?? "");
-    if (!remaining.length)
-      (trigger?.isConnected
-        ? trigger
-        : (fallbackFocus?.current ?? splitTrigger.current)
-      )?.focus({
-        preventScroll: true,
-      });
+    if (!remaining.length) {
+      const target = trigger?.isConnected ? trigger : fallbackFocus?.current;
+      if (target) target.focus({ preventScroll: true });
+      else focusSplit.current = true;
+    }
   };
   const closeConversationTab = (id: string) => {
     const closing = tabState.tabs.find((tab) => tab.id === id);
@@ -317,8 +323,7 @@ export function useConversationTabs({
       return;
     }
     afterClose(id);
-    if (rootTabIds.length === 1)
-      splitTrigger.current?.focus({ preventScroll: true });
+    if (rootTabIds.length === 1) focusSplit.current = true;
     notify();
   };
   const [announcement, setAnnouncement] = useState("");
@@ -540,6 +545,11 @@ export function useConversationTabs({
     selectOpening,
     selectPanelTab,
     afterClose,
+    closePane: () => {
+      if (!currentVisit()) return;
+      focusSplit.current = true;
+      tabState.setPaneOpen(false);
+    },
     closeTab,
     selectedTab,
     drawer,

@@ -233,3 +233,9 @@ html[data-keyboard-input] :is(.subviewBase, .subview) {
   min-height: 0;
   overflow: auto;
 }
+
+.paneToggle {
+  display: flex;
+  border-inline-start: 1px solid var(--border-standard);
+  padding-inline-start: var(--space-2);
+}

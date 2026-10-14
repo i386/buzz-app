@@ -157,21 +157,26 @@ export function PanelWorkspace({
       .map((tab) => ({ ...tab, icon: <TerminalWindowIcon size="1rem" /> })),
   ]);
   const active = tabs.find((tab) => tab.id === selected);
+  const choose = (id: string) => {
+    const local = owned.find((tab) => tab.id === id);
+    setLocalSelection(local?.id);
+    select(local?.owner ?? id);
+  };
   useLayoutEffect(() => {
-    const close = (event: Event) => {
+    // With two tab hosts, the one containing focus owns Close and tab switching.
+    const owns = () => {
       const element = root.current;
-      if (
-        event.defaultPrevented ||
-        !active?.close ||
-        !element?.isConnected ||
-        // With two tab hosts, the one containing focus owns Close.
+      return (
+        !!element?.isConnected &&
         (document.activeElement?.closest(
           "[data-panel-workspace], [data-main-workspace]",
-        ) ?? (main ? null : element)) !== element ||
-        element.closest('[hidden], [inert], [aria-hidden="true"]') ||
-        !element.getClientRects().length
-      )
-        return;
+        ) ?? (main ? null : element)) === element &&
+        !element.closest('[hidden], [inert], [aria-hidden="true"]') &&
+        !!element.getClientRects().length
+      );
+    };
+    const close = (event: Event) => {
+      if (event.defaultPrevented || !active?.close || !owns()) return;
       event.preventDefault();
       // Match the X button, including local detail tabs and focus recovery.
       // Commit before another native menu request can reuse this selection.
@@ -180,8 +185,28 @@ export function PanelWorkspace({
         active.close?.();
       });
     };
+    // Ctrl+Tab and Ctrl+Shift+Tab, from the native menu or desktop shortcut.
+    const step = (delta: -1 | 1) => (event: Event) => {
+      if (event.defaultPrevented || tabs.length < 2 || !owns()) return;
+      event.preventDefault();
+      const index = tabs.findIndex((tab) => tab.id === selected);
+      const target = tabs[(index + delta + tabs.length) % tabs.length];
+      if (!target) return;
+      // Like a browser, land in the next tab's content rather than the strip.
+      focusContent.current = true;
+      // Commit before a held accelerator's next request reads the selection.
+      flushSync(() => choose(target.id));
+    };
+    const showNext = step(1);
+    const showPrevious = step(-1);
     window.addEventListener("buzz:close-active-tab", close);
-    return () => window.removeEventListener("buzz:close-active-tab", close);
+    window.addEventListener("buzz:next-tab", showNext);
+    window.addEventListener("buzz:previous-tab", showPrevious);
+    return () => {
+      window.removeEventListener("buzz:close-active-tab", close);
+      window.removeEventListener("buzz:next-tab", showNext);
+      window.removeEventListener("buzz:previous-tab", showPrevious);
+    };
   });
   const previous = useRef<string>(focusOnMount ? undefined : selected);
   const instance = items.find((item) => item.id === selected)?.instance;
@@ -289,9 +314,7 @@ export function PanelWorkspace({
             onValueChange={(id) => {
               focusContent.current = pointerTab.current;
               pointerTab.current = false;
-              const local = owned.find((tab) => tab.id === id);
-              setLocalSelection(local?.id);
-              select(local?.owner ?? id);
+              choose(id);
             }}
           />
         }

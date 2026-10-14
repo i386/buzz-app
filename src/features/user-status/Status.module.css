@@ -71,10 +71,7 @@
 }
 .choices {
   display: grid;
-  padding-block: var(--space-2);
-  border: 1px solid var(--border-standard);
-  border-radius: var(--radius-control);
-  overflow: hidden;
+  margin-inline: calc(-1 * var(--space-2));
 }
 .footer {
   display: flex;
@@ -90,15 +87,6 @@
 }
 .section > :is(button, [data-buzz-ui]) {
   width: 100%;
-}
-.choices > * {
-  width: 100%;
-  justify-content: start;
-}
-.choiceContent {
-  display: flex;
-  align-items: center;
-  gap: var(--space-3);
 }
 
 .status[data-compact] {

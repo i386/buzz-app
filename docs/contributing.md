@@ -509,8 +509,9 @@ base with `origin/main`. Documentation-only, native-only and Rust-only pushes
 skip this runner. Shared JS configuration/dependency
 changes, source deletions, or a missing base run the full Vitest suite instead.
 The selector explicitly includes theme tests for their directly read CSS/bootstrap
-inputs, and the app composition test for source edits that its Vite loader hides
-from the import graph.
+inputs, the Vite config test for `vite.config.ts` (unit tests use
+`vitest.config.ts`, so it selects only its importers), and the app composition
+test for source edits that its Vite loader hides from the import graph.
 A separate **design-system** job runs `design:typecheck` and `design:check` after
 types/unit tests. A separate **rust-clippy** job runs the pinned Clippy over the
 whole Cargo workspace with the same invocation as the `native` CI lane

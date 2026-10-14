@@ -6,11 +6,11 @@ import {
   type Delivery,
   type Models,
 } from "../../features/agents/service";
+import { meChat } from "../../features/agents/me-chat";
 import type { RelayData } from "../../features/relay/service";
-import type { RelaySession } from "../../features/relay/session";
 import type { EventData } from "../../features/relay/events";
-import type { MemoryListing } from "../../features/agents/memory";
 import { appClient } from "../../buzz-mcp/app-client";
+import { coreOf, MemoryReads } from "../../features/agent-harness/core-memory";
 import { TOOLS, callTool } from "../../buzz-mcp/tools";
 import {
   config,
@@ -53,7 +53,7 @@ type Request = {
   model?: string;
   effort?: string;
   /** Called once a final send answers this request, or one steered after it,
-   * or a steering rejection is posted in its place. */
+   * a steering rejection is posted in its place, or the turn ends normally. */
   answered: () => void;
   step?: (tool: string, target?: string) => void;
   acknowledged?: () => void;
@@ -77,8 +77,6 @@ type Active = {
   effort?: string;
   workspace: string;
   signal: AbortSignal;
-  version: number;
-  sentVersion?: number;
   /** Every request this turn has taken in, the first and each steered one. */
   requests: Request[];
   /** Latest acknowledged mention per Buzz thread; independent of session scope. */
@@ -123,22 +121,6 @@ function textOf(event: EventData, name: string) {
   if (text.startsWith(`@${name}`)) text = text.slice(name.length + 1).trim();
   return text;
 }
-async function abortable<T>(promise: Promise<T>, signal: AbortSignal) {
-  signal.throwIfAborted();
-  return new Promise<T>((resolve, reject) => {
-    const abort = () => {
-      try {
-        signal.throwIfAborted();
-      } catch (error) {
-        reject(error);
-      }
-    };
-    signal.addEventListener("abort", abort, { once: true });
-    void promise
-      .then(resolve, reject)
-      .finally(() => signal.removeEventListener("abort", abort));
-  });
-}
 
 /** Agents owns admission/identity. This plugin owns work after hand-over, and
  * uses one app-server for every agent. Each conversation is its own Codex
@@ -152,11 +134,7 @@ export class CodexRuntime {
   private listeners = new Set<() => void>();
   /** Read-only model discovery, kept per agent until its settings change. */
   private previews = new Map<string, { key: string; ready: Promise<Models> }>();
-  /** One owner-view read per session and agent; concurrent turns share it. */
-  private memoryReads = new WeakMap<
-    RelaySession,
-    Map<string, Promise<MemoryListing>>
-  >();
+  private memoryReads = new MemoryReads();
   constructor(
     private readonly spawn: Spawn,
     /** The owner's connection to each agent's own community. */
@@ -488,8 +466,18 @@ export class CodexRuntime {
     const channel = snapshot.session.channels
       .list()
       .channels.find((row) => row.id === channelId);
+    const topLevel =
+      trigger.type === "mention" &&
+      (await meChat(
+        () => this.relay(agent.pubkey),
+        agent.owner,
+        channelId,
+        delivery.signal,
+      ));
     const toolRoot =
-      channel?.channelType === "dm" ? undefined : rootOf(trigger.event);
+      channel?.channelType === "dm" || topLevel
+        ? undefined
+        : rootOf(trigger.event);
     const root = settings.scope === "channel" ? undefined : toolRoot;
     let finishActivity!: (result: WorkOutcome) => void;
     const replied = new Promise<WorkOutcome>((resolve) => {
@@ -513,6 +501,7 @@ export class CodexRuntime {
         channelId,
         name: channel?.name ?? channelId,
         ...(root ? { root } : {}),
+        ...(topLevel ? { topLevel } : {}),
       },
       interest:
         trigger.type === "watch" ? (trigger.interest?.instructions ?? "") : "",
@@ -560,10 +549,13 @@ export class CodexRuntime {
           // Steering cannot carry a model or effort, so a differing pick
           // waits for this turn and runs as the next one. Everything after
           // it queues too until the lane drains: steering would run later
-          // messages first.
+          // messages first. A turn keeps the posting policy it was admitted
+          // with, so a request under the other policy waits for it too.
           if (
             active.finished ||
             lane.queued ||
+            request.conversation.topLevel !==
+              active.reply.conversation.topLevel ||
             (request.model && request.model !== active.model) ||
             (request.effort && request.effort !== active.effort)
           ) {
@@ -588,7 +580,6 @@ export class CodexRuntime {
           });
           active.reply = request;
           active.requests.push(request);
-          active.version++;
           this.acknowledgeActivity(active, request);
         } catch (error) {
           if (entry.abort.signal.aborted) {
@@ -619,10 +610,13 @@ export class CodexRuntime {
   }
 
   /** A positive harness response transfers presentation, not execution or
-   * success. Watches have no bubble; mentions in other threads keep theirs. */
+   * success. Watches have no bubble; mentions in other threads keep theirs,
+   * and a top-level chat is one scope. */
   private acknowledgeActivity(active: Active, request: Request) {
     if (!request.step) return;
-    const scope = rootOf(request.event);
+    const scope = request.conversation.topLevel
+      ? request.conversation.channelId
+      : rootOf(request.event);
     const prior = active.activity.get(scope);
     if (prior === request) return;
     prior?.superseded?.();
@@ -676,7 +670,9 @@ export class CodexRuntime {
       content,
       tags: [
         ["h", request.conversation.channelId],
-        ["e", rootOf(request.event), "", "reply"],
+        ...(request.conversation.topLevel
+          ? []
+          : [["e", rootOf(request.event), "", "reply"]]),
         ["p", request.agent.owner],
       ],
     });
@@ -708,7 +704,6 @@ export class CodexRuntime {
     )
       throw new Error("Buzz tool arguments must be an object");
     const args = call.arguments as Record<string, unknown>;
-    const version = active.version;
     const request = active.reply;
     const answering = [...active.requests];
     const client = appClient(request.agent, {
@@ -724,7 +719,7 @@ export class CodexRuntime {
       remembered: () => {
         const snapshot = this.relay(request.agent.pubkey)?.snapshot();
         if (snapshot?.status === "ready")
-          this.memoryReads.get(snapshot.session)?.delete(request.agent.pubkey);
+          this.memoryReads.forget(snapshot.session, request.agent.pubkey);
       },
     });
     const reply = await callTool(
@@ -732,13 +727,13 @@ export class CodexRuntime {
       {
         channel: request.conversation.channelId,
         ...(request.toolRoot ? { root: request.toolRoot } : {}),
+        ...(request.conversation.topLevel ? { topLevel: true } : {}),
       },
       call.tool,
       args,
     );
     const final = call.tool === "send" && args.final === true;
     if (final) {
-      active.sentVersion = Math.max(active.sentVersion ?? -1, version);
       for (const taken of answering) taken.answered();
     }
     return {
@@ -760,24 +755,11 @@ export class CodexRuntime {
     if (snapshot?.status !== "ready" || snapshot.scope !== request.scope)
       throw new Error("Buzz is not connected to this community");
     const { session } = snapshot;
-    let reads = this.memoryReads.get(session);
-    if (!reads) {
-      reads = new Map();
-      this.memoryReads.set(session, reads);
-    }
-    let read = reads.get(request.agent.pubkey);
-    if (!read) {
-      read = session.agentMemories.read(
-        request.agent.pubkey,
-        AbortSignal.timeout(10000),
-      );
-      reads.set(request.agent.pubkey, read);
-      void read.then(
-        () => reads?.delete(request.agent.pubkey),
-        () => reads?.delete(request.agent.pubkey),
-      );
-    }
-    const listing = await abortable(read, signal);
+    const listing = await this.memoryReads.read(
+      session,
+      request.agent.pubkey,
+      signal,
+    );
     signal.throwIfAborted();
     const current = this.relay(request.agent.pubkey)?.snapshot();
     if (
@@ -792,11 +774,7 @@ export class CodexRuntime {
    * or undefined when it could not be read, so the turn goes on without it. */
   private async core(request: Request, signal: AbortSignal) {
     try {
-      const listing = await this.memories(request, signal);
-      return (
-        listing.entries.find((entry) => entry.slug === "core")?.body ??
-        (listing.partial ? undefined : null)
-      );
+      return coreOf(await this.memories(request, signal));
     } catch (error) {
       signal.throwIfAborted();
       console.warn("Codex could not read the agent's memory", error);
@@ -865,7 +843,6 @@ export class CodexRuntime {
       finished: false,
       workspace: request.settings.workspace,
       signal,
-      version: 0,
       requests: [request],
       activity: new Map(),
     };
@@ -1068,11 +1045,8 @@ export class CodexRuntime {
         );
         this.status(agent.pubkey, key, "Interrupted");
       } else {
-        if (active.sentVersion !== active.version)
-          await this.publish(
-            active.reply,
-            "Codex ended this turn without a final reply through buzz.send. Send another mention to ask it to continue.",
-          );
+        // A turn may end without a reply when there is nothing new to say.
+        for (const taken of active.requests) taken.answered();
         this.status(agent.pubkey, key, "Idle");
       }
     } catch (error) {

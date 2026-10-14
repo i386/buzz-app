@@ -1,5 +1,5 @@
-// Evaluated only in the trusted main webview by the macOS Close menu.
-// Return a JSON-serialized status to the native callback.
+// Evaluated only in the trusted main webview by the macOS Close Tab menu.
+// The status is informational: the window never closes when unhandled.
 (() => {
   if (document.querySelector('dialog[open], [aria-modal="true"]'))
     return "handled";

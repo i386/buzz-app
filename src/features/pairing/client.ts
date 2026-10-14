@@ -12,7 +12,7 @@ export type PairingStatus =
         | "complete"
         | "cancelled";
     }
-  | { phase: "qr"; svg: string }
+  | { phase: "qr"; svg: string; uri: string }
   | { phase: "code"; code: string; codeEntry: boolean }
   | { phase: "error"; message: string };
 export type PairingNative = {

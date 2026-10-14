@@ -2,6 +2,7 @@
 
 /* Reusable conversation components; plugins own placement and surrounding layout. */
 .thread {
+  position: relative;
   container-type: inline-size;
   container-name: messages;
   min-width: 0;
@@ -54,7 +55,7 @@
 /* Part of the final measured item, so end alignment includes breathing room.
    The spacer scrolls away with history instead of shortening its viewport. */
 .timelineEnd {
-  height: var(--space-3);
+  height: calc(var(--space-3) + var(--channel-preview-inset, 0px));
 }
 .feed ol {
   list-style: none;
@@ -63,7 +64,7 @@
 }
 .edge {
   /* ChannelTimeline measures this region for Virtua's pixel startMargin. */
-  height: 3.5rem;
+  min-height: var(--space-4);
   box-sizing: border-box;
   display: flex;
   align-items: center;
@@ -74,22 +75,32 @@
   color: var(--text-subtle);
   gap: var(--space-2);
 }
+.edge[data-history-space] {
+  min-height: calc(var(--size-control) + var(--space-4));
+}
 .day {
   display: flex;
   align-items: center;
-  gap: 0;
-  color: var(--text-standard);
-  font-size: var(--text-caption);
-  line-height: var(--text-caption--line-height);
-  letter-spacing: var(--text-caption--letter-spacing);
-  margin: var(--space-3) 0;
+  justify-content: center;
+  gap: var(--space-4);
+  padding: var(--space-2) 0;
+  color: var(--text-subtle);
+  @apply text-caption;
+  margin: var(--space-5) 0;
 }
 .day::before,
 .day::after {
   content: "";
-  height: 1px;
-  background: var(--border-standard);
+  height: 0.5px;
+  min-width: 0;
   flex: 1;
+  background: var(--border-standard);
+}
+.dayLabel {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
 }
 .message {
   position: relative;
@@ -476,7 +487,8 @@ html[data-keyboard-navigation] .attachmentImage:focus-visible {
   position: relative;
   border: 1px solid var(--border-standard);
   background: var(--surface-panel);
-  border-radius: var(--radius-panel);
+  /* Match the send control plus its inset, measured from the outer border. */
+  border-radius: calc(var(--radius-icon-button) + var(--space-1h) + 1px);
   box-shadow: var(--shadow-xs);
   padding: var(--space-3) var(--space-1h) var(--space-1h);
   margin: 0 var(--space-4) var(--space-4);
@@ -511,7 +523,7 @@ html[data-keyboard-navigation] .attachmentImage:focus-visible {
   display: flex;
   align-items: center;
   gap: var(--space-2);
-  margin: calc(-1 * var(--space-2)) calc(-1 * var(--space-3)) var(--space-1);
+  margin: calc(-1 * var(--space-3)) calc(-1 * var(--space-1h)) var(--space-1);
   padding: var(--space-2) var(--space-3);
   background: var(--surface-inset);
   color: var(--text-secondary);
@@ -607,8 +619,12 @@ html[data-keyboard-navigation] .attachmentImage:focus-visible {
   letter-spacing: var(--text-caption--letter-spacing);
   margin-top: var(--space-1h);
 }
-.day span {
-  padding: var(--space-1h) var(--space-3);
+.dayCalendar {
+  display: block;
+  flex: none;
+  width: var(--space-5);
+  height: var(--space-5);
+  user-select: none;
 }
 .threadUnread {
   width: 0.5rem;
@@ -648,7 +664,7 @@ html[data-keyboard-navigation] .attachmentImage:focus-visible {
   overflow: auto;
   padding: 0 var(--space-panel-inset);
   /* Scrollable end padding, not a fixed strip above the composer. */
-  padding-bottom: var(--space-3);
+  padding-bottom: calc(var(--space-3) + var(--channel-preview-inset));
   /* Older-history corrections hide overflow for a task (scroll-correction.ts). */
   scrollbar-gutter: stable;
   scrollbar-width: thin;
@@ -1428,12 +1444,10 @@ button.mediaPreview {
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: var(--space-3);
+  gap: var(--space-2);
   padding: var(--space-2) 0 var(--space-4);
   color: var(--text-subtle);
-  font-size: var(--text-body-sm);
-  line-height: var(--text-body-sm--line-height);
-  letter-spacing: var(--text-body-sm--letter-spacing);
+  @apply text-caption;
 }
 .membership p {
   margin: 0;
@@ -1464,6 +1478,12 @@ button.mediaPreview {
   letter-spacing: var(--text-caption--letter-spacing);
 }
 
+.membershipAvatar {
+  width: var(--space-5);
+  height: var(--space-5);
+  min-height: var(--space-5);
+}
+
 /* Overflow counts are group metadata, not profile artwork. */
 .membershipAvatarCount {
   display: inline-grid;
@@ -1481,6 +1501,8 @@ button.mediaPreview {
 }
 
 .membershipAvatarCount {
+  width: var(--space-5);
+  height: var(--space-5);
   margin-right: calc(-1 * var(--space-1h));
 }
 
@@ -1918,6 +1940,7 @@ html[data-keyboard-navigation] .rawDiff:focus-visible {
   max-height: 16rem;
 }
 .mediaPreview[data-video-preview] .mediaExpand {
+  z-index: 4;
   top: 0.5rem;
   right: 0.5rem;
 }
@@ -2202,6 +2225,44 @@ html[data-keyboard-navigation] .rawDiff:focus-visible {
   text-wrap-style: auto;
 }
 
+.channelJoinSurface {
+  @apply glass-secondary interaction-floating;
+  border-radius: var(--radius-capsule);
+  opacity: 1;
+  transform: translateY(0);
+  transition:
+    opacity var(--duration-state) var(--easing-enter),
+    transform var(--duration-settle) var(--easing-enter),
+    visibility 0s;
+  transition-delay: var(--duration-fast);
+
+  @starting-style {
+    visibility: hidden;
+    opacity: 0;
+    transform: translateY(50%);
+  }
+}
+.channelJoinSurface[data-ready="false"] {
+  visibility: hidden;
+  opacity: 0;
+  transform: translateY(50%);
+  transition: none;
+}
+html[data-keyboard-navigation] .channelJoinSurface {
+  transition: none;
+}
+@media (prefers-reduced-motion: reduce) {
+  .channelJoinSurface {
+    transition-delay: 0s;
+    transition-property: opacity;
+    transform: none;
+
+    @starting-style {
+      transform: none;
+    }
+  }
+}
+
 .jumpToLatest {
   align-items: flex-start;
   position: sticky;
@@ -2212,9 +2273,15 @@ html[data-keyboard-navigation] .rawDiff:focus-visible {
   justify-content: center;
   pointer-events: none;
 }
+:is(.feed, .threadHistory) .jumpToLatest {
+  top: calc(100% - var(--size-control-sm) - var(--channel-preview-inset, 0px));
+}
 /* Leave a separate floating lane when the composer has an activity pill. */
 :is(.feed, .threadHistory):has(~ .composerContext [data-agent-activity-trigger])
-.jumpToLatest {
+.jumpToLatest,
+[data-channel-history]:has(~ .composerContext [data-agent-activity-trigger])
+  > .feed
+  .jumpToLatest {
   top: calc(100% - var(--size-control-sm) - 2 * var(--space-6));
 }
 .jumpToLatestSurface {

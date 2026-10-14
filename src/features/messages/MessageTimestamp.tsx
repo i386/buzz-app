@@ -18,7 +18,35 @@ export function DayDivider({ createdAt }: { createdAt: number }) {
     .join("-");
   return (
     <div className={styles.day}>
-      <span data-day={day}>{formatDayGroupLabel(createdAt)}</span>
+      <span className={styles.dayLabel}>
+        {/* Decorative calendar artwork; the adjacent label owns the date. */}
+        <svg
+          className={styles.dayCalendar}
+          viewBox="0 0 24 24"
+          aria-hidden="true"
+          focusable="false"
+        >
+          <rect x="0.5" y="0.5" width="23" height="23" rx="5.5" fill="#fff" />
+          <path
+            d="M6 .5h12a5.5 5.5 0 0 1 5.5 5.5v1H.5V6A5.5 5.5 0 0 1 6 .5Z"
+            fill="#f00"
+          />
+          <rect
+            x="0.5"
+            y="0.5"
+            width="23"
+            height="23"
+            rx="5.5"
+            fill="none"
+            stroke="var(--border-standard)"
+            strokeWidth="0.5"
+          />
+          <text x="12" y="19" textAnchor="middle" fontSize="12" fill="#111">
+            {date.getDate()}
+          </text>
+        </svg>
+        <span data-day={day}>{formatDayGroupLabel(createdAt)}</span>
+      </span>
     </div>
   );
 }

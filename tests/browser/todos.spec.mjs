@@ -236,7 +236,7 @@ test("opt-in Todos saves ordinary Canvas and disabling leaves it editable", asyn
   });
   // Removing the tab picker leaves the ordinary tool launcher available.
   await page.setViewportSize({ width: 1440, height: 950 });
-  await launcher.click();
+  await drawer.getByRole("button", { name: "Hide todos", exact: true }).click();
   await expect(drawer).toHaveCount(0);
   await launcher.click();
   await expect(
