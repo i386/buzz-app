@@ -951,7 +951,7 @@ fn prepare_reload_artifact(source: &ReloadSource) -> Result<Release> {
     imports::read_package(&directory, &relative)
 }
 fn validate_candidate_path(path: &str) -> Result<PathBuf> {
-    let path = path.trim();
+    // Recorded paths are lossless folder identities; spaces are part of valid names.
     if path.is_empty() {
         return Err("Reload source path is empty".into());
     }
@@ -1052,11 +1052,12 @@ fn atomic_write(path: &Path, bytes: &[u8]) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::{
-        artifact_from_text, bundled_manifests, enabled_by_default, Manager, Manifest,
-        MAX_HOST_COMMAND_OUTPUT_BYTES,
+        artifact_from_text, bundled_manifests, enabled_by_default, validate_candidate_path,
+        Manager, Manifest, MAX_HOST_COMMAND_OUTPUT_BYTES,
     };
     use std::collections::BTreeMap;
     use std::fs;
+    use std::path::Path;
 
     #[test]
     fn native_catalog_matches_desktop_bundles() {
@@ -1674,6 +1675,17 @@ mod tests {
             manager.catalog().err().as_deref(),
             Some("Invalid installed plugin identity")
         );
+    }
+
+    #[test]
+    fn reload_source_paths_keep_spaces_and_reject_escapes() {
+        for path in [" plugin", "plugin ", "a/ b /c", " "] {
+            assert_eq!(validate_candidate_path(path).unwrap(), Path::new(path));
+        }
+        assert_eq!(validate_candidate_path(".").unwrap(), Path::new(""));
+        for path in ["", "/plugin", "../plugin", "a/../b", "./plugin"] {
+            assert!(validate_candidate_path(path).is_err(), "{path:?}");
+        }
     }
 
     #[test]

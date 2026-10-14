@@ -337,6 +337,56 @@ fn rollback_swaps_reload_sources_and_same_byte_reload_refreshes_source() {
         changed
     );
 }
+fn reload_from_exact_folder(name: &str, with_trimmed_sibling: bool) {
+    let temp = tempfile::tempdir().unwrap();
+    let manager = Manager::open(Some(temp.path().join("home")), "test", false).unwrap();
+    let root = temp.path().join("plugins");
+    let mut folders = vec![(name, "export const exact = 1;")];
+    if with_trimmed_sibling {
+        folders.push((name.trim(), "export const sibling = true;"));
+    }
+    for (folder, code) in folders {
+        let folder = root.join(folder);
+        fs::create_dir_all(&folder).unwrap();
+        fs::write(
+            folder.join("manifest.json"),
+            r#"{"id":"example.page","name":"Example","apiVersion":1}"#,
+        )
+        .unwrap();
+        fs::write(folder.join("plugin.js"), code).unwrap();
+    }
+    let prepared = buzzodz_plugins::imports::prepare_folder(&root).unwrap();
+    let first = prepared
+        .install(&manager, &prepared.preview.token, name)
+        .unwrap()
+        .plugins
+        .into_iter()
+        .find(|p| p.manifest.id == "example.page")
+        .unwrap();
+    assert!(!first.enabled);
+    assert!(first.reloadable);
+    fs::write(root.join(name).join("plugin.js"), "export const exact = 2;").unwrap();
+    let reloaded = manager
+        .reload("example.page")
+        .unwrap()
+        .plugins
+        .into_iter()
+        .find(|p| p.manifest.id == "example.page")
+        .unwrap();
+    assert_ne!(reloaded.revision, first.revision);
+    manager.change("enable", "example.page").unwrap();
+    assert_eq!(
+        manager.module("example.page", &reloaded.revision).unwrap(),
+        "export const exact = 2;"
+    );
+}
+#[test]
+fn reload_reads_the_exact_recorded_folder_name() {
+    for name in [" plugin", "plugin ", " plugin "] {
+        reload_from_exact_folder(name, true);
+        reload_from_exact_folder(name, false);
+    }
+}
 #[test]
 fn invalid_install_preserves_working_revision() {
     let (_temp, manager, source) = fixture();
