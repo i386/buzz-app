@@ -42,10 +42,14 @@ const fulfillGifImage = (route) =>
   });
 
 // Settled bounds miss a one-frame overlap of outgoing and incoming panels.
+// Samples run in requestAnimationFrame, which precedes every rendering update,
+// so each frame the browser can paint is recorded. A busy WebKit renderer can
+// skip every update while the switch settles; stop() therefore waits for the
+// next update and records the settled frame instead of reading a lone sample.
 const watchPickerLayout = (picker) =>
   picker.evaluateHandle((popup) => {
     const frames = [];
-    let frame;
+    let finish;
     const sample = () => {
       const bounds = popup.getBoundingClientRect();
       frames.push({
@@ -57,13 +61,15 @@ const watchPickerLayout = (picker) =>
           (panel) => panel.getBoundingClientRect().height > 0,
         ).length,
       });
-      frame = requestAnimationFrame(sample);
+      if (finish) finish(frames);
+      else requestAnimationFrame(sample);
     };
     sample();
     return {
       stop() {
-        cancelAnimationFrame(frame);
-        return frames;
+        return new Promise((resolve) => {
+          finish = resolve;
+        });
       },
     };
   });
