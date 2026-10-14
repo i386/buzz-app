@@ -1,4 +1,5 @@
 import type { Reminder, RemindersState } from "../../features/relay/reminders";
+import { relativeTimestamp } from "../../shared/relative-timestamp";
 
 export const nowSeconds = () => Math.floor(Date.now() / 1000);
 
@@ -143,3 +144,41 @@ export const navigableTarget = (reminder: Reminder) =>
   reminder.target?.channelId && reminder.target.eventId
     ? reminder.target
     : undefined;
+
+const timeOf = (date: Date) =>
+  date.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+
+/** Slack-style due copy: relative when overdue, otherwise the day and time. */
+export function dueLabel(at: number, now: number) {
+  if (at <= now) return `Overdue · ${relativeTimestamp(at, now)}`;
+  const due = new Date(at * 1000);
+  const today = new Date(now * 1000);
+  const days = Math.round(
+    (new Date(due).setHours(0, 0, 0, 0) -
+      new Date(today).setHours(0, 0, 0, 0)) /
+      86_400_000,
+  );
+  const day =
+    days === 0
+      ? "Today"
+      : days === 1
+        ? "Tomorrow"
+        : days < 7
+          ? due.toLocaleDateString([], { weekday: "long" })
+          : due.toLocaleDateString([], {
+              month: "short",
+              day: "numeric",
+              ...(due.getFullYear() !== today.getFullYear()
+                ? { year: "numeric" }
+                : {}),
+            });
+  return `${day} at ${timeOf(due)}`;
+}
+
+/** Where a snooze preset lands: its time, with a short weekday unless today. */
+export function presetHint(at: number, now: number) {
+  const due = new Date(at * 1000);
+  return due.toDateString() === new Date(now * 1000).toDateString()
+    ? timeOf(due)
+    : `${due.toLocaleDateString([], { weekday: "short" })} ${timeOf(due)}`;
+}

@@ -9,7 +9,7 @@ import {
   screen,
   within,
 } from "@testing-library/react";
-import { afterEach, assert, expect, it, vi } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import type { RelayEvent } from "../../features/relay/events";
 import {
   createReminders,
@@ -45,7 +45,27 @@ const reminder = (
   },
 });
 
-it("lists finished reminders newest first in a Done group with only Open", () => {
+/** The session reads the page makes beside reminders: channel names, author profiles. */
+const channelList = {
+  status: "ready",
+  channels: [{ id: "c", name: "general", channelType: "stream" }],
+};
+const authors = new Map([["a", { name: "Ada" }]]);
+const sessionParts = {
+  channels: {
+    ensureList: () => () => {},
+    subscribeList: () => () => {},
+    list: () => channelList,
+  },
+  profiles: {
+    snapshot: () => authors,
+    subscribe: () => () => {},
+    ensure: () => Promise.resolve(),
+  },
+  media: (url: string) => url,
+};
+
+it("lists finished reminders newest first in a collapsed Done group", () => {
   const state = {
     status: "ready" as const,
     reminders: [
@@ -58,13 +78,13 @@ it("lists finished reminders newest first in a Done group with only Open", () =>
   const reminders = {
     snapshot: () => state,
     subscribe: () => () => {},
-    complete: vi.fn(),
+    snooze: vi.fn(() => Promise.resolve()),
   } as unknown as Reminders;
   const connection = {
     status: "ready",
     scope: `https://community:${viewer}`,
     viewer,
-    session: { reminders },
+    session: { reminders, ...sessionParts },
   };
   const relay = {
     snapshot: () => connection,
@@ -78,35 +98,114 @@ it("lists finished reminders newest first in a Done group with only Open", () =>
       clock={{ subscribe: () => () => {}, read: () => now }}
     />,
   );
-  const done = screen.getByText("Done · 2").closest("details");
-  assert(done);
-  expect(done.open).toBe(false);
-  // Done sits below the active sections.
+  const overdue = screen.getByRole("region", { name: "Overdue" });
+  expect(within(overdue).getByText("Ada")).toBeVisible();
+  expect(within(overdue).getByText("#general")).toBeVisible();
+  expect(within(overdue).getByText("Overdue · 1 minute ago")).toBeVisible();
+  // The row's open action still conveys what the reminder is and when.
   expect(
-    screen
-      .getByRole("region", { name: "Overdue" })
-      .compareDocumentPosition(done) & Node.DOCUMENT_POSITION_FOLLOWING,
+    within(overdue).getByRole("button", { name: "Open message from Ada" }),
+  ).toHaveAccessibleDescription("overdue item Overdue · 1 minute ago");
+  const done = screen.getByRole("region", { name: "Done" });
+  // Done sits below the active sections, collapsed.
+  expect(
+    overdue.compareDocumentPosition(done) & Node.DOCUMENT_POSITION_FOLLOWING,
   ).toBeTruthy();
-  expect(screen.getByText("newer done")).not.toBeVisible();
-  fireEvent.click(within(done).getByText("Done · 2"));
-  expect(done.open).toBe(true);
+  const toggle = within(done).getByRole("button", { name: "Done · 2" });
+  expect(toggle).toHaveAttribute("aria-expanded", "false");
+  expect(screen.queryByText("newer done")).toBeNull();
+  fireEvent.click(toggle);
+  expect(toggle).toHaveAttribute("aria-expanded", "true");
+  const rows = within(done).getAllByRole("listitem");
+  expect(rows.map((row) => row.textContent)).toEqual([
+    expect.stringContaining("newer done"),
+    expect.stringContaining("older done"),
+  ]);
+  // Finished reminders can be opened or brought back, never completed again.
   expect(
-    within(done)
-      .getAllByRole("listitem")
-      .map((row) => row.querySelector("p")?.textContent),
-  ).toEqual(["newer done", "older done"]);
-  expect(
-    within(done)
+    within(rows[0] as HTMLElement)
       .getAllByRole("button")
-      .map((b) => b.textContent),
-  ).toEqual(["Open", "Open"]);
+      .map((button) => button.getAttribute("aria-label")),
+  ).toEqual([
+    "Open message from Ada",
+    "Remind me again: Ada",
+    "More actions: Ada",
+  ]);
   expect(screen.queryByText("cancelled item")).toBeNull();
   fireEvent.click(
-    within(done).getAllByRole("button", { name: "Open" })[0] as HTMLElement,
+    within(rows[0] as HTMLElement).getByRole("button", {
+      name: "Open message from Ada",
+    }),
   );
   expect(open).toHaveBeenCalledWith(
     expect.objectContaining({ messageId: "newer done-message" }),
   );
+});
+
+it("marks done, snoozes and cancels a pending reminder from its row", async () => {
+  const user = userEvent.setup();
+  const state = {
+    status: "ready" as const,
+    reminders: [reminder("due soon", "pending", 1, now + 600)],
+  };
+  const reminders = {
+    snapshot: () => state,
+    subscribe: () => () => {},
+    complete: vi.fn(() => Promise.resolve()),
+    snooze: vi.fn(() => Promise.resolve()),
+    cancel: vi.fn(() => Promise.resolve()),
+  } as unknown as Reminders;
+  page(reminders);
+  const row = screen.getByRole("listitem");
+  expect(within(row).getByText("due soon")).toBeVisible();
+  await user.click(within(row).getByRole("button", { name: "Mark done: Ada" }));
+  expect(reminders.complete).toHaveBeenCalledWith("due soon");
+  await user.click(within(row).getByRole("button", { name: "Snooze: Ada" }));
+  await user.click(await screen.findByRole("menuitem", { name: /^In 1 hour/ }));
+  expect(reminders.snooze).toHaveBeenCalledWith("due soon", expect.any(Number));
+  await user.click(
+    within(row).getByRole("button", { name: "More actions: Ada" }),
+  );
+  await user.click(
+    await screen.findByRole("menuitem", { name: "Cancel reminder" }),
+  );
+  expect(reminders.cancel).toHaveBeenCalledWith("due soon");
+});
+
+it("shows a note-only reminder without an open action", () => {
+  page([
+    {
+      id: "note",
+      eventId: "note-event",
+      createdAt: 1,
+      status: "pending",
+      notBefore: now + 600,
+      note: "stand-up",
+    },
+    {
+      id: "old note",
+      eventId: "old-note-event",
+      createdAt: 1,
+      status: "done",
+      note: "retro",
+    },
+  ]);
+  const row = screen.getByRole("listitem");
+  expect(within(row).getByText("Reminder")).toBeVisible();
+  expect(within(row).getByText("stand-up")).toBeVisible();
+  expect(
+    within(row).queryByRole("button", { name: /^Open message/ }),
+  ).toBeNull();
+  // A finished note has nothing to open or cancel, so no empty overflow menu.
+  fireEvent.click(screen.getByRole("button", { name: "Done · 1" }));
+  const done = within(screen.getByRole("region", { name: "Done" })).getByRole(
+    "listitem",
+  );
+  expect(
+    within(done)
+      .getAllByRole("button")
+      .map((button) => button.getAttribute("aria-label")),
+  ).toEqual(["Remind me again: Reminder"]);
 });
 
 it("recovers a failed first history read through Retry, then notifies", async () => {
@@ -148,9 +247,7 @@ it("recovers a failed first history read through Retry, then notifies", async ()
       viewer,
       session: {
         reminders: model.capability,
-        channels: {
-          list: () => ({ status: "ready", channels: [] }),
-        },
+        ...sessionParts,
         live: {
           subscribe: () => () => {},
           snapshot: () => ({ roster: { state: "verified" } }),
@@ -194,17 +291,19 @@ it("recovers a failed first history read through Retry, then notifies", async ()
   }
 });
 
-function page(list: Reminder[]) {
-  const state = { status: "ready" as const, reminders: list };
-  const reminders = {
-    snapshot: () => state,
-    subscribe: () => () => {},
-  } as unknown as Reminders;
+function page(source: Reminder[] | Reminders) {
+  const state = { status: "ready" as const, reminders: source };
+  const reminders = Array.isArray(source)
+    ? ({
+        snapshot: () => state,
+        subscribe: () => () => {},
+      } as unknown as Reminders)
+    : source;
   const connection = {
     status: "ready",
     scope: `https://community:${viewer}`,
     viewer,
-    session: { reminders },
+    session: { reminders, ...sessionParts },
   };
   render(
     <RemindersPage
@@ -220,26 +319,24 @@ function page(list: Reminder[]) {
   );
 }
 
-const hint = "Use Remind me in a message's menu to get reminded later.";
+const hint =
+  "Choose Remind me from any message's menu to bring it back here when it matters.";
 
-it("keeps the Active section with helper text when only Done reminders exist", () => {
+it("says the list is caught up when only Done reminders exist", () => {
   page([reminder("finished", "done", 1)]);
-  const active = screen.getByRole("region", { name: "Active" });
-  expect(within(active).getByText("No active reminders")).toBeVisible();
-  expect(screen.queryByText(hint)).toBeNull();
-  expect(screen.getByText("Done · 1")).toBeVisible();
+  expect(screen.getByText("You're all caught up")).toBeVisible();
+  expect(screen.getByRole("button", { name: "Done · 1" })).toBeVisible();
 });
 
-it("shows the Active section with the hint and no Done on an empty page", () => {
+it("explains how to add a reminder on an empty page", () => {
   page([reminder("cancelled", "cancelled", 1)]);
-  const active = screen.getByRole("region", { name: "Active" });
-  expect(within(active).getByText("No active reminders")).toBeVisible();
-  expect(within(active).getByText(hint)).toBeVisible();
-  expect(screen.queryByText(/^Done/)).toBeNull();
+  expect(screen.getByText("No reminders yet")).toBeVisible();
+  expect(screen.getByText(hint)).toBeVisible();
+  expect(screen.queryByRole("region", { name: "Done" })).toBeNull();
 });
 
 it.each([
-  ["an empty", [] as RelayEvent[], "No active reminders"],
+  ["an empty", [] as RelayEvent[], "No reminders yet"],
   [
     "a populated",
     [
@@ -288,7 +385,7 @@ it.each([
       status: "ready",
       scope: `https://community:${viewer}`,
       viewer,
-      session: { reminders: model.capability },
+      session: { reminders: model.capability, ...sessionParts },
     };
     render(
       <RemindersPage
@@ -363,7 +460,7 @@ it("keeps keyboard focus on Retry through a pending and failed read, then hands 
     status: "ready",
     scope: `https://community:${viewer}`,
     viewer,
-    session: { reminders: model.capability },
+    session: { reminders: model.capability, ...sessionParts },
   };
   render(
     <RemindersPage
@@ -424,7 +521,7 @@ async function pendingRetry() {
     status: "ready",
     scope: `https://community:${viewer}`,
     viewer,
-    session: { reminders },
+    session: { reminders, ...sessionParts },
   };
   render(
     <RemindersPage
@@ -465,7 +562,7 @@ async function pendingRetry() {
         if (outcome === "success") read?.resolve([]);
         else read?.reject(new Error("offline"));
         reminders = next.model.capability;
-        connection = { ...connection, session: { reminders } };
+        connection = { ...connection, session: { reminders, ...sessionParts } };
         for (const listener of listeners) listener();
       });
       return next;
@@ -587,7 +684,7 @@ it("keeps focus on a control that claims it in the commit that removes Retry", (
     status: "ready",
     scope: `https://community:${viewer}`,
     viewer,
-    session: { reminders },
+    session: { reminders, ...sessionParts },
   };
   const claim = withClaim(() => staticPage(() => connection));
   const app = render(claim.tree());
@@ -610,14 +707,17 @@ it("keeps focus on a control that claims it as a healthy session replaces a keyb
     status: "ready",
     scope: `https://community:${viewer}`,
     viewer,
-    session: { reminders: first.model.capability },
+    session: { reminders: first.model.capability, ...sessionParts },
   };
   const claim = withClaim(() => staticPage(() => connection));
   const app = render(claim.tree());
   screen.getByRole("button", { name: "Retry reminders" }).focus();
   const user = userEvent.setup();
   await user.keyboard("{Enter}");
-  connection = { ...connection, session: { reminders: next.model.capability } };
+  connection = {
+    ...connection,
+    session: { reminders: next.model.capability, ...sessionParts },
+  };
   claim.open();
   await act(async () => {
     app.rerender(claim.tree());

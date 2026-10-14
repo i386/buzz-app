@@ -4,6 +4,7 @@ import {
   MAX_DELAY_MS,
   TIME_PRESETS,
   countDue,
+  dueLabel,
   dueSince,
   groupReminders,
   isDue,
@@ -12,6 +13,7 @@ import {
   nowSeconds,
   parseCustomDateTime,
   pendingMessageIds,
+  presetHint,
   shiftedFrom,
   todayDateString,
 } from "./model";
@@ -200,5 +202,59 @@ describe("time presets", () => {
       if (zone === undefined) delete process.env.TZ;
       else process.env.TZ = zone;
     }
+  });
+});
+
+describe("dueLabel", () => {
+  const at = (date: Date) => Math.floor(date.getTime() / 1000);
+  const base = new Date(2026, 9, 13, 12, 0);
+  const time = (date: Date) =>
+    date.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+
+  it("counts overdue reminders back from now", () => {
+    expect(dueLabel(at(base) - 2 * 3600, at(base))).toBe(
+      "Overdue · 2 hours ago",
+    );
+  });
+
+  it("names today, tomorrow, this week and later dates", () => {
+    const later = (days: number, hours: number) => {
+      const date = new Date(base);
+      date.setDate(date.getDate() + days);
+      date.setHours(hours, 0, 0, 0);
+      return date;
+    };
+    const today = later(0, 15);
+    const tomorrow = later(1, 9);
+    const friday = later(3, 9);
+    const nextMonth = later(20, 9);
+    expect(dueLabel(at(today), at(base))).toBe(`Today at ${time(today)}`);
+    expect(dueLabel(at(tomorrow), at(base))).toBe(
+      `Tomorrow at ${time(tomorrow)}`,
+    );
+    expect(dueLabel(at(friday), at(base))).toBe(
+      `${friday.toLocaleDateString([], { weekday: "long" })} at ${time(friday)}`,
+    );
+    expect(dueLabel(at(nextMonth), at(base))).toBe(
+      `${nextMonth.toLocaleDateString([], { month: "short", day: "numeric" })} at ${time(nextMonth)}`,
+    );
+  });
+
+  it("labels a later year's date with its year", () => {
+    const december = new Date(2026, 11, 28, 12, 0);
+    const january = new Date(2027, 0, 10, 9, 0);
+    expect(dueLabel(at(january), at(december))).toBe(
+      `${january.toLocaleDateString([], { month: "short", day: "numeric", year: "numeric" })} at ${time(january)}`,
+    );
+  });
+
+  it("hints a preset's time, with its weekday once past midnight", () => {
+    const late = new Date(2026, 9, 13, 22, 0);
+    const soon = new Date(late.getTime() + 3600_000);
+    const afterMidnight = new Date(late.getTime() + 3 * 3600_000);
+    expect(presetHint(at(soon), at(late))).toBe(time(soon));
+    expect(presetHint(at(afterMidnight), at(late))).toBe(
+      `${afterMidnight.toLocaleDateString([], { weekday: "short" })} ${time(afterMidnight)}`,
+    );
   });
 });

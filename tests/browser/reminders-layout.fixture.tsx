@@ -39,6 +39,11 @@ const state = Object.freeze({
     },
   ],
 });
+const channelList = Object.freeze({
+  status: "ready",
+  channels: [{ id: "c", name: "release-planning", channelType: "stream" }],
+});
+const profiles = new Map([[viewer, { name: "Ada Lovelace" }]]);
 const reminders = {
   snapshot: () => state,
   subscribe: () => () => {},
@@ -47,7 +52,20 @@ const connection = {
   status: "ready",
   scope: `https://community.example:${viewer}`,
   viewer,
-  session: { reminders },
+  session: {
+    reminders,
+    channels: {
+      ensureList: () => () => {},
+      subscribeList: () => () => {},
+      list: () => channelList,
+    },
+    profiles: {
+      snapshot: () => profiles,
+      subscribe: () => () => {},
+      ensure: () => Promise.resolve(),
+    },
+    media: (url: string) => url,
+  },
 };
 const relay = {
   snapshot: () => connection,

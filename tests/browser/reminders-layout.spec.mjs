@@ -55,7 +55,9 @@ for (const width of [480, 390]) {
       const box = await row.boundingBox();
       const geometry = await row.evaluate((el) => ({
         overflow: el.scrollWidth - el.clientWidth,
-        text: el.firstElementChild.getBoundingClientRect().width,
+        // The row surface's first child holds the avatar and reminder text.
+        text: el.firstElementChild.firstElementChild.getBoundingClientRect()
+          .width,
       }));
       expect(geometry.overflow, "row content stays inside the row").toBe(0);
       expect(geometry.text, "text keeps a readable width").toBeGreaterThan(
@@ -70,7 +72,7 @@ for (const width of [480, 390]) {
       }
     }
     // The due date reads on one line rather than one word per line.
-    const due = rows.first().locator("p").last();
+    const due = rows.first().locator("time");
     const lineHeight = await due.evaluate((el) =>
       Number.parseFloat(getComputedStyle(el).lineHeight),
     );
