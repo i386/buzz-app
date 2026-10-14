@@ -198,8 +198,12 @@ test("Inbox opens the exact thread, shares read state, and fits the workspace", 
   await expect(rows).toHaveCount(2);
   // Main's fixture now also mentions the viewer in the other thread's nested
   // reply. Keep both groups and select this exact preview, not a namesake row.
+  // That group previews its oldest unread reply; a focused startup dwell in
+  // Alpha may already have read "Broadcast reply" there.
   const mentionRow = rows.filter({ hasText: "Unread reply 1" });
-  await expect(rows.filter({ hasText: "Broadcast reply" })).toHaveCount(1);
+  await expect(
+    rows.filter({ hasText: /Broadcast reply|Unread reply 0/ }),
+  ).toHaveCount(1);
   const source = mentionRow.locator("[data-inbox-source]");
   await expect(source).toHaveText("#Alpha");
   expect(

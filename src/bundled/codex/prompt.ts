@@ -1,11 +1,19 @@
-import { BUZZ_PROMPT, coreMemory } from "../../buzz-mcp/prompt";
+import { BUZZ_PROMPT, TOP_LEVEL_PROMPT } from "../../buzz-mcp/prompt";
+import { BASE_PROMPT } from "../../features/agent-harness/base-prompt";
+import { coreMemorySection } from "../../features/agent-harness/core-memory";
 import type { AgentHandle } from "../../features/agents/service";
 import type { EventData } from "../../features/relay/events";
 import { threadReference } from "../../features/relay/thread-reference";
 import type { Config } from "./config";
-import basePrompt from "./base_prompt.md?raw";
 
-export type Conversation = { channelId: string; name: string; root?: string };
+/** `topLevel` is an owner's Me chat: one channel conversation, posted at
+ * its top level. */
+export type Conversation = {
+  channelId: string;
+  name: string;
+  root?: string;
+  topLevel?: true;
+};
 const quoted = (value: unknown) =>
   JSON.stringify(value).replaceAll("<", "\\u003c").replaceAll(">", "\\u003e");
 export const rootOf = (event: EventData) =>
@@ -17,11 +25,11 @@ export function developerInstructions(
   /** The agent's `core` memory: `null` when it has none, undefined if unread. */
   memory?: string | null,
 ) {
-  const core = coreMemory(memory);
+  const core = coreMemorySection(memory);
   return `You are ${agent.name} (pubkey ${agent.pubkey}), a coding agent in Buzz.
 The buzz namespace provides the shared Buzz tools, including messages, reactions, reads, uploads, canvas, and encrypted memory. Buzz access and signing are handled by the host. Do not invoke the buzz CLI or look for credentials. Use Codex's native coding tools in the workspace.
 
-${basePrompt.trim()}
+${BASE_PROMPT}
 
 ${BUZZ_PROMPT}
 
@@ -38,7 +46,10 @@ export function turnInput(
   const section = steering
     ? "new-message-arrived-while-you-were-working"
     : "buzz-event";
-  return `<context>\n${quoted({ channel_id: conversation.channelId, channel_name: conversation.name, session_scope: conversation.root ? "thread" : "channel", session_thread: conversation.root, reply_to: rootOf(event) })}\n</context>\n<${section}>\n${quoted(event)}\nRequest: ${quoted(text)}\n</${section}>${interest ? `\n<interest>\n${quoted(interest)}\n</interest>` : ""}`;
+  const routing = conversation.topLevel
+    ? { posting: "top-level" }
+    : { session_thread: conversation.root, reply_to: rootOf(event) };
+  return `<context>\n${quoted({ channel_id: conversation.channelId, channel_name: conversation.name, session_scope: conversation.root ? "thread" : "channel", ...routing })}\n</context>\n${conversation.topLevel ? `${TOP_LEVEL_PROMPT}\n` : ""}<${section}>\n${quoted(event)}\nRequest: ${quoted(text)}\n</${section}>${interest ? `\n<interest>\n${quoted(interest)}\n</interest>` : ""}`;
 }
 /** The readable part of a conversation's thread name; earlier versions used
  * it alone. */

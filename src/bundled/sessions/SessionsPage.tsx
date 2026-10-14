@@ -3,6 +3,7 @@ import { activityTarget } from "../../features/agents/activity-target";
 import { useConversationTabs } from "../channels/useConversationTabs";
 import { useChannelTabState } from "../channels/useChannelTabState";
 import { useChannelLabels } from "../channels/useChannelLabels";
+import panelStyles from "../../features/panels/Panels.module.css";
 import { PanelWorkspace } from "../../features/panels/PanelWorkspace";
 import { PanelDock } from "../../features/panels/PanelDock";
 import { PanelFrame } from "../../features/panels/PanelFrame";
@@ -438,18 +439,22 @@ function SessionWork({
                 </MenuItem>
               </MenuPopup>
             </MenuRoot>
-            <IconButton
-              ref={splitTrigger}
-              data-tab-pane-toggle=""
-              size="toolbar"
-              aria-label="Toggle tab pane"
-              title={showingPanel ? "Close tab pane" : "Open tab pane"}
-              aria-expanded={!!showingPanel}
-              icon={<SidebarRightIcon size="1rem" />}
-              disabled={!hasLocalPanel}
-              focusableWhenDisabled
-              onClick={() => tabState.setPaneOpen(!showingPanel)}
-            />
+            {!showingPanel && (
+              <span className={panelStyles.paneToggle}>
+                <IconButton
+                  ref={splitTrigger}
+                  data-tab-pane-toggle=""
+                  size="toolbar"
+                  aria-label="Toggle tab pane"
+                  title={showingPanel ? "Close tab pane" : "Open tab pane"}
+                  aria-expanded={!!showingPanel}
+                  icon={<SidebarRightIcon size="1rem" />}
+                  disabled={!hasLocalPanel}
+                  focusableWhenDisabled
+                  onClick={() => tabState.setPaneOpen(!showingPanel)}
+                />
+              </span>
+            )}
           </SessionHeading>
           {renameOpen && (
             <RenameSession
@@ -558,6 +563,19 @@ function SessionWork({
               {secondary.hosts}
               <PanelWorkspace
                 drag={secondary.drag.side}
+                actions={
+                  <IconButton
+                    data-tab-pane-toggle=""
+                    data-highlight-expanded="false"
+                    variant="subtle"
+                    size="toolbar"
+                    aria-label="Toggle tab pane"
+                    title="Close tab pane"
+                    aria-expanded={true}
+                    onClick={secondary.closePane}
+                    icon={<SidebarRightIcon size="1rem" aria-hidden="true" />}
+                  />
+                }
                 value={secondary.selectedTab}
                 select={secondary.selectPanelTab}
                 items={secondary.items}

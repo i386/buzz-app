@@ -50,7 +50,7 @@ test("sidebar scrollbar stays close to the divider without clipping its native t
     };
   });
   expect(geometry).toEqual({
-    rightInset: 2,
+    rightInset: 3,
     clipped: false,
     paddingTop: 8,
   });
@@ -100,7 +100,7 @@ test("compact sidenav keeps its geometry across persistent page navigation", asy
       ),
     );
     for (const row of geometry) {
-      expect(row.left).toBe(12);
+      expect(row.left).toBe(13);
       expect(row.right).toBe(row.left + row.gutter);
     }
   };
@@ -515,7 +515,7 @@ test("shell toggle restores the shared sidebar for Channels and Agents", async (
         duration: style.transitionDuration,
       };
     });
-    expect(track.width).toBe(expandedWidth + gutterWidth);
+    expect(track.width).toBe(expandedWidth + gutterWidth + 4);
     expect(track.property).toContain("grid-template-columns");
     expect(parseFloat(track.duration)).toBeGreaterThan(0);
     const openGap = await page.evaluate(() => {
@@ -528,7 +528,7 @@ test("shell toggle restores the shared sidebar for Channels and Agents", async (
         sidebar.getBoundingClientRect().right
       );
     });
-    expect(openGap).toBe(gutterWidth);
+    expect(openGap).toBe(gutterWidth + 4);
     // Seek paused real transitions so runner speed cannot hide an immediate jump.
     // Pause them when the toggle commits, before any frame: transitionrun arrives
     // in a later frame, and a stalled WebKit frame can finish the 220ms transition
@@ -572,6 +572,10 @@ test("shell toggle restores the shared sidebar for Channels and Agents", async (
               width: nav.getBoundingClientRect().width,
               sidebar: sidebar.getBoundingClientRect().width,
               clip: getComputedStyle(nav).clipPath,
+              visibility: getComputedStyle(nav).visibility,
+              trailingGap:
+                nav.getBoundingClientRect().right -
+                sidebar.getBoundingClientRect().right,
             };
           });
         } finally {
@@ -581,11 +585,12 @@ test("shell toggle restores the shared sidebar for Channels and Agents", async (
           );
         }
       }, label);
-      const width = expandedWidth + gutterWidth;
+      const width = expandedWidth + gutterWidth + 4;
       const hiding = label.startsWith("Hide");
       // The track leaves its real extent on the first sampled step and crosses
       // the midpoint halfway through, instead of stalling behind a larger
-      // ceiling; the sidebar itself keeps its width and is only clipped.
+      // ceiling; the full-width panel slides with the track so its rounded
+      // trailing edge stays intact instead of being cropped square.
       expect(samples[0].width).toBe(hiding ? width : 0);
       expect(samples[1].width).toBeGreaterThan(0);
       expect(samples[1].width).toBeLessThan(width);
@@ -595,10 +600,18 @@ test("shell toggle restores the shared sidebar for Channels and Agents", async (
         expect(hiding ? -step : step).toBeGreaterThan(0);
       }
       expect(samples.at(-1).width).toBe(hiding ? 0 : width);
-      for (const sample of samples) expect(sample.sidebar).toBe(expandedWidth);
-      for (const sample of samples.slice(1, -1))
-        expect(sample.clip).toBe("inset(0px)");
-      expect(samples.at(-1).clip).toBe(hiding ? "inset(0px)" : "none");
+      for (const sample of samples) {
+        expect(sample.sidebar).toBe(expandedWidth);
+        expect(sample.trailingGap).toBeCloseTo(gutterWidth + 4, 1);
+      }
+      for (const sample of samples.slice(1, -1)) {
+        expect(sample.clip).toBe("inset(-8px 0px -8px -8px)");
+        expect(sample.visibility).toBe("visible");
+      }
+      expect(samples.at(-1).clip).toBe(
+        hiding ? "inset(-8px 0px -8px -8px)" : "none",
+      );
+      expect(samples.at(-1).visibility).toBe(hiding ? "hidden" : "visible");
     }
 
     if (viewportWidth === 800) {
@@ -640,7 +653,7 @@ test("shell toggle restores the shared sidebar for Channels and Agents", async (
     .poll(() =>
       shellNavigation.evaluate((node) => node.getBoundingClientRect().width),
     )
-    .toBe(expandedWidth + gutterWidth);
+    .toBe(expandedWidth + gutterWidth + 4);
 
   await page.getByRole("button", { name: "Hide Channel sidebar" }).click();
   await expect(shellNavigation).toHaveAttribute("aria-hidden", "true");
@@ -695,7 +708,7 @@ test("shell toggle restores the shared sidebar for Channels and Agents", async (
     },
   );
   await expect(shellNavigation).toHaveAttribute("data-sidebar-open", "true");
-  expect(accessibilityHiddenWidth).toBe(expandedWidth + gutterWidth);
+  expect(accessibilityHiddenWidth).toBe(expandedWidth + gutterWidth + 4);
   await shellNavigation.evaluate((node) => node.removeAttribute("aria-hidden"));
 
   await page.getByRole("button", { name: "Hide Channel sidebar" }).click();

@@ -132,6 +132,7 @@ test.describe("public search destination", () => {
     // WebKit lost-fill failure. Its root cause is unknown, and the failing
     // schedule has not been reproduced against this change.
     await expect(page.locator("[data-message-id]").first()).toBeVisible();
+    let previewSurface;
     for (const mode of ["cold", "warm"]) {
       await button(page, "Search Buzz").click();
       const input = page.getByRole("combobox", { name: "Search Buzz" });
@@ -150,27 +151,78 @@ test.describe("public search destination", () => {
       const row = thread.locator(`[data-message-id="${app.searchTarget.id}"]`);
       await expect(row).toBeVisible();
       await expect(row).toBeFocused();
+      if (previewSurface) {
+        // A new exact-message route in this channel must keep the preview
+        // mounted, rather than flash the access-loading screen and replay entry.
+        expect(await previewSurface.evaluate((node) => node.isConnected)).toBe(
+          true,
+        );
+      }
       app.report.measurements.push({
         mode,
         clickToFocusedMs: performance.now() - start,
       });
-      await expect(
-        page.getByText(
-          "Read-only preview · You haven’t joined this conversation.",
-        ),
-      ).toBeVisible();
+      await expect(page.getByText("Join channel to send messages")).toHaveCount(
+        2,
+      );
+      previewSurface ??= await page
+        .getByRole("article", { name: "Conversation", exact: true })
+        .getByRole("region", { name: "Channel preview", exact: true })
+        .elementHandle();
       await expect(
         page.getByRole("textbox", { name: "Message #open", exact: true }),
-      ).toHaveAttribute("aria-disabled", "true");
+      ).toHaveCount(0);
       await expect(
         page.getByRole("textbox", { name: "Reply to thread", exact: true }),
-      ).toHaveAttribute("aria-disabled", "true");
+      ).toHaveCount(0);
       await expect(
         page
           .getByRole("complementary", { name: "Channel sidebar" })
           .getByRole("button", { name: "open", exact: true }),
       ).toHaveCount(0);
     }
+    const threadPanel = page.getByRole("complementary", {
+      name: "Thread",
+      exact: true,
+    });
+    const history = threadPanel.getByRole("region", {
+      name: "Thread messages",
+      exact: true,
+    });
+    const invitation = threadPanel.getByRole("region", {
+      name: "Channel preview",
+      exact: true,
+    });
+    await history.evaluate((el) => {
+      el.scrollTop = el.scrollHeight;
+    });
+    await expect
+      .poll(async () => {
+        const last = await history
+          .locator("[data-message-id]")
+          .last()
+          .boundingBox();
+        const overlay = await invitation.boundingBox();
+        return !!last && !!overlay && last.y + last.height <= overlay.y - 20;
+      })
+      .toBe(true);
+    await expect(
+      threadPanel.getByRole("button", { name: "Join", exact: true }),
+    ).toHaveAttribute("data-size", "sm");
+    await threadPanel
+      .getByRole("button", { name: "Join", exact: true })
+      .click();
+    const reply = threadPanel.getByRole("textbox", {
+      name: "Reply to thread",
+      exact: true,
+    });
+    await expect(reply).toBeFocused();
+    await expect(page.getByText("Join channel to send messages")).toHaveCount(
+      0,
+    );
+    await expect(
+      page.getByRole("textbox", { name: "Message #open", exact: true }),
+    ).toBeVisible();
     expect(
       app.report.queries
         .filter(({ filter }) => filter.search)
@@ -194,22 +246,56 @@ test.describe("public search destination", () => {
       name: "Message #open",
       exact: true,
     });
-    await expect(
-      page.getByText(
-        "Read-only preview · You haven’t joined this conversation.",
-      ),
-    ).toBeVisible();
-    await expect(composer).toHaveAttribute("aria-disabled", "true");
+    await expect(page.getByText("Join channel to send messages")).toBeVisible();
+    // Real layout: the invitation overlays history without shortening its
+    // viewport, and the last message can still scroll clear of the invitation.
+    const history = page.getByRole("region", {
+      name: "Channel message history",
+      exact: true,
+    });
+    const notice = page.getByRole("region", {
+      name: "Channel preview",
+      exact: true,
+    });
+    // A short viewport makes this a real scroll-clearance check.
+    await page.setViewportSize({ width: 960, height: 260 });
+    await expect(history.locator("[data-message-id]").last()).toBeVisible();
+    await expect
+      .poll(() => history.evaluate((el) => el.scrollHeight > el.clientHeight))
+      .toBe(true);
+    await history.evaluate((el) => {
+      el.scrollTop = el.scrollHeight;
+    });
+    await expect
+      .poll(async () => {
+        const feed = await history.boundingBox();
+        const overlay = await notice.boundingBox();
+        const last = await history
+          .locator("[data-message-id]")
+          .last()
+          .boundingBox();
+        return (
+          !!feed &&
+          !!overlay &&
+          !!last &&
+          Math.abs(feed.y + feed.height - overlay.y - overlay.height) < 1 &&
+          last.y + last.height <= overlay.y - 20
+        );
+      })
+      .toBe(true);
+    await expect(composer).toHaveCount(0);
     const sidebar = page.getByRole("complementary", {
       name: "Channel sidebar",
     });
     await expect(
       sidebar.getByRole("button", { name: "open", exact: true }),
     ).toHaveCount(0);
-    await button(page, "Join channel").click();
+    await button(page, "Join").click();
     await expect(composer).not.toHaveAttribute("aria-disabled", "true");
     await expect(composer).toBeFocused();
-    await expect(page.getByText(/Read-only preview/)).toHaveCount(0);
+    await expect(page.getByText(/Join channel to send messages/)).toHaveCount(
+      0,
+    );
     await expect(
       sidebar.getByRole("button", { name: "open", exact: true }),
     ).toBeVisible();
@@ -248,9 +334,11 @@ test.describe("public search destination", () => {
       name: "Message #open",
       exact: true,
     });
-    await expect(composer).toHaveAttribute("aria-disabled", "true");
-    await button(page, "Join channel").click();
-    await expect(page.getByText(/Read-only preview/)).toHaveCount(0);
+    await expect(composer).toHaveCount(0);
+    await button(page, "Join").click();
+    await expect(page.getByText(/Join channel to send messages/)).toHaveCount(
+      0,
+    );
     expect(app.report.lifecyclePublications).toHaveLength(1);
     await expect(composer).not.toHaveAttribute("aria-disabled", "true");
     await expect(composer).toBeFocused();

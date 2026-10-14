@@ -23,6 +23,7 @@ pub enum Status {
     Connecting,
     Qr {
         svg: String,
+        uri: String,
     },
     Code {
         code: String,
@@ -338,10 +339,11 @@ async fn run(
             pending,
             auth,
             svg,
+            uri.to_string(),
             connection_started,
         ))
     };
-    let (mut exchange, mut socket, relay_url, pending, mut auth, svg, connection_started) = tokio::select! {
+    let (mut exchange, mut socket, relay_url, pending, mut auth, svg, uri, connection_started) = tokio::select! {
         biased;
         _ = cancel.cancelled() => return Ok(()),
         result = tokio::time::timeout(Duration::from_secs(35), setup) =>
@@ -350,7 +352,7 @@ async fn run(
     // Keep protocol expiry aligned with display, but renew before the transport cap.
     exchange.session.start_source_lifetime();
     let deadline = exchange_deadline(&exchange.session, connection_started);
-    pairing.update(id, Status::Qr { svg });
+    pairing.update(id, Status::Qr { svg, uri });
     exchange_until_deadline(
         ExchangeContext {
             pairing,

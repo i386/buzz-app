@@ -11,7 +11,7 @@ import { afterEach, expect, it, vi } from "vitest";
 import {
   type ChannelLifecycleCapability,
   ChannelLifecycleUnconfirmed,
-} from "../../features/relay/channel-lifecycle";
+} from "../relay/channel-lifecycle";
 import { ChannelJoinNotice } from "./ChannelJoinNotice";
 
 afterEach(cleanup);
@@ -33,8 +33,8 @@ it("offers Join only for a joinable channel on a connection that can send it", (
       onJoin={() => {}}
     />,
   );
-  expect(screen.getByText(/Read-only preview/)).toBeVisible();
-  expect(screen.queryByRole("button", { name: "Join channel" })).toBeNull();
+  expect(screen.getByText(/You’re previewing this channel/)).toBeVisible();
+  expect(screen.queryByRole("button", { name: "Join" })).toBeNull();
   rerender(
     <ChannelJoinNotice
       channelId="open"
@@ -43,7 +43,7 @@ it("offers Join only for a joinable channel on a connection that can send it", (
       onJoin={() => {}}
     />,
   );
-  expect(screen.queryByRole("button", { name: "Join channel" })).toBeNull();
+  expect(screen.queryByRole("button", { name: "Join" })).toBeNull();
   expect(run).not.toHaveBeenCalled();
 });
 
@@ -64,7 +64,7 @@ it("joins once, reports its start, and keeps a failed join retryable", async () 
       onJoin={started}
     />,
   );
-  const button = screen.getByRole("button", { name: "Join channel" });
+  const button = screen.getByRole("button", { name: "Join" });
   fireEvent.click(button);
   fireEvent.click(button);
   expect(run).toHaveBeenCalledOnce();
@@ -78,12 +78,31 @@ it("joins once, reports its start, and keeps a failed join retryable", async () 
   expect(screen.getByRole("alert")).toHaveTextContent(
     "Join may have taken effect, but it is not confirmed yet. Try again to check.",
   );
-  fireEvent.click(screen.getByRole("button", { name: "Join channel" }));
+  fireEvent.click(screen.getByRole("button", { name: "Join" }));
   expect(run).toHaveBeenCalledTimes(2);
   expect(started).toHaveBeenCalledTimes(2);
   expect(screen.queryByRole("alert")).toBeNull();
   await act(async () => settle?.resolve());
-  expect(
-    screen.getByRole("button", { name: "Join channel" }),
-  ).not.toHaveAttribute("aria-disabled", "true");
+  expect(screen.getByRole("button", { name: "Join" })).not.toHaveAttribute(
+    "aria-disabled",
+    "true",
+  );
+});
+
+it("waits for content once per channel and stays visible during refresh", () => {
+  const props = {
+    lifecycle: lifecycle(vi.fn()),
+    joinable: true,
+    onJoin: vi.fn(),
+  };
+  const { rerender } = render(
+    <ChannelJoinNotice {...props} channelId="open" ready={false} />,
+  );
+  expect(screen.queryByRole("button", { name: "Join" })).toBeNull();
+  rerender(<ChannelJoinNotice {...props} channelId="open" ready />);
+  expect(screen.getByRole("button", { name: "Join" })).toBeInTheDocument();
+  rerender(<ChannelJoinNotice {...props} channelId="open" ready={false} />);
+  expect(screen.getByRole("button", { name: "Join" })).toBeInTheDocument();
+  rerender(<ChannelJoinNotice {...props} channelId="other" ready={false} />);
+  expect(screen.queryByRole("button", { name: "Join" })).toBeNull();
 });

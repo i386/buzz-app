@@ -6,18 +6,27 @@ import {
   verify as verifyEd25519,
 } from "node:crypto";
 import { readFileSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 
 // Must match the key and endpoint embedded by the updater-enabled release build (#312).
 const publicKeyBase64 =
   "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDJDQjQ2RDZFMUEwOERFMTEKUldRUjNnZ2FibTIwTE10QkVaMzFyYkZlY0R4ajhmbFBjdncvNVRCYnNpSm9kaFNBaHQzemZlZHkK";
 const endpoint =
   "https://github.com/block/buzz-app/releases/download/preview-feed/latest.json";
-const [command, version, signaturePath, manifestPath] = process.argv.slice(2);
+const [command, version, assetDir, manifestPath, binaryPath, currentPath] =
+  process.argv.slice(2);
 const versionPattern =
   /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)-preview\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/;
 const release = `v${version}`;
-const archive = `Buzz_${version}_aarch64.app.tar.gz`;
-const url = `https://github.com/block/buzz-app/releases/download/${release}/${archive}`;
+// Linux entries are installer-specific: a deb install must never receive an AppImage.
+const assets = {
+  "darwin-aarch64": `Buzz_${version}_aarch64.app.tar.gz`,
+  "windows-x86_64": `Buzz_${version}_x64_unsigned.exe`,
+  "linux-x86_64-deb": `Buzz_${version}_amd64.deb`,
+  "linux-x86_64-appimage": `Buzz_${version}_x86_64.AppImage`,
+};
+const usage =
+  "Usage: preview-feed.mjs generate|verify <version> <asset-dir> <manifest-file> <macos-app-binary-file> [current-manifest-file]";
 
 function previewNumber(value) {
   const match = versionPattern.exec(value);
@@ -42,7 +51,7 @@ function decodeBase64(value) {
   return Buffer.from(value, "base64");
 }
 
-function verifyArtifact(archivePath, binaryPath) {
+function publicKey() {
   const keyLines = decodeBase64(publicKeyBase64)
     .toString("utf8")
     .trimEnd()
@@ -59,7 +68,10 @@ function verifyArtifact(archivePath, binaryPath) {
     format: "der",
     type: "spki",
   });
+  return { key, keyId: keyRecord.subarray(2, 10) };
+}
 
+function verifySignature({ key, keyId }, archivePath, signaturePath) {
   const signedText = decodeBase64(
     readFileSync(signaturePath, "utf8").trim(),
   ).toString("utf8");
@@ -71,11 +83,7 @@ function verifyArtifact(archivePath, binaryPath) {
   const global = decodeBase64(lines[3]);
   assert.equal(record.length, 74);
   assert.equal(global.length, 64);
-  assert.deepEqual(
-    record.subarray(2, 10),
-    keyRecord.subarray(2, 10),
-    "Signing key mismatch",
-  );
+  assert.deepEqual(record.subarray(2, 10), keyId, "Signing key mismatch");
   const message = readFileSync(archivePath);
   const algorithm = record.subarray(0, 2).toString();
   assert.ok(
@@ -102,7 +110,10 @@ function verifyArtifact(archivePath, binaryPath) {
   );
   // CLI 2.11.x signs the trusted comment but does not include a version field.
   // Require version binding when the signer and client move to 2.12.x together.
+}
 
+// The Windows and Linux build jobs check their own installed binaries.
+function verifyMacosBinary() {
   const binary = readFileSync(binaryPath);
   assert.ok(
     binary.includes(Buffer.from(endpoint)),
@@ -114,36 +125,34 @@ function verifyArtifact(archivePath, binaryPath) {
   );
 }
 
-function signature(path) {
-  return readFileSync(path, "utf8").trim();
-}
-
-function validate(manifest, expectedSignature) {
+function validate(manifest, platforms) {
   assert.equal(manifest.version, version);
-  assert.deepEqual(Object.keys(manifest.platforms), ["darwin-aarch64"]);
-  assert.deepEqual(manifest.platforms["darwin-aarch64"], {
-    signature: expectedSignature,
-    url,
-  });
+  assert.deepEqual(manifest.platforms, platforms);
 }
 
 previewNumber(version);
-if (command !== "generate" && command !== "verify") {
-  throw new Error(
-    "Usage: preview-feed.mjs generate|verify <version> <signature-file> <manifest-file> <archive-file> <app-binary-file> [current-manifest-file]",
-  );
-}
-const archivePath = process.argv[6];
-const binaryPath = process.argv[7];
-assert.ok(archivePath && binaryPath, "Archive and app binary are required");
-verifyArtifact(archivePath, binaryPath);
-const expectedSignature = signature(signaturePath);
+if (command !== "generate" && command !== "verify") throw new Error(usage);
+assert.ok(assetDir && manifestPath && binaryPath, usage);
+const key = publicKey();
+const platforms = Object.fromEntries(
+  Object.entries(assets).map(([target, asset]) => {
+    const path = join(assetDir, asset);
+    verifySignature(key, path, `${path}.sig`);
+    return [
+      target,
+      {
+        signature: readFileSync(`${path}.sig`, "utf8").trim(),
+        url: `https://github.com/block/buzz-app/releases/download/${release}/${asset}`,
+      },
+    ];
+  }),
+);
+verifyMacosBinary();
 if (command === "generate") {
-  const currentPath = process.argv[8];
   if (currentPath) {
     const current = JSON.parse(readFileSync(currentPath, "utf8"));
     if (current.version === version) {
-      validate(current, expectedSignature);
+      validate(current, platforms);
       writeFileSync(manifestPath, readFileSync(currentPath, "utf8"));
       process.exit(0);
     }
@@ -153,17 +162,16 @@ if (command === "generate") {
     `${JSON.stringify(
       {
         version,
-        notes: `Buzz ${version} macOS preview`,
+        notes: `Buzz ${version} desktop preview`,
         pub_date: new Date().toISOString(),
-        platforms: { "darwin-aarch64": { signature: expectedSignature, url } },
+        platforms,
       },
       null,
       2,
     )}\n`,
   );
-} else if (command === "verify") {
-  validate(JSON.parse(readFileSync(manifestPath, "utf8")), expectedSignature);
-  const currentPath = process.argv[8];
+} else {
+  validate(JSON.parse(readFileSync(manifestPath, "utf8")), platforms);
   if (currentPath) {
     const current = JSON.parse(readFileSync(currentPath, "utf8"));
     const order = compareVersions(version, current.version);
@@ -176,8 +184,4 @@ if (command === "generate") {
       );
     }
   }
-} else {
-  throw new Error(
-    "Usage: preview-feed.mjs generate|verify <version> <signature-file> <manifest-file> [current-manifest-file]",
-  );
 }

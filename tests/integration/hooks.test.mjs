@@ -665,6 +665,7 @@ test("non-HEAD and deletion pushes do not pretend to test another commit", (t) =
 for (const [input, testFile] of [
   ["src/shared/styles/tokens.css", "src/shared/theme/tokens.test.ts"],
   ["public/appearance-init.js", "src/shared/theme/service.test.ts"],
+  ["vite.config.ts", "browser-host/vite-config.test.mjs"],
 ]) {
   test(`pre-push selects the unit test that reads ${input} directly`, (t) => {
     const f = pushFixture(t, { [input]: "/* changed */\n" });

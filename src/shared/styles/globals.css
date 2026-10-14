@@ -274,39 +274,48 @@
     display: grid;
     grid-template-columns: 1fr;
     grid-template-rows: minmax(0, 1fr);
+    justify-content: end;
     min-width: 0;
     flex: none;
     width: max-content;
     overflow: visible;
+    /* Release resize help once open; preserve the panel's shadow while moving. */
     clip-path: none;
-    /* Release resize help only after expansion; contain content while moving. */
+    visibility: visible;
     transition:
       grid-template-columns var(--duration-settle) ease-in-out,
-      clip-path var(--duration-settle) step-end allow-discrete;
+      clip-path var(--duration-settle) step-end allow-discrete,
+      visibility var(--duration-settle);
   }
   /* Portalled controls may hide outside regions from assistive tech; only the
      shell's own state controls whether this track visually collapses. */
   .shell-navigation[data-sidebar-collapsible]:not([data-sidebar-open]) {
     grid-template-columns: 0fr;
-    clip-path: inset(0);
-    transition-timing-function: ease-in-out, step-start;
+    clip-path: inset(
+      calc(-1 * var(--space-2)) 0 calc(-1 * var(--space-2))
+        calc(-1 * var(--space-2))
+    );
+    visibility: hidden;
+    transition-timing-function: ease-in-out, step-start, ease;
   }
   .shell-navigation[data-sidebar-collapsible] > .shell-navigation-content {
     display: flex;
+    justify-content: flex-end;
     min-width: 0;
   }
   .shell-body {
     @apply relative flex min-h-0 min-w-0 flex-1 pl-0 pr-2 pb-2 sm:pl-0 sm:pr-4 sm:pb-4;
   }
   .shell-content {
-    @apply relative flex h-full min-h-0 min-w-0;
+    @apply relative flex h-full min-h-0 min-w-0 flex-1;
     container-type: inline-size;
   }
   .shell-sidebar,
   .shell-sidebar-default {
     @apply flex min-h-0 shrink-0;
+    /* Keep the surface gap inside the animated sidebar track. */
+    margin-inline-end: var(--space-1);
     /* Coupled to the sidebar's persisted pixel width and resize limits. */
-    border-inline-end: 1px solid var(--border-standard);
     width: 260px;
     min-width: 220px;
     max-width: max(220px, calc(100% - 336px));
@@ -374,14 +383,12 @@
     }
     .shell-navigation[data-expanded="true"] {
       @apply absolute inset-y-0 left-0 z-20 flex;
-      background: var(--surface-panel);
-      box-shadow: var(--elevation-dock);
       max-width: calc(100% - 1rem);
     }
     .shell-navigation .shell-sidebar,
     .shell-navigation .shell-sidebar-default {
       max-width: 220px;
-      margin-right: 0;
+      margin-inline-end: 0;
     }
     .shell-navigation-content > hr {
       display: none;

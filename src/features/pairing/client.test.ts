@@ -9,7 +9,11 @@ function native() {
     account: vi.fn(async () => "a".repeat(64)),
     start: vi.fn<PairingNative["start"]>(async () => {}),
     status: vi.fn(
-      async (): Promise<PairingStatus> => ({ phase: "qr", svg: "fixture" }),
+      async (): Promise<PairingStatus> => ({
+        phase: "qr",
+        svg: "fixture",
+        uri: "fixture",
+      }),
     ),
     confirm: vi.fn(async () => {}),
     deny: vi.fn(async () => {}),

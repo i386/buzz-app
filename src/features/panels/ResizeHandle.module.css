@@ -56,7 +56,7 @@
 }
 @media (hover: hover) and (pointer: fine) {
   .handle:hover::after {
-    opacity: 1;
+    opacity: var(--resize-grip-opacity, 1);
     transform: translate(-50%, -50%) scaleY(1);
   }
   .handle:hover::before {
@@ -68,7 +68,7 @@
 }
 .handle:focus-visible::after,
 .handle[data-resizing]::after {
-  opacity: 1;
+  opacity: var(--resize-grip-opacity, 1);
   transform: translate(-50%, -50%) scaleY(1);
 }
 html[data-keyboard-navigation] .handle::after,

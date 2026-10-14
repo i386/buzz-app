@@ -6,17 +6,17 @@ The **Desktop previews** workflow builds all supported desktop platforms from
 
 - **Apple Silicon macOS:** signed/notarized DMG and a signed updater archive with
   its `.sig`.
-- **Windows x64:** unsigned NSIS `.exe` installer.
-- **Linux x64:** Ubuntu 24.04 `.deb` and AppImage.
-- **Provenance:** `SOURCE_COMMIT` and one `SHA256SUMS` covering all six asset files.
+- **Windows x64:** unsigned NSIS `.exe` installer and its updater `.sig`.
+- **Linux x64:** Ubuntu 24.04 `.deb` and AppImage, each with its updater `.sig`.
+- **Provenance:** `SOURCE_COMMIT` and one `SHA256SUMS` covering all nine asset files.
 
-Publication waits for all three platform jobs and their existing payload checks.
-A failed platform blocks publication and automatic macOS feed promotion; it does
-not publish a macOS-only release. Downloads are checked against each job's
-checksums before assembly. If a job fails, use **Re-run all jobs**, not just failed
-jobs: the run attempt is part of the version, and publication rejects mixed-version
-artifacts. Windows/Linux are manual-install previews, not signed Windows releases
-or evidence of completed desktop acceptance.
+Publication waits for all three platform jobs, their existing payload checks and
+the Windows/Linux updater signatures. A failed platform blocks publication and
+automatic feed promotion; it does not publish a partial release. Downloads are
+checked against each job's checksums before assembly. If a job fails, use
+**Re-run all jobs**, not just failed jobs: the run attempt is part of the version,
+and publication rejects mixed-version artifacts. Windows/Linux previews are not
+Authenticode-signed Windows releases or evidence of completed desktop acceptance.
 
 Runs are scheduled at **00:17, 06:17, 12:17, and 18:17 UTC**. To start one manually:
 
@@ -29,16 +29,29 @@ workflow publishes an Apple-signed/notarized DMG and a separately Tauri-signed
 updater `.app.tar.gz` and `.sig` for Apple Silicon. The updater archive is
 rebuilt from the verified app in the signed DMG; built-in Tauri artifact
 creation remains disabled because this DMG-only build does not emit an updater
-archive. The release automatically promotes each eligible build to the rolling preview
+archive.
+
+Windows and Linux installers are built with the same updater configuration.
+Their jobs never receive the Tauri signing key: each checks that its installed or
+extracted app executables embed the pinned public key and preview endpoint (and,
+on Linux, the deb or AppImage bundle type the updater uses to choose its feed entry),
+then uploads the installers. A separate `updater_signatures` job verifies their
+checksums and Tauri-signs those exact bytes. The updater runs the downloaded NSIS
+installer on Windows (current-user, no elevation), replaces the AppImage in place,
+and installs a deb with `dpkg -i` through `pkexec`, which asks for an
+administrator password.
+
+The release automatically promotes each eligible build to the rolling preview
 feed after the signed prerelease is published and the promotion gate passes.
 This includes scheduled runs and manual builds without `promote_version`.
 An updater-less artifact, invalid signature, or rollback leaves the existing feed
 unchanged, but the promotion job fails and needs investigation. The workflow
 does **not** publish to the legacy `block/buzz` updater. Older installed apps
-cannot use the feed until an updater-enabled build is installed. macOS preview builds
-are built with the updater enabled and check the preview endpoint below.
+cannot use the feed until an updater-enabled build is installed. Preview builds
+for all three platforms are built with the updater enabled and check the preview
+endpoint below.
 
-## macOS preview updater feed (automatic promotion, manual recovery)
+## Preview updater feed (automatic promotion, manual recovery)
 
 The preview endpoint is `https://github.com/block/buzz-app/releases/download/preview-feed/latest.json`.
 This is a dedicated rolling prerelease in `block/buzz-app`, separate from legacy
@@ -47,11 +60,11 @@ repository for a future production channel; this workflow never creates it.
 Neither endpoint is `releases/latest`: versioned builds are prereleases.
 
 **Auto-promotion begins as soon as this workflow lands on `main`.** Install an
-updater-enabled DMG manually first (older installed builds lack the updater),
+updater-enabled build manually first (older installed builds lack the updater),
 and verify its embedded public key and preview endpoint match the release
-configuration. The job checks those values in each candidate binary before
-advertising it, but it cannot validate a live Apple-signed old→new install
-before publishing. For manual recovery or a controlled repromotion, dispatch
+configuration. Those values are checked in each candidate's macOS binary at
+promotion and in the Windows/Linux binaries by their build jobs, but nothing
+validates a live old→new install before publishing. For manual recovery or a controlled repromotion, dispatch
 an existing version from `main`:
 
 ```sh
@@ -66,9 +79,10 @@ distribution. There is no safe way to perform a live old→new check against
 the fixed URL without first exposing a candidate to clients already pointed
 there. Restrict distribution until that check succeeds.
 The release build must embed the same pinned public key and preview endpoint as
-#312; promotion verifies both in the candidate executable. Builds made before
+#312; promotion verifies both in the candidate macOS executable. Builds made before
 that integration are ineligible even if their updater archive and signature
-exist. The promotion gate downloads the archive and signature, verifies the
+exist, as are builds without Windows/Linux signatures. The promotion gate
+downloads every updater artifact and signature, verifies the
 Minisign archive and trusted-comment signatures against the client's pinned
 key. CLI 2.11.x signs the archive and trusted comment but does not embed an
 authenticated version. The gate accepts that format and verifies both
@@ -80,8 +94,10 @@ risk until a coordinated CLI/updater 2.12.x bump emits `version:` and enables
 the client flag alone: 2.11.x signatures would fail. A signature mismatch
 fails before the rolling manifest is replaced.
 
-The job builds the `darwin-aarch64` Tauri manifest with the signature from that
-release and an immutable versioned asset URL, refuses full-SemVer rollback and
+The job builds the Tauri manifest with each artifact's signature from that
+release and an immutable versioned asset URL: `darwin-aarch64`, `windows-x86_64`,
+`linux-x86_64-deb` and `linux-x86_64-appimage`. Linux has no generic entry, so
+a deb install never receives an AppImage. The job refuses full-SemVer rollback and
 changed same-version metadata, and replaces the rolling manifest last. The
 archive and signature remain on the versioned release. The job reads back
 and compares the GitHub API asset; this is not evidence of public endpoint
@@ -90,7 +106,7 @@ promotion. GitHub asset replacement can briefly return 404 while the old asset
 is replaced. Promotion is serialized with the release workflow, and a failed
 upload needs investigation before the next scheduled run.
 Recover from a broken feed by promoting a higher tested build; for key loss or
-client failure, distribute a manually installed Apple-signed DMG. Do not assume
+client failure, distribute a manually installed build (an Apple-signed DMG on macOS). Do not assume
 rolling back a signed archive can undo an installed update.
 
 ## Preview retention
@@ -164,7 +180,7 @@ gh workflow run release.yml --repo block/buzz-app \
 
 Scheduled runs and dispatches without this switch build and publish all three
 platforms. A `promote_version` recovery run skips all platform builds and only
-updates the macOS feed. Candidate-only runs remain artifact-only and can run from
+updates the feed. Candidate-only runs remain artifact-only, are built without the updater, and can run from
 a feature branch, without signing credentials or publication. They use the same
 preview version, source commit and repository toolchain pins; they never
 use legacy Buzz's sidecars, updater feed, application identifier, or signing
@@ -206,6 +222,6 @@ separator assertion and model-auth recovery). Re-run the existing manual Windows
 CI lane on the candidate and diagnose any surviving failures separately from
 installer success. The packaging jobs do not waive them or enable local-agent
 hosting. Builderlab/NIP-FI admission remains a separate product limitation.
-Windows/Linux installers are published as previews by normal release runs, but
-remain outside the auto-updater feed. Publishing a preview does not waive the
-manual acceptance checks above.
+Windows/Linux installers published by normal release runs are in the preview
+updater feed. Publishing or promoting a preview does not waive the manual
+acceptance checks above, including an old→new automatic update on each platform.

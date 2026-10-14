@@ -211,8 +211,7 @@ test("row menu moves and removes a channel optimistically, retaining keyboard na
     await sortHeld.promise;
     await route.continue();
   });
-  const sorted = page.waitForResponse("**/sidebar-sort");
-  const moved = page.waitForResponse("**/sidebar-star");
+  let sorted, moved;
   try {
     const sortMenu = await openSort();
     await sortMenu.getByRole("menuitemradio", { name: "Recent" }).click();
@@ -230,6 +229,10 @@ test("row menu moves and removes a channel optimistically, retaining keyboard na
     await page.keyboard.press("Escape");
     await page.keyboard.press("Escape");
   } finally {
+    // Both writes are held behind the sort gate. Start their response waits
+    // immediately before release, not before the pending UI interactions.
+    sorted = page.waitForResponse("**/sidebar-sort");
+    moved = page.waitForResponse("**/sidebar-star");
     sortHeld.resolve();
   }
   for (const response of [await sorted, await moved]) {

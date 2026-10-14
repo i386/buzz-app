@@ -52,5 +52,10 @@ export interface BuzzClient {
   remember(slug: string, body: string, after: number): Promise<void>;
 }
 
-/** Where the agent is working, so tools can default to it. */
-export type Context = Readonly<{ channel?: string; root?: string }>;
+/** Where the agent is working, so tools can default to it. `topLevel` keeps
+ * this channel's messages out of threads. */
+export type Context = Readonly<{
+  channel?: string;
+  root?: string;
+  topLevel?: boolean;
+}>;

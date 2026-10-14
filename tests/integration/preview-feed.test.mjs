@@ -1,5 +1,11 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import {
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import {
   generateKeyPairSync,
   sign as signEd25519,
@@ -41,19 +47,25 @@ function fixture(dir, version = "0.0.0-preview.22.1") {
     localScript,
     readFileSync(script, "utf8").replace(publicKeyBase64, encodedKey),
   );
-  const archive = join(dir, "archive.tar.gz");
+  const assetDir = join(dir, "assets");
+  mkdirSync(assetDir);
+  const installers = [
+    `Buzz_${version}_aarch64.app.tar.gz`,
+    `Buzz_${version}_x64_unsigned.exe`,
+    `Buzz_${version}_amd64.deb`,
+    `Buzz_${version}_x86_64.AppImage`,
+  ].map((name) => join(assetDir, name));
+  const [archive] = installers;
   const binary = join(dir, "buzz-foundation");
-  const sig = join(dir, "archive.sig");
+  const sig = `${archive}.sig`;
   const manifest = join(dir, "manifest.json");
-  writeFileSync(archive, "fixture archive bytes");
-  writeFileSync(binary, `compiled: ${endpoint} ${encodedKey}`);
-  function sign(versionField = "", signingKey = privateKey) {
+  function signFile(file, versionField = "", signingKey = privateKey) {
     const record = Buffer.concat([
       Buffer.from("ED"),
       keyId,
       signEd25519(
         null,
-        createHash("blake2b512").update(readFileSync(archive)).digest(),
+        createHash("blake2b512").update(readFileSync(file)).digest(),
         signingKey,
       ),
     ]);
@@ -64,27 +76,42 @@ function fixture(dir, version = "0.0.0-preview.22.1") {
       signingKey,
     );
     const text = `untrusted comment: test signature\n${record.toString("base64")}\ntrusted comment: ${comment}\n${global.toString("base64")}\n`;
-    writeFileSync(sig, `${Buffer.from(text).toString("base64")}\n`);
+    writeFileSync(`${file}.sig`, `${Buffer.from(text).toString("base64")}\n`);
   }
-  sign();
+  for (const installer of installers) {
+    writeFileSync(installer, `fixture bytes: ${installer}`);
+    signFile(installer);
+  }
+  writeFileSync(binary, `compiled: ${endpoint} ${encodedKey}`);
+  const sign = (...options) => signFile(archive, ...options);
   const args = (action, current) => [
     localScript,
     action,
     version,
-    sig,
+    assetDir,
     manifest,
-    archive,
     binary,
     ...(current ? [current] : []),
   ];
   const execute = (action, current) =>
     spawnSync(process.execPath, args(action, current), { encoding: "utf8" });
-  return { archive, binary, sig, manifest, sign, execute };
+  return {
+    assetDir,
+    installers,
+    archive,
+    binary,
+    sig,
+    manifest,
+    sign,
+    execute,
+  };
 }
 
 test("preview candidate requires verified archive and updater-enabled binary with CLI 2.11.x signatures", () => {
   const dir = mkdtempSync(join(tmpdir(), "preview-feed-"));
-  const { archive, binary, sig, manifest, sign, execute } = fixture(dir);
+  const { assetDir, archive, binary, sig, manifest, sign, execute } =
+    fixture(dir);
+  const archiveBytes = readFileSync(archive);
   const validSignature = readFileSync(sig, "utf8").trim();
   assert.equal(execute("generate").status, 0);
   const data = JSON.parse(readFileSync(manifest, "utf8"));
@@ -109,12 +136,12 @@ test("preview candidate requires verified archive and updater-enabled binary wit
   writeFileSync(manifest, JSON.stringify(data));
   assert.notEqual(execute("verify").status, 0);
   assert.notEqual(
-    run("generate", "0.0.0-preview.bad", sig, manifest, archive, binary).status,
+    run("generate", "0.0.0-preview.bad", assetDir, manifest, binary).status,
     0,
   );
   writeFileSync(archive, "tampered archive");
   assert.match(execute("verify").stderr, /Archive signature invalid/);
-  writeFileSync(archive, "fixture archive bytes");
+  writeFileSync(archive, archiveBytes);
   const otherKey = generateKeyPairSync("ed25519").privateKey;
   sign(undefined, otherKey);
   assert.match(execute("verify").stderr, /Archive signature invalid/);
@@ -137,6 +164,37 @@ test("preview candidate requires verified archive and updater-enabled binary wit
   sign();
   writeFileSync(binary, `compiled: ${endpoint}`);
   assert.match(execute("verify").stderr, /updater public key/);
+});
+
+test("preview feed signs every desktop installer into its updater target", () => {
+  const dir = mkdtempSync(join(tmpdir(), "preview-platforms-"));
+  const { installers, manifest, execute } = fixture(dir);
+  assert.equal(execute("generate").status, 0, execute("generate").stderr);
+  const { platforms } = JSON.parse(readFileSync(manifest, "utf8"));
+  const targets = [
+    "darwin-aarch64",
+    "windows-x86_64",
+    "linux-x86_64-deb",
+    "linux-x86_64-appimage",
+  ];
+  // Linux has no generic target, so a deb install cannot select the AppImage.
+  assert.deepEqual(Object.keys(platforms), targets);
+  targets.forEach((target, index) => {
+    const name = installers[index].split("/").at(-1);
+    assert.deepEqual(platforms[target], {
+      signature: readFileSync(`${installers[index]}.sig`, "utf8").trim(),
+      url: `https://github.com/block/buzz-app/releases/download/v0.0.0-preview.22.1/${name}`,
+    });
+  });
+  const [, windows, deb] = installers;
+  const data = JSON.parse(readFileSync(manifest, "utf8"));
+  delete data.platforms["windows-x86_64"];
+  writeFileSync(manifest, JSON.stringify(data));
+  assert.notEqual(execute("verify").status, 0);
+  writeFileSync(deb, "tampered deb");
+  assert.match(execute("generate").stderr, /Archive signature invalid/);
+  rmSync(`${windows}.sig`);
+  assert.match(execute("generate").stderr, /ENOENT/);
 });
 
 test("preview rollback compares the complete canonical SemVer without number rounding", () => {
@@ -174,7 +232,12 @@ test("successful preview publication promotes automatically; manual recovery byp
   );
   const { build, publish, promote_preview: promotion } = workflow.jobs;
   assert.match(build.if, /!inputs\.promote_version/);
-  assert.deepEqual(publish.needs, ["build", "windows", "linux"]);
+  assert.deepEqual(publish.needs, [
+    "build",
+    "windows",
+    "linux",
+    "updater_signatures",
+  ]);
   assert.deepEqual(promotion.needs, ["build", "publish"]);
   assert.match(promotion.if, /!cancelled\(\)/);
   assert.match(promotion.if, /!inputs\.candidates/);

@@ -5,6 +5,7 @@ import { activityTarget } from "../../features/agents/activity-target";
 import { useChannelNavigation } from "../../features/channel-navigation/ChannelNavigationState";
 import { useConversationTabs } from "./useConversationTabs";
 import tabStyles from "./ChannelTabs.module.css";
+import panelStyles from "../../features/panels/Panels.module.css";
 import { Avatar } from "../../shared/design-system/ui/Avatar";
 import { useReturnHighlight } from "../../features/messages/use-return-highlight";
 import { ChannelBody } from "./ChannelBody";
@@ -19,7 +20,7 @@ import { Button } from "../../shared/design-system/ui/Button";
 import { IconButton } from "../../shared/design-system/ui/IconButton";
 import { ChannelHeaderMenu } from "./ChannelHeaderMenu";
 import { ChannelSettingsPanel } from "./ChannelSettingsPanel";
-import { ChannelJoinNotice } from "./ChannelJoinNotice";
+import { ChannelJoinNotice } from "../../features/messages/ChannelJoinNotice";
 import { ChannelLifecycleActions } from "./ChannelLifecycleActions";
 import type { PageNavigation } from "../../features/navigation/service";
 import type { Navigation } from "../../features/navigation/controller";
@@ -193,7 +194,10 @@ function ChannelWorkspace({
     channelId: string;
     navigation: PageNavigation | undefined;
   }>();
+  const [joinNoticeHeight, setJoinNoticeHeight] = useState(0);
+  const [contentReadyChannel, setContentReadyChannel] = useState<string>();
   const [composerFocus, setComposerFocus] = useState(0);
+  const historyContainer = useRef<HTMLElement>(null);
   // A visit applied by a header opening must not take that opening's focus.
   const [preservedVisit, setPreservedVisit] = useState<PageNavigation>();
   // A started join focuses the composer when membership makes it writable,
@@ -314,6 +318,19 @@ function ChannelWorkspace({
     !joinedRequest &&
     !!queries.channels.resolve &&
     resolved?.request !== navigation;
+  // Thread navigation revalidates access, but should not tear down the
+  // already-visible preview in this channel while that lookup is pending.
+  // Navigation can also briefly omit its request during the route handoff.
+  const visiblePreview = useRef<{
+    channelId: string;
+    queries: RelaySession;
+  }>(undefined);
+  const previewAvailable =
+    resolved?.request === navigation
+      ? resolved?.available
+      : !cached &&
+        visiblePreview.current?.channelId === requestedChannel &&
+        visiblePreview.current?.queries === queries;
   // Lifecycle completion must not reopen retained archived/hidden membership
   // through the mounted workspace's saved selection or first-channel fallback.
   const emptyDestination =
@@ -325,11 +342,20 @@ function ChannelWorkspace({
       ? (channels.find((channel) => channel.id === requestedChannel) ??
         // Sidebar visibility is not access: retain a joined archived selection.
         list.channels.find((channel) => channel.id === requestedChannel) ??
-        (resolved?.request === navigation && resolved?.available
+        (previewAvailable
           ? queries.channels.get?.(requestedChannel)
           : undefined))
-      : (channels.find((channel) => channel.id === selected) ??
+      : ((!navigation && !cached && visiblePreview.current?.queries === queries
+          ? queries.channels.get?.(visiblePreview.current.channelId)
+          : undefined) ??
+        channels.find((channel) => channel.id === selected) ??
         channels.find((item) => item.channelType !== "session"));
+  useLayoutEffect(() => {
+    visiblePreview.current =
+      current?.readOnly && !current.cached && !cached
+        ? { channelId: current.id, queries }
+        : undefined;
+  });
   // Sidebar routing can update the same mounted page. Keep its saved default
   // aligned with the resolved conversation, not only page-local clicks.
   useEffect(() => {
@@ -634,21 +660,6 @@ function ChannelWorkspace({
   const returnFocus = useRef<
     { trigger: HTMLElement; channelId: string | undefined } | undefined
   >(undefined);
-  useLayoutEffect(() => {
-    const pending = returnFocus.current;
-    if (!pending) return;
-    if (pending.channelId !== currentId || !pending.trigger.isConnected) {
-      returnFocus.current = undefined;
-      return;
-    }
-    // The close commit gets one focus handoff, never a deferred request that
-    // can override a later, unrelated tab selection.
-    returnFocus.current = undefined;
-    if (pending.trigger.closest('[inert], [hidden], [aria-hidden="true"]'))
-      return;
-    if (!document.querySelector('dialog[open], [aria-modal="true"]'))
-      pending.trigger.focus({ preventScroll: true });
-  });
   const secondary = useConversationTabs({
     state: tabState,
     relay,
@@ -690,6 +701,22 @@ function ChannelWorkspace({
         !cached &&
         entry.panel.channelMenu.eligible(current, queries)
       ),
+  });
+  // The page's thread opener wins after the tab owner restores its fallback.
+  useLayoutEffect(() => {
+    const pending = returnFocus.current;
+    if (!pending) return;
+    if (pending.channelId !== currentId || !pending.trigger.isConnected) {
+      returnFocus.current = undefined;
+      return;
+    }
+    // The close commit gets one focus handoff, never a deferred request that
+    // can override a later, unrelated tab selection.
+    returnFocus.current = undefined;
+    if (pending.trigger.closest('[inert], [hidden], [aria-hidden="true"]'))
+      return;
+    if (!document.querySelector('dialog[open], [aria-modal="true"]'))
+      pending.trigger.focus({ preventScroll: true });
   });
   const {
     open,
@@ -1092,85 +1119,110 @@ function ChannelWorkspace({
   const body = (
     <SessionColumn enabled={flatSession}>
       <MessageManagementStatus />
-      {flatSession &&
-      current &&
-      navigation &&
-      requestedMessage &&
-      exact &&
-      !exact.inTimeline ? (
-        <SessionMessageTarget
-          key={`${current.id}:${requestedMessage}`}
-          session={queries}
-          scope={scope}
-          channelId={current.id}
-          messageId={requestedMessage}
-          navigation={navigation}
-          extensions={extensions}
-          onOpenLink={openLink}
-          canOpenLink={canOpenLink}
-          onLatest={() => select(current.id)}
-          onRetry={() => {
-            void navigator?.retry();
-          }}
-        />
-      ) : current ? (
-        <ChannelBody
-          viewer={viewer}
-          extensions={extensions}
-          key={current.id}
-          queries={queries}
-          scope={scope}
-          channelId={current.id}
-          cached={cached}
-          navigation={
-            flatSession || !requestedMessage || exact?.inTimeline
-              ? navigation
-              : undefined
-          }
-          onOpenLink={openLink}
-          canOpenLink={canOpenLink}
-          onOpenThread={flatSession ? undefined : openThread}
-          onOpenMediaReview={openMediaReview}
-          revealMessageId={sent?.channelId === current.id ? sent.id : undefined}
-        />
-      ) : (
-        <div
-          className={styles.empty}
-          data-buzz-launch-pending={
-            resolving && !navigation?.signal.aborted ? "required" : undefined
-          }
-        >
-          {resolving
-            ? "Checking conversation access…"
-            : "Select a channel to read it."}
-        </div>
-      )}
-      {current?.readOnly && !current.cached && (
-        <ChannelJoinNotice
-          key={`join:${current.id}`}
-          channelId={current.id}
-          lifecycle={queries.channelLifecycle}
-          joinable={
-            !current.archived &&
-            (current.channelType === "stream" ||
-              current.channelType === "forum")
-          }
-          onJoin={() => setJoiningChannel(current.id)}
-        />
-      )}
+      <section
+        data-channel-history
+        aria-label="Channel history"
+        tabIndex={-1}
+        ref={historyContainer}
+        className={`relative flex min-h-0 flex-col${current ? " flex-1" : ""}`}
+      >
+        {flatSession &&
+        current &&
+        navigation &&
+        requestedMessage &&
+        exact &&
+        !exact.inTimeline ? (
+          <SessionMessageTarget
+            key={`${current.id}:${requestedMessage}`}
+            session={queries}
+            scope={scope}
+            channelId={current.id}
+            messageId={requestedMessage}
+            navigation={navigation}
+            extensions={extensions}
+            onOpenLink={openLink}
+            canOpenLink={canOpenLink}
+            onLatest={() => select(current.id)}
+            onRetry={() => {
+              void navigator?.retry();
+            }}
+          />
+        ) : current ? (
+          <ChannelBody
+            onContentReady={setContentReadyChannel}
+            viewer={viewer}
+            extensions={extensions}
+            key={current.id}
+            queries={queries}
+            scope={scope}
+            channelId={current.id}
+            cached={cached}
+            navigation={
+              flatSession || !requestedMessage || exact?.inTimeline
+                ? navigation
+                : undefined
+            }
+            onOpenLink={openLink}
+            canOpenLink={canOpenLink}
+            onOpenThread={flatSession ? undefined : openThread}
+            onOpenMediaReview={openMediaReview}
+            revealMessageId={
+              sent?.channelId === current.id ? sent.id : undefined
+            }
+          />
+        ) : (
+          <div
+            className={styles.empty}
+            data-buzz-launch-pending={
+              resolving && !navigation?.signal.aborted ? "required" : undefined
+            }
+          >
+            {resolving
+              ? "Checking conversation access…"
+              : "Select a channel to read it."}
+          </div>
+        )}
+        {current?.readOnly && !current.cached && (
+          <ChannelJoinNotice
+            key={`join:${current.id}`}
+            ready={contentReadyChannel === current.id}
+            channelId={current.id}
+            lifecycle={queries.channelLifecycle}
+            joinable={
+              !current.archived &&
+              (current.channelType === "stream" ||
+                current.channelType === "forum")
+            }
+            onJoin={() => setJoiningChannel(current.id)}
+            onHeightChange={setJoinNoticeHeight}
+          />
+        )}
+      </section>
       {!cached && (
         <LiveStatus
           live={queries.live}
           channelId={current?.id}
           partialRoster={list.coverage === "partial"}
-          // Retry removes this focused control. Reuse the composer’s
-          // explicit focus handoff instead of relying on browser Tab memory.
+          // Retry removes this control; previews have no composer.
           onRetry={
-            current ? () => setComposerFocus((value) => value + 1) : undefined
+            current
+              ? () => {
+                  if (current.readOnly && !current.cached) {
+                    const history = historyContainer.current;
+                    const target =
+                      history?.querySelector<HTMLElement>(
+                        "[data-message-scroller]",
+                      ) ?? history;
+                    target?.focus({ preventScroll: true });
+                  } else {
+                    setComposerFocus((value) => value + 1);
+                  }
+                }
+              : undefined
           }
         />
       )}
-      {current && (
+      {current && (!current.readOnly || current.cached) && (
         <MessageComposer
           sessionConversation={current.channelType === "session"}
           extensions={extensions}
@@ -1185,7 +1237,8 @@ function ChannelWorkspace({
               "preserve" &&
             !current.readOnly &&
             !requestedMessage &&
-            !requestedThread
+            !requestedThread &&
+            !routedThread
           }
           onOpenLink={openLink}
           canOpenLink={canOpenLink}
@@ -1241,6 +1294,14 @@ function ChannelWorkspace({
         {/* biome-ignore lint/a11y/noStaticElementInteractions: file-drop fallback; the composer also provides a keyboard-accessible picker. */}
         <div
           className={`${styles.conversation}${flatSession ? ` ${styles.sessionConversation}` : ""}`}
+          style={
+            {
+              "--channel-preview-inset":
+                current?.readOnly && !current.cached
+                  ? `calc(${joinNoticeHeight}px + var(--space-3))`
+                  : "0px",
+            } as React.CSSProperties
+          }
           data-attachment-drop-zone=""
           onDragOver={rejectUnhandledFileDrop}
           onDrop={rejectUnhandledFileDrop}
@@ -1397,30 +1458,32 @@ function ChannelWorkspace({
                             );
                           }}
                         />
-                        {current && (
-                          <IconButton
-                            ref={splitTrigger}
-                            data-tab-pane-toggle=""
-                            size="toolbar"
-                            aria-label="Toggle tab pane"
-                            title={
-                              showingChannelPanel
-                                ? "Close tab pane"
-                                : "Open tab pane"
-                            }
-                            aria-expanded={!!showingChannelPanel}
-                            disabled={!hasChannelPanel}
-                            focusableWhenDisabled
-                            onClick={() =>
-                              tabState.setPaneOpen(!showingChannelPanel)
-                            }
-                            icon={
-                              <SidebarRightIcon
-                                size="1rem"
-                                aria-hidden="true"
-                              />
-                            }
-                          />
+                        {current && !showingChannelPanel && (
+                          <span className={panelStyles.paneToggle}>
+                            <IconButton
+                              ref={splitTrigger}
+                              data-tab-pane-toggle=""
+                              size="toolbar"
+                              aria-label="Toggle tab pane"
+                              title={
+                                showingChannelPanel
+                                  ? "Close tab pane"
+                                  : "Open tab pane"
+                              }
+                              aria-expanded={!!showingChannelPanel}
+                              disabled={!hasChannelPanel}
+                              focusableWhenDisabled
+                              onClick={() =>
+                                tabState.setPaneOpen(!showingChannelPanel)
+                              }
+                              icon={
+                                <SidebarRightIcon
+                                  size="1rem"
+                                  aria-hidden="true"
+                                />
+                              }
+                            />
+                          </span>
                         )}
                       </>
                     }
@@ -1489,6 +1552,19 @@ function ChannelWorkspace({
               >
                 <PanelWorkspace
                   key={currentId}
+                  actions={
+                    <IconButton
+                      data-tab-pane-toggle=""
+                      data-highlight-expanded="false"
+                      variant="subtle"
+                      size="toolbar"
+                      aria-label="Toggle tab pane"
+                      title="Close tab pane"
+                      aria-expanded={true}
+                      onClick={secondary.closePane}
+                      icon={<SidebarRightIcon size="1rem" aria-hidden="true" />}
+                    />
+                  }
                   drag={secondary.drag.side}
                   value={selectedTab}
                   focusOnMount={

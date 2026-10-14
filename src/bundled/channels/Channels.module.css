@@ -558,6 +558,15 @@
     box-shadow: var(--elevation-dock);
   }
 }
+/* The shell's space-1 gutter follows the sidebar. Center the existing hit
+   target in that gutter without changing its width or the sidebar's geometry. */
+.sidebarResizeHandle[aria-orientation="vertical"] {
+  --resize-grip-opacity: 0.5;
+  translate: calc(-1 * var(--space-1) / 2) 0;
+}
+.sidebarResizeHandle[aria-orientation="vertical"]::after {
+  left: 50%;
+}
 /* AppShell uses the same physical breakpoint for navigation and resizing. */
 @media (max-width: 650px) {
   .board,

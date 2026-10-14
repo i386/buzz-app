@@ -54,6 +54,7 @@ export function PairingSettings({
   const [manualOrigin, setManualOrigin] = useState<string>();
   const [reading, setReading] = useState(false);
   const [error, setError] = useState<string>();
+  const [copied, setCopied] = useState<{ uri: string; failed: boolean }>();
   const [relay, setRelay] = useState(() =>
     client.selected ? communityDestination(client.selected).url : "",
   );
@@ -99,6 +100,14 @@ export function PairingSettings({
       if (attempt === lifetime.current) setError(String(error));
     } finally {
       if (attempt === lifetime.current) setReading(false);
+    }
+  }
+  async function copy(uri: string) {
+    try {
+      await navigator.clipboard.writeText(uri);
+      setCopied({ uri, failed: false });
+    } catch {
+      setCopied({ uri, failed: true });
     }
   }
   function start() {
@@ -179,11 +188,15 @@ export function PairingSettings({
       </p>
       <div className="w-full [container-type:inline-size]">
         <p aria-live="polite" className="sr-only">
-          {state.phase === "code"
-            ? `Verification code ${state.code.split("").join(" ")}. ${legacy ? "Confirm the matching code." : "Enter this code on your phone."}`
-            : done
-              ? "Your phone is paired."
-              : ""}
+          {state.phase === "qr" && copied?.uri === state.uri
+            ? copied.failed
+              ? "Couldn’t copy the pairing code."
+              : "Pairing code copied."
+            : state.phase === "code"
+              ? `Verification code ${state.code.split("").join(" ")}. ${legacy ? "Confirm the matching code." : "Enter this code on your phone."}`
+              : done
+                ? "Your phone is paired."
+                : ""}
         </p>
         <div className="flex flex-col items-stretch gap-6 p-6 [@container(min-width:46rem)]:flex-row [@container(min-width:46rem)]:gap-6 [@container(min-width:46rem)]:p-12">
           <div className="flex w-64 max-w-full shrink-0 flex-col gap-3 self-center [@container(min-width:46rem)]:self-start">
@@ -364,6 +377,20 @@ export function PairingSettings({
                 </>
               )}
             </div>
+            {available && (
+              // Reserve the slot in every phase so the steps never shift.
+              <div className="flex min-h-10 flex-col">
+                {state.phase === "qr" && (
+                  <Button onClick={() => void copy(state.uri)}>
+                    {copied?.uri !== state.uri
+                      ? "Copy pairing code"
+                      : copied.failed
+                        ? "Couldn’t copy. Try again"
+                        : "Copied"}
+                  </Button>
+                )}
+              </div>
+            )}
           </div>
           <ol
             aria-label="Pairing steps"

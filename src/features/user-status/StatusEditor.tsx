@@ -11,6 +11,7 @@ import { FieldButton } from "../../shared/design-system/ui/FieldButton";
 import { StatusExpiration } from "./StatusExpiration";
 import { InputGroup } from "../../shared/design-system/ui/InputGroup";
 import { Dialog } from "../../shared/design-system/ui/Dialog";
+import { NavigationItem } from "../../shared/design-system/ui/NavigationItem";
 import { Button } from "../../shared/design-system/ui/Button";
 import { IconButton } from "../../shared/design-system/ui/IconButton";
 import {
@@ -243,8 +244,8 @@ export function StatusEditor({
               <span className="text-label-sm text-subtle">Quick statuses</span>
               <div className={styles.choices}>
                 {choices.map(([icon, label]) => (
-                  <Button
-                    variant="ghost"
+                  <NavigationItem
+                    variant="option"
                     key={label}
                     type="button"
                     onClick={() => {
@@ -252,14 +253,13 @@ export function StatusEditor({
                       setText(label);
                       message.current?.focus();
                     }}
-                  >
-                    <span className={styles.choiceContent}>
+                    icon={
                       <span aria-hidden="true" className="text-body-lg">
                         {icon}
                       </span>
-                      {label}
-                    </span>
-                  </Button>
+                    }
+                    label={label}
+                  />
                 ))}
               </div>
             </div>

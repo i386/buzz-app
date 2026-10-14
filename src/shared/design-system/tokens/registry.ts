@@ -1423,6 +1423,11 @@ export const MOTION = [
 
 export const ELEVATION = [
   {
+    token: "shadow-panel",
+    variable: "--shadow-panel",
+    use: "Workspace panels: translucent contour and subtle lift; a quiet light rim in dark mode.",
+  },
+  {
     token: "shadow-xs",
     variable: "--shadow-xs",
     use: "The default lift: a selected pill, a small raised control.",

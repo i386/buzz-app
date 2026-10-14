@@ -100,7 +100,7 @@ it.each([true, false])(
     const native = {
       account: vi.fn(async () => viewer),
       start: vi.fn<PairingNative["start"]>(async () => {
-        status = { phase: "qr", svg: "<svg/>" };
+        status = { phase: "qr", svg: "<svg/>", uri: "nostrpair://fixture" };
       }),
       status: vi.fn(async () => status),
       cancel: vi.fn(
@@ -180,7 +180,7 @@ it.each(["uncertain", "cancelled"] as const)(
     const native = {
       account: vi.fn(async () => viewer),
       start: vi.fn<PairingNative["start"]>(async () => {
-        status = { phase: "qr", svg: "<svg/>" };
+        status = { phase: "qr", svg: "<svg/>", uri: "nostrpair://fixture" };
       }),
       status: vi.fn(async () => status),
       cancel: vi.fn(
@@ -252,6 +252,77 @@ it.each(["uncertain", "cancelled"] as const)(
     ]);
   },
 );
+
+it("copies the pairing code shown in the current QR", async () => {
+  vi.useFakeTimers();
+  vi.stubGlobal("matchMedia", () => ({
+    matches: false,
+    addEventListener() {},
+    removeEventListener() {},
+  }));
+  const writeText = vi
+    .fn<(text: string) => Promise<void>>()
+    .mockResolvedValueOnce(undefined)
+    .mockRejectedValueOnce(new Error("denied"));
+  Object.defineProperty(navigator, "clipboard", {
+    configurable: true,
+    value: { writeText },
+  });
+  const viewer = "a".repeat(64);
+  const snapshot: ClientSnapshot = {
+    status: "ready",
+    relayAvailable: true,
+    viewer,
+    selected: "https://community.example",
+    profile: { name: "", picture: "" },
+    memberships: [],
+  };
+  let status: PairingStatus = {
+    phase: "qr",
+    svg: "<svg/>",
+    uri: "nostrpair://first",
+  };
+  const native = {
+    account: vi.fn(async () => viewer),
+    start: vi.fn(async () => {}),
+    status: vi.fn(async () => status),
+    confirm: vi.fn(async () => {}),
+    deny: vi.fn(async () => {}),
+    cancel: vi.fn(async (): Promise<PairingStatus> => ({ phase: "cancelled" })),
+  } satisfies PairingNative;
+  render(
+    <PairingSettings
+      communities={{ snapshot: () => snapshot, subscribe: () => () => {} }}
+      active={() => true}
+      available
+      native={native}
+    />,
+  );
+  await act(async () => {});
+  await act(async () => {
+    fireEvent.click(screen.getByRole("button", { name: "Copy pairing code" }));
+  });
+  expect(writeText).toHaveBeenLastCalledWith("nostrpair://first");
+  expect(screen.getByRole("button", { name: "Copied" })).toBeTruthy();
+
+  status = { phase: "qr", svg: "<svg/>", uri: "nostrpair://second" };
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(400);
+  });
+  await act(async () => {
+    fireEvent.click(screen.getByRole("button", { name: "Copy pairing code" }));
+  });
+  expect(writeText).toHaveBeenLastCalledWith("nostrpair://second");
+  expect(
+    screen.getByRole("button", { name: "Couldn’t copy. Try again" }),
+  ).toBeTruthy();
+
+  status = { phase: "code", code: "123456", codeEntry: true };
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(400);
+  });
+  expect(screen.queryByRole("button", { name: /cop/i })).toBeNull();
+});
 
 it("rejects a legacy mismatch and requires explicit retry", async () => {
   vi.useFakeTimers();

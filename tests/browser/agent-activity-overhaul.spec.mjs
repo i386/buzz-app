@@ -256,6 +256,9 @@ test("message activity opens a grouped preview and profile Activity without losi
       ),
   ).toBe(true);
   await page.setViewportSize({ width: 1440, height: 950 });
+  // The earlier thread click leaves the pointer where the 800px bubble lands,
+  // so the browser may already count it as inside. Enter from outside.
+  await page.mouse.move(0, 0);
   await bubble.hover();
   const popup = page.getByRole("dialog", {
     name: "Agent activity",

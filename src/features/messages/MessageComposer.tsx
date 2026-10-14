@@ -1538,6 +1538,11 @@ function Composer({
                     )
               }
               data-single-emoji={largeEmojiDraft || undefined}
+              data-emoji-images-only={
+                (largeEmojiDraft &&
+                  /^\s*(?::[a-z0-9_-]{1,64}:\s*)+$/i.test(draft)) ||
+                undefined
+              }
               // Choosing this conversation's tab resumes typing here.
               data-tab-focus=""
               maxLength={16000}

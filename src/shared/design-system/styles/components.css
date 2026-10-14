@@ -497,8 +497,8 @@
   }
 
   /* A panel is the default opaque reading surface over the atmospheric
-     backdrop. Its border and threshold shadow arrive together: taking only
-     bg-panel would lose the boundary that lets it sit above the gradient. */
+     backdrop. A transparent border reserves its geometry; shadow-panel supplies
+     the shared translucent contour and elevation above the gradient. */
   /* One set of declarations, two selectors.
 
      A dockview group *is* a Panel — it is the movable, independently legible
@@ -518,10 +518,10 @@
     min-width: 0;
     min-height: 0;
     overflow: hidden;
-    border: 1px solid var(--border-standard);
-    border-radius: var(--radius-panel);
+    border: 1px solid transparent;
+    border-radius: var(--radius-container);
     background: var(--surface-panel);
-    box-shadow: var(--shadow-xs);
+    box-shadow: var(--shadow-panel);
   }
 
   /* A joined surface keeps one outer edge; nested panels retain opaque

@@ -275,3 +275,167 @@ async function openDiagnostics(page) {
     await summary.click();
   await expect(summary.locator("..")).toHaveAttribute("open", "");
 }
+
+test.describe("public preview recovery", () => {
+  test.use({ openSearch: true });
+  // Browser focus must survive both removal of Retry and replacement of the
+  // empty loading/error placeholder by the real timeline.
+  test("restores focus when empty preview catch-up fails before loading rows", async ({
+    page,
+    app,
+  }) => {
+    await page.goto(app.origin);
+    await expect(page.locator("[data-message-id]").first()).toBeVisible();
+    const originalHistory = app.histories.get(`primary/${app.openChannelId}`);
+    app.histories.set(`primary/${app.openChannelId}`, []);
+    await page
+      .getByRole("button", { name: "Search Buzz", exact: true })
+      .click();
+    await page.getByRole("combobox", { name: "Search Buzz" }).fill("ope");
+    await page
+      .getByRole("group", { name: "Channels" })
+      .getByRole("option", { name: /^open/ })
+      .click();
+    await expect(
+      page.getByRole("region", {
+        name: "Channel message history",
+        exact: true,
+      }),
+    ).toBeVisible();
+    await expect
+      .poll(() => app.relay.hasRoute("primary", app.openChannelId))
+      .toBe(true);
+    let failHead = true;
+    let retryRequested = false;
+    let releaseHead;
+    const headGate = new Promise((resolve) => {
+      releaseHead = resolve;
+    });
+    await page.route("**/api/relay/**/query", async (route) => {
+      const isPreviewHead = route
+        .request()
+        .postDataJSON()
+        .some(
+          (filter) =>
+            filter.top_level && filter["#h"]?.includes(app.openChannelId),
+        );
+      if (!isPreviewHead) return route.continue();
+      if (failHead) {
+        app.report.startupFailures ??= [];
+        app.report.startupFailures.push(route.request().url());
+        return route.fulfill({
+          status: 502,
+          json: { error: "Fixture preview head unavailable" },
+        });
+      }
+      retryRequested = true;
+      await headGate;
+      await route.continue();
+    });
+    try {
+      app.relay.failRoute(
+        "primary",
+        app.openChannelId,
+        "error: Preview stream interrupted",
+      );
+      await page
+        .getByRole("button", { name: "Retry live updates", exact: true })
+        .click();
+      await expect(
+        page.getByRole("button", { name: "Retry messages", exact: true }),
+      ).toBeVisible();
+      const history = page.locator("[data-channel-history]");
+      await expect(history.locator("[data-message-scroller]")).toHaveCount(0);
+      const warning = page.getByRole("status", {
+        name: "Live updates need attention",
+        exact: true,
+      });
+      const retry = warning.getByRole("button", { name: "Retry live updates" });
+      await expect(retry).toBeVisible();
+      failHead = false;
+      app.histories.set(`primary/${app.openChannelId}`, originalHistory);
+      await retry.focus();
+      await retry.press("Enter");
+      await expect.poll(() => retryRequested).toBe(true);
+      await expect(history).toBeFocused();
+      await expect(history).toHaveAttribute("aria-label", "Channel history");
+      await expect(
+        history.getByText("Loading messages…", { exact: true }),
+      ).toBeVisible();
+      releaseHead();
+      await expect(history.locator("[data-message-scroller]")).toBeVisible();
+      await expect(history).toContainText("Public conversation root");
+      await expect(warning).toHaveCount(0);
+      await expect(history).toBeFocused();
+    } finally {
+      releaseHead();
+    }
+  });
+  // Real browser geometry and focus: the wrapped recovery must remain outside
+  // the floating invitation, and removing Retry must leave focus in history.
+  test("keeps wrapped recovery clear of Join and restores keyboard focus to history", async ({
+    page,
+    app,
+  }) => {
+    await page.setViewportSize({ width: 390, height: 700 });
+    await page.goto(app.origin);
+    await expect(page.locator("[data-message-id]").first()).toBeVisible();
+    await page
+      .getByRole("button", { name: "Search Buzz", exact: true })
+      .click();
+    await page.getByRole("combobox", { name: "Search Buzz" }).fill("ope");
+    await page
+      .getByRole("group", { name: "Channels" })
+      .getByRole("option", { name: /^open/ })
+      .click();
+    const notice = page.getByRole("region", {
+      name: "Channel preview",
+      exact: true,
+    });
+    const history = page.getByRole("region", {
+      name: "Channel message history",
+      exact: true,
+    });
+    await expect(notice).toBeVisible();
+    await expect
+      .poll(() => app.relay.hasRoute("primary", app.openChannelId))
+      .toBe(true);
+    await page.evaluate(() => {
+      document.documentElement.style.fontSize = "20px";
+    });
+    app.relay.failRoute(
+      "primary",
+      app.openChannelId,
+      "error: Live updates are temporarily unavailable. Try reconnecting to this channel.",
+    );
+    const warning = page.getByRole("status", {
+      name: "Live updates need attention",
+      exact: true,
+    });
+    const retry = warning.getByRole("button", { name: "Retry live updates" });
+    await expect(warning).toBeVisible();
+    await expect
+      .poll(async () => {
+        const capsule = await notice.boundingBox();
+        const recovery = await warning.boundingBox();
+        return (
+          !!capsule && !!recovery && capsule.y + capsule.height <= recovery.y
+        );
+      })
+      .toBe(true);
+    await retry.click({ trial: true });
+    app.relay.holdEose(app.openChannelId);
+    try {
+      await retry.focus();
+      await retry.press("Enter");
+      await expect(history).toBeFocused();
+    } finally {
+      app.relay.releaseEose(app.openChannelId);
+    }
+    await expect(warning).toHaveCount(0);
+    await expect(history).toBeFocused();
+    await expect(
+      notice.getByRole("button", { name: "Join", exact: true }),
+    ).toBeVisible();
+  });
+});

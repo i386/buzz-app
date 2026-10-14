@@ -247,6 +247,29 @@ test("community picker uses keyboard, proxy thumbnails, event-local history and 
     // Independently prove this browser's real clipboard transport with the exact
     // handler payload; the editable source path intentionally uses native copy.
     await draft().fill(":party:");
+    await expect(draft()).toHaveAttribute("data-emoji-images-only", "true");
+    await expect(draft().locator("img[data-copy-emoji]")).toHaveCSS(
+      "width",
+      "42px",
+    );
+    await expect(draft()).toHaveCSS("font-size", "14px");
+    const separator = draft().locator("img.ProseMirror-separator");
+    if (await separator.count()) {
+      const bounds = await separator.boundingBox();
+      expect(bounds.width).toBeLessThanOrEqual(1);
+      expect(bounds.height).toBeLessThanOrEqual(1);
+    }
+    // The native caret follows the atomic inline host's height, not its artwork.
+    await expect(draft().locator("[data-source=':party:']")).toHaveCSS(
+      "height",
+      "14px",
+    );
+    await draft().press("ArrowLeft");
+    await draft().press("ArrowRight");
+    await draft().screenshot({
+      path: test.info().outputPath("custom-emoji-caret.png"),
+      caret: "initial",
+    });
     // A lone custom emoji is enlarged without enlarging the editor's separator.
     await expect(draft().locator('img[alt=":party:"]')).toHaveCSS(
       "width",
@@ -263,6 +286,17 @@ test("community picker uses keyboard, proxy thumbnails, event-local history and 
     await expect(draft()).toHaveJSProperty("value", ":party:");
     // One Shift+Left selects one rendered custom emoji, not its trailing colon.
     await draft().press("Shift+ArrowLeft");
+    expect(
+      await draft()
+        .locator("img[data-copy-emoji]")
+        .evaluate((image) => {
+          const selected = image.closest("[data-editor-selected]");
+          return (
+            selected !== null &&
+            getComputedStyle(image).backgroundColor !== "rgba(0, 0, 0, 0)"
+          );
+        }),
+    ).toBe(true);
     expect(
       await draft().evaluate((element) =>
         element.value.slice(element.selectionStart, element.selectionEnd),
@@ -327,7 +361,14 @@ test("community picker uses keyboard, proxy thumbnails, event-local history and 
       await largeCustom
         .locator("img[data-copy-emoji]")
         .last()
-        .evaluate((image) => image.offsetTop),
+        .evaluate(
+          (image) =>
+            image.getBoundingClientRect().top -
+            image
+              .closest('[role="textbox"]')
+              .querySelector("img[data-copy-emoji]")
+              .getBoundingClientRect().top,
+        ),
     ).toBeGreaterThan(0);
     await page.screenshot({
       path: test.info().outputPath("large-custom-emoji-draft.png"),

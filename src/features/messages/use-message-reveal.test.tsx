@@ -99,6 +99,18 @@ async function mutate(row: HTMLElement) {
   });
 }
 
+it("notifies reading after the revealed row is verified", async () => {
+  const { row, complete } = mount();
+  const positioned = vi.fn();
+  row.parentElement?.addEventListener("reading-positioned", positioned);
+  await frame(); // Attach observers.
+  await frame(); // Reveal, but do not verify yet.
+  expect(positioned).not.toHaveBeenCalled();
+  await frame();
+  expect(positioned).toHaveBeenCalledOnce();
+  expect(complete).toHaveBeenCalledOnce();
+});
+
 it.each([false, true])(
   "preserves moved focus before verification (mutation: %s)",
   async (mutation) => {
