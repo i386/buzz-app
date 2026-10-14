@@ -1878,6 +1878,48 @@ it("gives each turn the agent's current core memory, and goes on without it when
   warn.mockRestore();
 });
 
+it("gives a turn no memory read through a connection that was replaced", async () => {
+  const f = fixture();
+  const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+  type Listing = Awaited<ReturnType<typeof f.memoryRead>>;
+  let release!: (listing: Listing) => void;
+  f.memoryRead.mockImplementationOnce(
+    () =>
+      new Promise<Listing>((resolve) => {
+        release = resolve;
+      }),
+  );
+  const instructions = (index: number) =>
+    (
+      f.starts()[index]?.params as
+        | { additionalContext?: Record<string, { value: string }> }
+        | undefined
+    )?.additionalContext?.["buzz.instructions"]?.value;
+  await f.runtime.run(f.delivery("@Codex first"));
+  await vi.waitFor(() => expect(f.memoryRead).toHaveBeenCalledTimes(1));
+  const freshRead = vi.fn(async () => ({
+    entries: [{ slug: "core", body: "I am the new owner's.", createdAt: 1 }],
+    partial: false,
+  }));
+  f.snapshot.session = {
+    ...f.snapshot.session,
+    agentMemories: { ...f.snapshot.session.agentMemories, read: freshRead },
+  };
+  release({
+    entries: [{ slug: "core", body: "I am the old owner's.", createdAt: 1 }],
+    partial: false,
+  });
+  await vi.waitFor(() => expect(f.starts()).toHaveLength(1));
+  expect(instructions(0)).not.toContain("old owner");
+  expect(instructions(0)).not.toContain("<core-memory>");
+  f.complete(0, "FIRST");
+  await f.runtime.run(f.delivery("@Codex second", "e".repeat(64)));
+  await vi.waitFor(() => expect(f.starts()).toHaveLength(2));
+  expect(freshRead).toHaveBeenCalledTimes(1);
+  expect(instructions(1)).toContain("I am the new owner's.");
+  warn.mockRestore();
+});
+
 it("does not declare core missing when the owner listing is partial", async () => {
   const f = fixture();
   f.memoryRead.mockResolvedValueOnce({ entries: [], partial: true });
