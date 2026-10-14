@@ -5,8 +5,10 @@ use std::path::PathBuf;
 
 type Result<T> = std::result::Result<T, String>;
 
+// The gateway's Chat route rejects reasoning_effort alongside tools (GPT-6),
+// so a user's goose-wide thinking effort must not reach it.
 fn env(model: &str) -> Value {
-    json!({"GOOSE_PROVIDER":"buzz_databricks", "GOOSE_MODEL":model})
+    json!({"GOOSE_PROVIDER":"buzz_databricks", "GOOSE_MODEL":model, "GOOSE_THINKING_EFFORT":"none"})
 }
 fn definition() -> Result<PathBuf> {
     Ok(goose_config_directory()?.join("custom_providers/buzz_databricks.json"))
