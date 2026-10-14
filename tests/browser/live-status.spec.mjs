@@ -275,7 +275,7 @@ async function openDiagnostics(page) {
 
 test.describe("public preview recovery", () => {
   test.use({ openSearch: true });
-  // Browser focus must survive both removal of Retry and replacement of the
+  // Browser focus must survive both removal of Retry now and replacement of the
   // empty loading/error placeholder by the real timeline.
   test("restores focus when empty preview catch-up fails before loading rows", async ({
     page,
@@ -335,27 +335,24 @@ test.describe("public preview recovery", () => {
         app.openChannelId,
         "error: Preview stream interrupted",
       );
-      await page
-        .getByRole("button", { name: "Retry live updates", exact: true })
-        .click();
-      await expect(
-        page.getByRole("button", { name: "Retry messages", exact: true }),
-      ).toBeVisible();
+      // Both failures are outages: one recovery notice owns them, with one
+      // Retry now and no per-panel Retry messages.
+      const warning = notice(page);
+      const retry = retryNow(page);
+      await expect(warning).toBeVisible();
+      await expect
+        .poll(() => app.report.startupFailures?.length ?? 0)
+        .toBeGreaterThan(0);
+      await expect(page.getByRole("button", { name: /Retry/ })).toHaveCount(1);
       const history = page.locator("[data-channel-history]");
       await expect(history.locator("[data-message-scroller]")).toHaveCount(0);
-      const warning = page.getByRole("status", {
-        name: "Live updates need attention",
-        exact: true,
-      });
-      const retry = warning.getByRole("button", { name: "Retry live updates" });
-      await expect(retry).toBeVisible();
       failHead = false;
       app.histories.set(`primary/${app.openChannelId}`, originalHistory);
       await retry.focus();
       await retry.press("Enter");
       await expect.poll(() => retryRequested).toBe(true);
-      await expect(history).toBeFocused();
-      await expect(history).toHaveAttribute("aria-label", "Channel history");
+      // The notice stays while the retried head is in flight.
+      await expect(retry).toBeFocused();
       await expect(
         history.getByText("Loading messages…", { exact: true }),
       ).toBeVisible();
@@ -363,13 +360,15 @@ test.describe("public preview recovery", () => {
       await expect(history.locator("[data-message-scroller]")).toBeVisible();
       await expect(history).toContainText("Public conversation root");
       await expect(warning).toHaveCount(0);
-      await expect(history).toBeFocused();
+      // Recovery removed the focused Retry now; a preview has no composer, so
+      // focus moves to its loaded history.
+      await expect(history.locator("[data-message-scroller]")).toBeFocused();
     } finally {
       releaseHead();
     }
   });
   // Real browser geometry and focus: the wrapped recovery must remain outside
-  // the floating invitation, and removing Retry must leave focus in history.
+  // the floating invitation, and removing Retry now must leave focus in history.
   test("keeps wrapped recovery clear of Join and restores keyboard focus to history", async ({
     page,
     app,
@@ -385,7 +384,7 @@ test.describe("public preview recovery", () => {
       .getByRole("group", { name: "Channels" })
       .getByRole("option", { name: /^open/ })
       .click();
-    const notice = page.getByRole("region", {
+    const invitation = page.getByRole("region", {
       name: "Channel preview",
       exact: true,
     });
@@ -393,46 +392,46 @@ test.describe("public preview recovery", () => {
       name: "Channel message history",
       exact: true,
     });
-    await expect(notice).toBeVisible();
+    await expect(invitation).toBeVisible();
     await expect
       .poll(() => app.relay.hasRoute("primary", app.openChannelId))
       .toBe(true);
     await page.evaluate(() => {
       document.documentElement.style.fontSize = "20px";
     });
-    app.relay.failRoute(
-      "primary",
-      app.openChannelId,
-      "error: Live updates are temporarily unavailable. Try reconnecting to this channel.",
-    );
-    const warning = page.getByRole("status", {
-      name: "Live updates need attention",
-      exact: true,
-    });
-    const retry = warning.getByRole("button", { name: "Retry live updates" });
-    await expect(warning).toBeVisible();
-    await expect
-      .poll(async () => {
-        const capsule = await notice.boundingBox();
-        const recovery = await warning.boundingBox();
-        return (
-          !!capsule && !!recovery && capsule.y + capsule.height <= recovery.y
-        );
-      })
-      .toBe(true);
-    await retry.click({ trial: true });
+    // Hold EOSE so automatic recovery cannot settle before the checks.
     app.relay.holdEose(app.openChannelId);
+    const warning = notice(page);
+    const retry = retryNow(page);
     try {
+      app.relay.failRoute(
+        "primary",
+        app.openChannelId,
+        "error: Live updates are temporarily unavailable. Try reconnecting to this channel.",
+      );
+      await expect(warning).toBeVisible();
+      await expect
+        .poll(async () => {
+          const capsule = await invitation.boundingBox();
+          const recovery = await warning.boundingBox();
+          return (
+            !!capsule && !!recovery && capsule.y + capsule.height <= recovery.y
+          );
+        })
+        .toBe(true);
+      await retry.click({ trial: true });
       await retry.focus();
       await retry.press("Enter");
-      await expect(history).toBeFocused();
+      // Retry now stays while the retried stream waits for EOSE.
+      await expect(retry).toBeFocused();
     } finally {
       app.relay.releaseEose(app.openChannelId);
     }
     await expect(warning).toHaveCount(0);
+    // Recovery removed the focused Retry now; focus moves to history.
     await expect(history).toBeFocused();
     await expect(
-      notice.getByRole("button", { name: "Join", exact: true }),
+      invitation.getByRole("button", { name: "Join", exact: true }),
     ).toBeVisible();
   });
 });

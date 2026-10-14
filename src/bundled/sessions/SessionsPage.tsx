@@ -31,6 +31,7 @@ import {
   PencilSimpleIcon,
 } from "../../shared/design-system/icons";
 import { Button } from "../../shared/design-system/ui/Button";
+import { useRecoveryShown } from "../../features/relay/RecoveryNotice";
 import { ChatCircleIcon } from "../../shared/design-system/icons/index";
 import {
   useCallback,
@@ -276,6 +277,7 @@ function SessionWork({
   navigator?: Navigation | undefined;
 }) {
   const window = useChannelWindow(session.channels, channel.id);
+  const recoveryShown = useRecoveryShown(session.recovery);
   const [sent, setSent] = useState<string>();
   const [renameOpen, setRenameOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -487,7 +489,9 @@ function SessionWork({
           <SessionColumn enabled={false}>
             <MessageManagementStatus />
             <div className={styles.timeline}>
-              {window.status === "error" && !window.rows.length ? (
+              {window.status === "error" &&
+              !window.rows.length &&
+              !recoveryShown ? (
                 <div className={styles.empty} role="alert">
                   <p>{window.error}</p>
                   <Button

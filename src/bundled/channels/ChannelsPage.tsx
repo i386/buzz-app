@@ -1204,10 +1204,23 @@ function ChannelWorkspace({
           recovery={queries.recovery}
           channelId={current?.id}
           partialRoster={list.coverage === "partial"}
-          // Recovery removes the focused Retry now button. Reuse the
-          // composer’s explicit focus handoff instead of browser Tab memory.
+          // Recovery removes the focused retry control. Hand focus on
+          // explicitly; previews have no composer, so use their history.
           onRecovered={
-            current ? () => setComposerFocus((value) => value + 1) : undefined
+            current
+              ? () => {
+                  if (current.readOnly && !current.cached) {
+                    const history = historyContainer.current;
+                    const target =
+                      history?.querySelector<HTMLElement>(
+                        "[data-message-scroller]",
+                      ) ?? history;
+                    target?.focus({ preventScroll: true });
+                  } else {
+                    setComposerFocus((value) => value + 1);
+                  }
+                }
+              : undefined
           }
         />
       )}

@@ -4,6 +4,7 @@ import type { RelaySession } from "../../features/relay/session";
 import type { PageNavigation } from "../../features/navigation/service";
 import type { Attachment } from "../../features/relay/contracts";
 import { useChannelWindow } from "../../features/relay/react";
+import { useRecoveryShown } from "../../features/relay/RecoveryNotice";
 import { clientMetrics } from "../../features/developer/client-metrics";
 import { ChannelTimeline } from "../../features/messages/ChannelTimeline";
 import type { MessageLinkOrigin } from "../../features/messages/MessageRow";
@@ -53,6 +54,7 @@ export const ChannelBody = memo(function ChannelBody({
     clientMetrics.channelMounted(channelId);
     return () => clientMetrics.channelUnmounted(channelId);
   }, [channelId]);
+  const recoveryShown = useRecoveryShown(queries.recovery);
   const newest = window.rows.at(-1)?.id;
   const settled = window.status === "ready" || window.status === "error";
   useEffect(() => {
@@ -84,7 +86,9 @@ export const ChannelBody = memo(function ChannelBody({
     else if (!cached && window.status === "error")
       navigation?.complete({ status: "failed", reason: "unavailable" });
   }, [cached, navigation, window.status]);
-  if (window.status === "error" && !window.rows.length)
+  // While the recovery notice shows, it owns the one Retry now; an empty
+  // failed timeline waits for it instead of offering a second Retry.
+  if (window.status === "error" && !window.rows.length && !recoveryShown)
     return (
       <div
         className={`${styles.empty} ${styles.timelinePlaceholder}`}
