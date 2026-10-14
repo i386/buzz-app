@@ -68,6 +68,8 @@ test("video speed options escape the thread and restore focus after selection an
         height: "400px",
       });
     });
+  // Let the panel's resize correction finish before setting the menu position.
+  await settle(page, page.locator("[data-message-scroller]"));
   await trigger.evaluate((button) => {
     const scroller = button.closest("[data-message-scroller]");
     // WebKit truncates fractional scroll requests. Round the final position so

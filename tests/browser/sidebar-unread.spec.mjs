@@ -450,6 +450,11 @@ test("session changes discard the previous sidebar targets and manual unread sti
     release = resolve;
   });
   const pendingRoutes = [];
+  // The held read must outlive the app's 10s preference-read budget on slow
+  // runners; the test releases it explicitly, so app timeouts are not under test.
+  await page.addInitScript(() => {
+    AbortSignal.timeout = () => new AbortController().signal;
+  });
   await page.route("**/api/relay/secondary/sidebar-preferences", (route) => {
     const pending = held.then(() => route.continue());
     pendingRoutes.push(pending);

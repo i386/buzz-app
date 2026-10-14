@@ -184,6 +184,43 @@ it("posts at the channel's top level when given a channel", async () => {
   expect(published[0]?.tags).toEqual([["h", "other"]]);
 });
 
+it("keeps a top-level chat out of threads, wherever a reply would resolve", async () => {
+  const elsewhere = "3".repeat(64);
+  const { client, published } = fake([
+    ...community,
+    event({ id: elsewhere, tags: [["h", "other"]] }),
+  ]);
+  const context = { channel: "chan", topLevel: true };
+  const refused = "This chat stays at the top level: send again without reply.";
+  // A reply alone takes its target's channel; a stale one is refused too.
+  for (const args of [
+    { reply: root },
+    { reply: nested },
+    { reply: root, channel: "chan" },
+  ])
+    await expect(
+      callTool(client, context, "send", {
+        audience: "everyone",
+        text: "hi",
+        ...args,
+      }),
+    ).rejects.toThrow(refused);
+  expect(published).toEqual([]);
+  await callTool(client, context, "send", { audience: "everyone", text: "hi" });
+  await callTool(client, context, "send", {
+    audience: "everyone",
+    text: "there",
+    reply: elsewhere,
+  });
+  expect(published.map((sent) => sent.tags)).toEqual([
+    [["h", "chan"]],
+    [
+      ["h", "other"],
+      ["e", elsewhere, "", "reply"],
+    ],
+  ]);
+});
+
 it("reads the current thread with each message's latest edit", async () => {
   const { client } = fake([
     ...community,

@@ -139,7 +139,7 @@ jobs:
         run: ./bin/node scripts/ci-test-report.mjs kind=playwright report=test-results/browser/ci-report.json evidence=test-results/browser/ci-timing.json title="Browser measurements" -- ./bin/pnpm test:browser:ci --project '*-measurements' --workers=1 --reporter=list,json
       # Cases tagged @classic-scrollbars need Chromium's platform scrollbars,
       # which Linux always draws as classic ones. One file cannot join the
-      # six-way engine matrix (empty shards are errors), so it runs here, and
+      # eight-way engine matrix (empty shards are errors), so it runs here, and
       # CI required already blocks on this job. The project writes to its own
       # outputDir so this run does not clear the measurement evidence above.
       - name: Chromium classic-scrollbar layout
@@ -193,7 +193,7 @@ jobs:
 
   browser:
     if: github.event_name != 'workflow_dispatch'
-    name: Browser journeys (${{ matrix.engine }}, ${{ matrix.shard }}/6)
+    name: Browser journeys (${{ matrix.engine }}, ${{ matrix.shard }}/8)
     # Measurements stay isolated on their own runner, not on our critical path.
     # CI required still requires their success independently of these jobs.
     needs: [browser_fixture]
@@ -208,14 +208,14 @@ jobs:
     env:
       HOME: /root
       BUZZ_BROWSER_FIXTURE_DIR: target/ci-browser-fixture
-    # Six file-level shards split the large file groups that remain together
-    # with four or five shards, leaving room for setup inside the same deadline.
+    # Eight file-level shards leave setup headroom for the growing journey suite.
+    # Keep the same workers and deadline; every case still runs in both engines.
     timeout-minutes: 15
     strategy:
       fail-fast: false
       matrix:
         engine: [chromium, webkit]
-        shard: [1, 2, 3, 4, 5, 6]
+        shard: [1, 2, 3, 4, 5, 6, 7, 8]
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
@@ -243,7 +243,7 @@ jobs:
       - name: Functional journeys
         env:
           PLAYWRIGHT_JSON_OUTPUT_FILE: test-results/browser/ci-report.json
-        run: ./bin/node scripts/ci-test-report.mjs kind=playwright report=test-results/browser/ci-report.json evidence=test-results/browser/ci-timing.json title="Browser journeys (${{ matrix.engine }}, ${{ matrix.shard }}/6)" -- ./bin/pnpm test:browser:ci --project ${{ matrix.engine }} --no-deps --shard=${{ matrix.shard }}/6 --reporter=list,json
+        run: ./bin/node scripts/ci-test-report.mjs kind=playwright report=test-results/browser/ci-report.json evidence=test-results/browser/ci-timing.json title="Browser journeys (${{ matrix.engine }}, ${{ matrix.shard }}/8)" -- ./bin/pnpm test:browser:ci --project ${{ matrix.engine }} --no-deps --shard=${{ matrix.shard }}/8 --reporter=list,json
       - name: Browser evidence
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4

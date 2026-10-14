@@ -266,6 +266,36 @@ test.describe("exact history resize ownership", () => {
       app.relay.publish("primary", event);
       return event;
     };
+    // Hold the reveal's completion frame while live replies commit, so resize
+    // ownership cannot rely on a later parent render to finish initialization.
+    await page.evaluate((targetId) => {
+      const raf = window.requestAnimationFrame;
+      const cancel = window.cancelAnimationFrame;
+      const heldFrames = new Map();
+      let holding = true;
+      window.requestAnimationFrame = (callback) => {
+        const id = raf((time) => {
+          if (
+            holding &&
+            document.activeElement?.getAttribute("data-message-id") === targetId
+          )
+            heldFrames.set(id, callback);
+          else callback(time);
+        });
+        return id;
+      };
+      window.cancelAnimationFrame = (id) => {
+        heldFrames.delete(id);
+        cancel(id);
+      };
+      window.releaseExactReveal = () => {
+        holding = false;
+        window.requestAnimationFrame = raf;
+        window.cancelAnimationFrame = cancel;
+        for (const callback of heldFrames.values()) raf(callback);
+        heldFrames.clear();
+      };
+    }, app.exact.target.id);
     try {
       await page.evaluate(
         (value) => {
@@ -289,6 +319,7 @@ test.describe("exact history resize ownership", () => {
       await expect(
         history.getByText("Review live reply 14", { exact: true }),
       ).toHaveCount(1);
+      await page.evaluate(() => window.releaseExactReveal());
       await settle(page, history);
       const y = () =>
         target.evaluate(
@@ -317,6 +348,7 @@ test.describe("exact history resize ownership", () => {
         "later update must not repeat resize correction",
       ).toBeLessThan(4);
     } finally {
+      await page.evaluate(() => window.releaseExactReveal());
       release();
     }
   });

@@ -41,34 +41,45 @@ test("mark-read retains focus through a gated storage failure, working transitio
   await markRead.focus();
   const originalAction = await markRead.elementHandle();
   // Keep the real IndexedDB transaction alive until the test aborts it.
-  await page.evaluate(() => {
-    const transaction = IDBDatabase.prototype.transaction;
-    IDBDatabase.prototype.transaction = function (...args) {
-      const tx = transaction.apply(this, args);
-      if (this.name === "buzz-read-state-v1" && args[1] === "readwrite") {
-        IDBDatabase.prototype.transaction = transaction;
+  const unreadRoot = app.histories
+    .get("primary/alpha")
+    .find((event) => event.content === "Thread root 0");
+  await page.evaluate((rootId) => {
+    const put = IDBObjectStore.prototype.put;
+    IDBObjectStore.prototype.put = function (value, ...args) {
+      const request = put.call(this, value, ...args);
+      const tx = this.transaction;
+      // Background channel receipts also write this store. Gate the actual
+      // thread mark, so aborting it exercises the action's recovery contract.
+      if (
+        tx.db.name === "buzz-read-state-v1" &&
+        value?.state?.frontiers?.[`thread:${rootId}`]
+      ) {
+        IDBObjectStore.prototype.put = put;
         let held = true;
         const keepAlive = () => {
-          if (held)
-            tx.objectStore("partitions").get("focus-test-gate").onsuccess =
-              keepAlive;
+          if (held) this.get("focus-test-gate").onsuccess = keepAlive;
         };
         keepAlive();
         window.abortFocusWrite = () => {
           held = false;
+          window.abortFocusWrite = undefined;
           tx.abort();
         };
       }
-      return tx;
+      return request;
     };
-  });
-  await markRead.press("Enter");
-  await expect
-    .poll(() => page.evaluate(() => !!window.abortFocusWrite))
-    .toBe(true);
-  await expect(markRead).toHaveAttribute("aria-disabled", "true");
-  await expect(markRead).toBeFocused();
-  await page.evaluate(() => window.abortFocusWrite());
+  }, unreadRoot.id);
+  try {
+    await markRead.press("Enter");
+    await expect
+      .poll(() => page.evaluate(() => !!window.abortFocusWrite))
+      .toBe(true);
+    await expect(markRead).toHaveAttribute("aria-disabled", "true");
+    await expect(markRead).toBeFocused();
+  } finally {
+    await page.evaluate(() => window.abortFocusWrite?.());
+  }
   await expect(popup.getByRole("alert")).toContainText("Try again");
   await expect(markRead).toBeFocused();
 
@@ -125,15 +136,15 @@ for (const destination of ["reply", "off-window root"]) {
     await expect(panel).toBeVisible();
     // A repeat activity intent must reveal its retained thread, including when
     // another tab is selected or the entire pane is collapsed.
-    const main = page.getByRole("article", {
-      name: "Conversation",
-      exact: true,
-    });
+    const workspace = page.locator("[data-panel-workspace]");
     for (const hiddenBy of ["settings", "collapsed"]) {
+      // This journey tests focus, not activity expiry. Renew the turn as a live
+      // agent would, keeping the browser clock aligned with relay timestamps.
+      app.observer(activity("turn_liveness", target.id), key);
       await openChannelDetails(page);
       await expect(panel).toBeHidden();
       if (hiddenBy === "collapsed")
-        await main
+        await workspace
           .getByRole("button", { name: "Toggle tab pane", exact: true })
           .click();
       await row.focus();

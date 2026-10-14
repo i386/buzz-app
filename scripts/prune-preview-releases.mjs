@@ -34,12 +34,23 @@ const manifest = JSON.parse(
 );
 assert.match(manifest.version, versionPattern);
 const protectedTag = `v${manifest.version}`;
-assert.deepEqual(Object.keys(manifest.platforms), ["darwin-aarch64"]);
-assert.equal(
-  manifest.platforms["darwin-aarch64"].url,
-  `https://github.com/${repository}/releases/download/${protectedTag}/Buzz_${manifest.version}_aarch64.app.tar.gz`,
-  "Unexpected preview feed asset URL",
+const assets = {
+  "darwin-aarch64": "aarch64.app.tar.gz",
+  "windows-x86_64": "x64_unsigned.exe",
+  "linux-x86_64-deb": "amd64.deb",
+  "linux-x86_64-appimage": "x86_64.AppImage",
+};
+assert.deepEqual(
+  Object.keys(manifest.platforms).sort(),
+  Object.keys(assets).sort(),
 );
+for (const [target, asset] of Object.entries(assets)) {
+  assert.equal(
+    manifest.platforms[target].url,
+    `https://github.com/${repository}/releases/download/${protectedTag}/Buzz_${manifest.version}_${asset}`,
+    "Unexpected preview feed asset URL",
+  );
+}
 const releases = JSON.parse(
   gh(
     "api",

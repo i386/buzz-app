@@ -78,6 +78,28 @@ html[data-keyboard-navigation] .input:focus-visible {
   height: var(--size-emoji-display);
 }
 
+/* Custom artwork stays large while surrounding editable text keeps body metrics. */
+.input[data-emoji-images-only] {
+  font-size: inherit;
+  line-height: inherit;
+}
+/* WebKit sizes the caret from this atomic box. Reserve the artwork above a
+   text-height host with in-flow margins so wrapping and native arrows still work. */
+.input[data-emoji-images-only] .token:has(img) {
+  display: inline-block;
+  vertical-align: baseline;
+  height: var(--text-body-sm);
+  margin-top: calc(var(--size-emoji-display) - var(--text-body-sm));
+  line-height: 0;
+}
+.input[data-emoji-images-only] .token img {
+  vertical-align: bottom;
+  margin-top: calc(var(--text-body-sm) - var(--size-emoji-display));
+}
+.input[data-emoji-images-only]:focus .token[data-editor-selected] img {
+  background-color: Highlight;
+}
+
 .input p {
   margin: 0;
 }

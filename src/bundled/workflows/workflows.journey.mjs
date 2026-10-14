@@ -215,10 +215,10 @@ test("workflow editor preserves YAML, resolves exact saves, retains conflicts an
   // Dialog actions use the floating control recipe, distinct from their surface.
   await expect(
     page.getByRole("dialog", { name: "Create workflow", exact: true }),
-  ).toHaveCSS("background-color", "rgba(40, 40, 40, 0.9)");
+  ).toHaveCSS("background-color", "rgb(40, 40, 40)");
   await expect(
     page.getByRole("dialog", { name: "Create workflow", exact: true }),
-  ).toHaveCSS("backdrop-filter", "blur(8px)");
+  ).toHaveCSS("backdrop-filter", "none");
   // Wait for the shared control transition before checking its final paint.
   await expect(button("Cancel")).toHaveCSS("color", "rgb(255, 255, 255)");
   await expect(button("Cancel")).toHaveCSS(

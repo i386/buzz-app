@@ -19,7 +19,7 @@ test("content-opened tabs restore drafts without offering blank-tab creation", a
   await open(page, app);
   const main = page.getByRole("article", { name: "Conversation", exact: true });
   const workspace = page.locator("[data-panel-workspace]");
-  const split = main.getByRole("button", {
+  const split = page.getByRole("button", {
     name: "Toggle tab pane",
     exact: true,
   });
@@ -57,8 +57,20 @@ test("content-opened tabs restore drafts without offering blank-tab creation", a
   await expect(
     workspace.getByRole("region", { name: "Choose a tab" }),
   ).toHaveCount(0);
+  await expect(
+    main.getByRole("button", { name: "Toggle tab pane", exact: true }),
+  ).toHaveCount(0);
+  await expect(
+    workspace.getByRole("button", { name: "Toggle tab pane", exact: true }),
+  ).toBeVisible();
+  const tabClose = workspace.getByRole("button", {
+    name: "Close Beta tab",
+    exact: true,
+  });
+  await expect(tabClose.locator("svg")).toHaveCSS("width", "16px");
   await composer.fill("Beta draft");
   await split.click();
+  await expect(split).toBeFocused();
   await expect(workspace).toBeHidden();
   await expect
     .poll(async () => (await main.boundingBox()).width)
@@ -254,7 +266,7 @@ test.describe("crowded content tabs", () => {
       name: "Close zeta tab",
       exact: true,
     });
-    const outside = main.getByRole("button", {
+    const outside = workspace.getByRole("button", {
       name: "Toggle tab pane",
       exact: true,
     });

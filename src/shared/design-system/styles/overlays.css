@@ -31,7 +31,8 @@
   /* A stepped dialog paints only its visible cards, not their shared wrapper. */
   .buzz-dialog:not([data-stepped]),
   .buzz-dialog-step {
-    @apply elevated-material;
+    /* Opaque modal fill keeps inset fields distinct from the dimmed page. */
+    background: var(--surface-popover);
   }
   /* Steps share one centered popup/backdrop; overlap only for the crossfade. */
   .buzz-dialog[data-stepped] {

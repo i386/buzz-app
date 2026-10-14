@@ -83,14 +83,22 @@ test("joined header seams, drag feedback, and pointer-only overlay motion", asyn
   await close.click();
   await expect(dock).toHaveCount(0);
 
-  // Keep the native scrollbar unclipped, near the rail, with the capsule centered on it.
+  // Keep the scrollbar unclipped and the capsule centered in the 4px panel gutter.
   const navigation = page.getByRole("navigation", {
     name: "Subscribed channels",
   });
   const scrollBounds = await navigation.boundingBox();
   const resizeBounds = await resize.boundingBox();
-  const railCenter = resizeBounds.x + resizeBounds.width / 2 - 0.5;
-  expect(railCenter - (scrollBounds.x + scrollBounds.width)).toBeCloseTo(2.5);
+  const sidebarBounds = await page
+    .getByRole("complementary", { name: "Channel sidebar", exact: true })
+    .boundingBox();
+  const mainBounds = await page.locator("#main-content > .panel").boundingBox();
+  expect(mainBounds.x - (sidebarBounds.x + sidebarBounds.width)).toBeCloseTo(4);
+  const railCenter = resizeBounds.x + resizeBounds.width / 2;
+  expect(railCenter).toBeCloseTo(
+    (sidebarBounds.x + sidebarBounds.width + mainBounds.x) / 2,
+  );
+  expect(railCenter - (scrollBounds.x + scrollBounds.width)).toBeCloseTo(5);
   const capsuleCenter = await resize.evaluate(
     (el) =>
       el.getBoundingClientRect().left +
@@ -141,7 +149,7 @@ test("joined header seams, drag feedback, and pointer-only overlay motion", asyn
         getComputedStyle(el, "::after").opacity,
         getComputedStyle(el, "::before").visibility,
       ]),
-    ).toEqual(["1", "hidden"]);
+    ).toEqual(["0.5", "hidden"]);
   } finally {
     await page.mouse.up();
   }

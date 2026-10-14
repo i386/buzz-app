@@ -24,6 +24,7 @@ const native: PairingNative = {
     fixture.status = {
       phase: "qr",
       svg: '<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256"><rect width="256" height="256" fill="white"/><text x="20" y="128" fill="black">Fixture QR — not scannable</text></svg>',
+      uri: "nostrpair://fixture",
     };
   },
   async status() {

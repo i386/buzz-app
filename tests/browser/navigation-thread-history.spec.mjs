@@ -419,7 +419,7 @@ test("dragging thread tabs reorders and crosses panes without losing the reply",
 
   // With the side pane closed there is no header to drop onto. Separating
   // at the main workspace's right edge reveals it without creating a blank tab.
-  await main
+  await side
     .getByRole("button", { name: "Toggle tab pane", exact: true })
     .click();
   await expect(side).toBeHidden();

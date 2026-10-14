@@ -410,36 +410,36 @@ export function AppShell({
         <div
           className={`shell-body ${selected === "settings" ? "shell-body-settings" : ""}`}
         >
-          <Panel as="div" joined>
-            <div className="shell-content">
-              <div
-                id="shell-navigation"
-                className="shell-navigation"
-                data-sidebar-collapsible={
-                  (collapsibleSidebar && !narrow) || undefined
+          <div className="shell-content">
+            <div
+              id="shell-navigation"
+              className="shell-navigation"
+              data-sidebar-collapsible={
+                (collapsibleSidebar && !narrow) || undefined
+              }
+              data-sidebar-open={visibleSidebar || undefined}
+              aria-hidden={(collapsibleSidebar || narrow) && !visibleSidebar}
+              inert={(collapsibleSidebar || narrow) && !visibleSidebar}
+              data-expanded={navigationOpen}
+              onKeyDown={(event) => {
+                if (
+                  event.key === "Escape" &&
+                  navigationOpen &&
+                  !event.defaultPrevented
+                ) {
+                  setNavigationOpen(false);
+                  navigationToggle.current?.focus();
                 }
-                data-sidebar-open={visibleSidebar || undefined}
-                aria-hidden={(collapsibleSidebar || narrow) && !visibleSidebar}
-                inert={(collapsibleSidebar || narrow) && !visibleSidebar}
-                data-expanded={navigationOpen}
-                onKeyDown={(event) => {
-                  if (
-                    event.key === "Escape" &&
-                    navigationOpen &&
-                    !event.defaultPrevented
-                  ) {
-                    setNavigationOpen(false);
-                    navigationToggle.current?.focus();
-                  }
-                }}
-              >
-                <div className="shell-navigation-content">{navigation}</div>
-              </div>
-              <main
-                id="main-content"
-                tabIndex={-1}
-                className="min-h-0 min-w-0 flex-1 overflow-hidden"
-              >
+              }}
+            >
+              <div className="shell-navigation-content">{navigation}</div>
+            </div>
+            <main
+              id="main-content"
+              tabIndex={-1}
+              className="min-h-0 min-w-0 flex-1"
+            >
+              <Panel as="div" joined>
                 <PanelFrame companion={companion}>
                   <div
                     id={`shell-page-${panelKey}`}
@@ -468,9 +468,9 @@ export function AppShell({
                     </div>
                   </div>
                 </PanelFrame>
-              </main>
-            </div>
-          </Panel>
+              </Panel>
+            </main>
+          </div>
         </div>
       </div>
     </div>

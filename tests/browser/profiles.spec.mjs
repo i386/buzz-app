@@ -402,9 +402,9 @@ test("member rows hand off to Profiles without trapping or losing keyboard focus
       await expect(surface).toBeInViewport({ ratio: 1 });
       await expect(surface).toHaveCSS(
         "background-color",
-        mode === "light" ? "rgba(255, 255, 255, 0.9)" : "rgba(40, 40, 40, 0.9)",
+        mode === "light" ? "rgb(255, 255, 255)" : "rgb(40, 40, 40)",
       );
-      await expect(surface).toHaveCSS("backdrop-filter", "blur(8px)");
+      await expect(surface).toHaveCSS("backdrop-filter", "none");
       await expect(body).toHaveCSS("background-color", "rgba(0, 0, 0, 0)");
       await expect(body).toHaveCSS("border-top-width", "0px");
       await expect(body).toHaveCSS("overflow-y", "hidden");

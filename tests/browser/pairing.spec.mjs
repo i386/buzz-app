@@ -201,6 +201,15 @@ test("pairing positions stay fixed across states", async ({ page, app }) => {
     await expect(page.getByText("Creating pairing code…")).toBeVisible();
     const steps = page.getByRole("list", { name: "Pairing steps" });
     const before = await steps.boundingBox();
+    await phone(page, {
+      phase: "qr",
+      svg: '<svg xmlns="http://www.w3.org/2000/svg"/>',
+      uri: "nostrpair://fixture",
+    });
+    await expect(
+      page.getByRole("button", { name: "Copy pairing code" }),
+    ).toBeVisible();
+    expect(await steps.boundingBox()).toEqual(before);
     await phone(page, { phase: "code", code: "001234", codeEntry: true });
     await expect(page.getByText("001 234", { exact: true })).toBeVisible();
     expect(await steps.boundingBox()).toEqual(before);
@@ -218,6 +227,7 @@ test("reduced motion removes QR animation styles", async ({ page, app }) => {
   await phone(page, {
     phase: "qr",
     svg: '<svg xmlns="http://www.w3.org/2000/svg"><style>circle { animation: reveal 58ms; }</style><circle r="1"/></svg>',
+    uri: "nostrpair://fixture",
   });
   const qr = page.getByAltText("Scan this QR code with Buzz on your phone");
   await expect

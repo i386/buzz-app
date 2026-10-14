@@ -87,6 +87,7 @@ function fakeRelay(origin = "https://relay.example.test") {
     read: vi.fn(async () => [...listed]),
     // STOPGAP(agent-local-typing): delete with local-typing.ts.
     typing: { local: vi.fn() },
+    mePlacement: { snapshot: () => ({ status: "ready" }), has: () => false },
     // The agent is in `channel`; `private` is the owner's alone.
     channels: {
       list: () => ({
@@ -2726,6 +2727,32 @@ it("projects accepted queued work and keeps working past handover until the plug
   } finally {
     releaseHandover?.();
     finish({ ok: true });
+    await f.ctx.fiber.dispose();
+  }
+});
+
+it("shows a request whose run failed before handing anything over as failed, with why", async () => {
+  const f = await setup();
+  await f.service.create({ type: "example/echo", name: "Echo" });
+  f.run.mockRejectedValueOnce(new Error("Couldn't read your Me chats"));
+  f.emit({
+    events: [
+      event("1", {
+        tags: [
+          ["h", channel],
+          ["p", bot],
+        ],
+      }),
+    ],
+  });
+  try {
+    await vi.waitFor(() =>
+      expect(f.activity.reader.work()[0]).toMatchObject({
+        state: "error",
+        error: "Couldn't read your Me chats",
+      }),
+    );
+  } finally {
     await f.ctx.fiber.dispose();
   }
 });

@@ -451,9 +451,9 @@ confirmedPresence(
         "rgb(255, 255, 255)",
       );
       await expect(settingsRegion).toHaveCSS("border-radius", "0px");
-      await expect(page.locator(".shell-body > [data-joined]")).toHaveCSS(
+      await expect(page.locator("#main-content > [data-joined]")).toHaveCSS(
         "border-radius",
-        "20px",
+        "16px",
       );
       const frame = await settingsRegion.boundingBox();
       expect(frame.height).toBeGreaterThan(700);

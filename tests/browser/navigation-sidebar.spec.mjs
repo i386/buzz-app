@@ -50,10 +50,9 @@ test("channel sidebar resizes from the full gutter and persists", async ({
       getComputedStyle(document.documentElement).fontSize,
     );
     return {
-      panelGap:
-        Number.parseFloat(getComputedStyle(handle).width) +
-        Number.parseFloat(getComputedStyle(handle).marginLeft) +
-        Number.parseFloat(getComputedStyle(handle).marginRight),
+      panelGap: Number.parseFloat(
+        getComputedStyle(panel.closest(".shell-sidebar")).marginInlineEnd,
+      ),
       // The redesigned sidebar keeps a symmetric inline gutter; rows use the
       // sidebar's fixed row radius rather than a concentric panel radius.
       padding: [contentStyle.paddingRight, contentStyle.paddingLeft].map(
@@ -70,8 +69,9 @@ test("channel sidebar resizes from the full gutter and persists", async ({
   expect(geometry.padding[0]).toBeGreaterThan(0);
   expect(geometry.rowRadius).toBe(geometry.rowRadiusToken);
   const conversation = await page
-    .getByRole("article", { name: "Conversation" })
+    .locator("#main-content > .panel")
     .boundingBox();
+  expect(geometry.panelGap).toBe(4);
   expect(conversation).not.toBeNull();
   expect(conversation.x - (before.x + before.width)).toBeCloseTo(
     geometry.panelGap,
@@ -79,7 +79,7 @@ test("channel sidebar resizes from the full gutter and persists", async ({
   );
   expect(grip.width).toBeGreaterThanOrEqual(16);
   expect(grip.height).toBeGreaterThan(500);
-  // Leave 2px between the scrollbar track and the 1px divider.
+  // Preserve the 2px scrollbar inset plus the panel’s reserved 1px border.
   expect(before.x + before.width - (listBox.x + listBox.width)).toBeCloseTo(
     3,
     0,

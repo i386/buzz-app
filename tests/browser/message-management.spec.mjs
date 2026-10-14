@@ -407,7 +407,7 @@ test("thread media preserves its tab and draft while modal Escape restores focus
     name: "Delete message?",
   });
   for (const cancelWith of ["Escape", "Cancel"]) {
-    await commentRow.hover();
+    await commentRow.getByText("My review comment", { exact: true }).hover();
     await trigger.click();
     await page
       .getByRole("menuitem", { name: "Delete message", exact: true })

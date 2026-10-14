@@ -1,4 +1,5 @@
 import { useLayoutEffect, useRef, type RefObject } from "react";
+import { readingPositioned } from "./use-reading";
 
 /** One reveal per request signal, never per row/profile/image update. */
 export function useMessageReveal({
@@ -91,6 +92,7 @@ export function useMessageReveal({
           return;
         revealed.current = signal;
         cancel();
+        readingPositioned(container);
         complete();
       });
     }

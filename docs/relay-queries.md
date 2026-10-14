@@ -844,6 +844,13 @@ Admission is local coordination, not a reservation of the relay's account-wide
 budget: other processes/clients can still cause a refusal. Ambiguous publication
 outcomes retain their exact signed event and are never transparently re-signed.
 
+The relay WebSocket keeps retrying transient disconnects and authentication
+timeouts while its session is active. Its exponential delay starts at 250–500ms
+and caps at 15–30s, with jitter on each attempt. A full minute authenticated resets
+that backoff; a brief successful authentication does not. Authentication rejection
+or signing failure remains terminal until explicit retry. Disconnect recovery
+re-establishes interests and finite catch-up; it never replays publications.
+
 The browser broker streams SSE over POST with bounded interests and owner-scoped
 retry/priority/interest controls. Retry and interest changes preserve the upstream
 socket and healthy unchanged routes, so they do not interrupt pending publications.
