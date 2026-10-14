@@ -167,6 +167,10 @@ pub fn bundled_manifests() -> Vec<Manifest> {
     });
     vec![
         builderlab,
+        serde_json::from_str(include_str!(
+            "../../../src/bundled/databricks/manifest.json"
+        ))
+        .expect("databricks manifest"),
         serde_json::from_str(include_str!("../../../src/bundled/pairing/manifest.json"))
             .expect("valid pairing manifest"),
         serde_json::from_str(include_str!("../../../src/bundled/todos/manifest.json"))
@@ -265,6 +269,7 @@ fn enabled_by_default(id: &str) -> bool {
             | "buzz.claude-code"
             | "buzz.codex"
             | "buzz.goose"
+            | "buzz.databricks"
             | "buzz.workflows"
             | "buzz.sessions"
             | "block.hosted-communities"

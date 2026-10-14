@@ -15,17 +15,21 @@ const { id, callbackUrl } = await invoke("oauth_callback_begin", {
   authorizationUrl: "https://provider.example/authorize?client_id=buzz&response_type=code",
   callbackPath: "/oauth2redirect/provider",
   useState: true, // optional; this is the default
+  callbackHost: "localhost", // optional; defaults to "127.0.0.1"
 });
 ```
 
 | Command | Contract |
 | --- | --- |
-| `oauth_callback_begin({ authorizationUrl, callbackPath, useState? })` | Validates the request, generates an attempt ID, binds `127.0.0.1` on an ephemeral port, inserts the callback URL as `redirect_uri` and optional state, and launches the external browser through the existing opener. Returns `{ "id": "…", "callbackUrl": "http://127.0.0.1:{port}{path}" }`. Launch failure cleans up before rejecting. |
+| `oauth_callback_begin({ authorizationUrl, callbackPath, useState?, callbackHost? })` | Validates the request, generates an attempt ID, binds `127.0.0.1` on an ephemeral port, inserts the callback URL as `redirect_uri` and optional state, and launches the external browser through the existing opener. Returns `{ "id": "…", "callbackUrl": "http://{host}:{port}{path}" }`. Launch failure cleans up before rejecting. |
 | `oauth_callback_wait(id)` | Consumes the matching attempt's result once. Resolves with `{ "parameters": [["name", "value"], …] }`, retaining decoded order and duplicates. Valid provider errors resolve with their parameters; transport failure, timeout, or cancellation rejects with a generic message. |
 | `oauth_callback_cancel(id)` | Closes and removes the matching attempt. Safe to repeat; a stale ID does not cancel another attempt. |
 
 The authorization URL must use HTTPS, with no embedded credentials or fragment.
-The callback path must be a canonical absolute path without a query or fragment.
+The callback path must be a canonical absolute path without a query or fragment,
+or empty for a bare-origin redirect whose callback arrives at `/`. `callbackHost`
+may be `"localhost"` for clients registered only for that loopback name; the
+listener still binds `127.0.0.1`, and the callback's `Host` must match.
 Native code preserves other authorization parameters, including duplicates, while
 adding the generated callback URL under `redirect_uri`. Caller-supplied
 `state` or `redirect_uri` parameters are rejected. The attempt ID is a lifecycle

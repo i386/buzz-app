@@ -10,6 +10,10 @@ import {
 import userEvent from "@testing-library/user-event";
 import { useState } from "react";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import {
+  DATABRICKS_ID,
+  type SharedProvider,
+} from "../../features/providers/shared";
 import type { Agent } from "../../features/agents/service";
 import { Button } from "../../shared/design-system/ui/Button";
 import {
@@ -327,4 +331,127 @@ it("lists the agent's goose sessions and shows one's transcript", async () => {
   await user.click(screen.getByRole("button", { name: "View transcript" }));
   expect(await screen.findByText("Hi from goose")).toBeInTheDocument();
   expect(screen.getAllByText(/@Gander what's up\?/).length).toBeGreaterThan(0);
+});
+
+it("loads a shared connection's catalog after login and saves its exact model route", async () => {
+  let connected = false;
+  const shared: SharedProvider = {
+    id: DATABRICKS_ID,
+    name: "Databricks in Buzz",
+    connected: async () => connected,
+    models: async () => [
+      {
+        id: "served-gpt",
+        label: "Team GPT",
+        api: "openai-completions",
+        family: "gpt",
+      },
+      {
+        id: "served-claude",
+        label: "Claude",
+        api: "openai-completions",
+        family: "claude",
+      },
+    ],
+    Connection: ({ onChange }) => (
+      <Button
+        onClick={() => {
+          connected = true;
+          onChange();
+        }}
+      >
+        Connect fixture
+      </Button>
+    ),
+  };
+  const { fake, changes } = created({
+    spawn: (fake) => new GooseSetup(fake.spawn, shared),
+  });
+  const dialog = await openChoices();
+  await waitFor(() =>
+    expect(
+      within(dialog).getByRole("combobox", { name: "Provider" }),
+    ).toBeEnabled(),
+  );
+  await choose("Provider", "Databricks in Buzz");
+  const user = userEvent.setup();
+  expect(within(dialog).getByRole("button", { name: "Use" })).toBeDisabled();
+  await user.click(
+    within(dialog).getByRole("button", { name: "Connect fixture" }),
+  );
+  await waitFor(() =>
+    expect(
+      within(dialog).getByRole("combobox", { name: "Model" }),
+    ).toBeEnabled(),
+  );
+  await user.click(within(dialog).getByRole("combobox", { name: "Model" }));
+  const model = await screen.findByRole("option", { name: "Team GPT" });
+  expect(screen.queryByRole("option", { name: "Custom model" })).toBeNull();
+  expect(screen.queryByRole("option", { name: "Claude" })).toBeNull();
+  await user.click(model);
+  await user.click(within(dialog).getByRole("button", { name: "Use" }));
+  expect(changes.at(-1)).toMatchObject({
+    provider: DATABRICKS_ID,
+    model: "served-gpt",
+  });
+  expect(
+    fake.geese
+      .flatMap((g) => g.received)
+      .some((r) => r.method === "_goose/unstable/providers/config/save"),
+  ).toBe(false);
+});
+
+it("does not save a shared connection in settings until a model is chosen", async () => {
+  const shared: SharedProvider = {
+    id: DATABRICKS_ID,
+    name: "Databricks in Buzz",
+    connected: async () => true,
+    models: async () => [
+      {
+        id: "served-gpt",
+        label: "Team GPT",
+        api: "openai-completions",
+        family: "gpt",
+      },
+    ],
+    Connection: () => null,
+  };
+  const fake = fakeSpawn({});
+  const none: never[] = [];
+  const { SettingsTab } = createTabs({
+    setup: new GooseSetup(fake.spawn, shared),
+    runtime: {
+      subscribe: () => () => {},
+      sessions: () => none,
+    } as unknown as GooseRuntime,
+    history: new GooseHistory(fake.spawn),
+  });
+  const save = vi.fn(async () => {});
+  render(
+    <SettingsTab
+      agent={
+        {
+          pubkey: "b".repeat(64),
+          name: "Gander",
+          type: "buzz.goose/goose",
+          owner: "a".repeat(64),
+          config: { ...DEFAULT_CONFIG, provider: DATABRICKS_ID },
+        } as Agent<Config>
+      }
+      save={save}
+    />,
+  );
+  const user = userEvent.setup();
+  const button = screen.getByRole("button", { name: "Save" });
+  await user.type(screen.getByRole("textbox", { name: "Workspace" }), "x");
+  expect(button).toHaveAttribute("aria-disabled", "true");
+  await user.click(button);
+  expect(save).not.toHaveBeenCalled();
+  await user.click(screen.getByRole("combobox", { name: "Model" }));
+  await user.click(await screen.findByRole("option", { name: "Team GPT" }));
+  expect(button).toHaveAttribute("aria-disabled", "false");
+  await user.click(button);
+  expect(save).toHaveBeenCalledWith(
+    expect.objectContaining({ provider: DATABRICKS_ID, model: "served-gpt" }),
+  );
 });

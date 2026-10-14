@@ -116,6 +116,9 @@ export class GooseRuntime {
     private readonly host: Host,
     /** The owner's connection to each agent's own community. */
     private readonly relay: (pubkey: string) => RelayData | undefined,
+    private readonly providerEnv?: (
+      config: Config,
+    ) => Promise<Record<string, string | null>>,
   ) {}
 
   private get spawn(): Spawn {
@@ -553,7 +556,10 @@ export class GooseRuntime {
         const memory = await this.memory(pubkey, entry);
         return {
           workspace,
-          env: env(entry.config),
+          env: {
+            ...env(entry.config),
+            ...(await this.providerEnv?.(entry.config)),
+          },
           systemPrompt: systemPrompt({
             scope,
             cwd: workspace,

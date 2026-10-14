@@ -199,23 +199,35 @@ export function createTabs({
             <Button onClick={reload}>Try again</Button>
           </div>
         )}
-        {provider && (
-          <ProviderKeys
-            key={provider.id}
-            provider={provider}
+        {provider?.shared && setup.shared ? (
+          <setup.shared.Connection
             disabled={disabled}
-            onSaved={reload}
+            onChange={() => {
+              setup.refresh();
+              reload();
+            }}
           />
+        ) : (
+          provider && (
+            <ProviderKeys
+              key={provider.id}
+              provider={provider}
+              disabled={disabled}
+              onSaved={reload}
+            />
+          )
         )}
         <ModelPicker
-          allowCustomModel
+          allowCustomModel={!provider?.shared}
           models={models.value ?? []}
           loading={models.status === "loading"}
           value={value.model}
           defaultLabel={
-            modelDefault
-              ? `Provider default (${modelDefault})`
-              : "Provider default"
+            provider?.shared
+              ? "Choose a Databricks model"
+              : modelDefault
+                ? `Provider default (${modelDefault})`
+                : "Provider default"
           }
           {...(models.status === "error"
             ? { description: `Could not list models: ${models.error}` }
@@ -657,12 +669,16 @@ export function createTabs({
           if (!open) onClose();
         }}
         title="Provider and model"
-        description="goose's own config is the default. Keys are saved in goose, for every agent and the goose CLI."
+        description="Choose a shared Buzz connection or a provider configured in goose."
         finalFocus={false}
         actions={
           <>
             <Button onClick={onClose}>Cancel</Button>
-            <Button variant="prominent" onClick={() => onChange(draft)}>
+            <Button
+              variant="prominent"
+              disabled={draft.provider === setup.shared?.id && !draft.model}
+              onClick={() => onChange(draft)}
+            >
               Use
             </Button>
           </>
@@ -753,7 +769,11 @@ export function createTabs({
     const [error, setError] = useState("");
     const configChanged = JSON.stringify(draft) !== JSON.stringify(saved);
     const changed = configChanged || Boolean(settingsHost?.pendingSave);
+    // A shared connection has no provider default to fall back on.
+    const incomplete =
+      draft.provider === setup.shared?.id && !draft.model.trim();
     const submit = async () => {
+      if (incomplete) return;
       setSaving(true);
       setError("");
       try {
@@ -818,7 +838,7 @@ export function createTabs({
             type="submit"
             variant="prominent"
             loading={saving}
-            disabled={!changed}
+            disabled={!changed || incomplete}
             focusableWhenDisabled
           >
             Save

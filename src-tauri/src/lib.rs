@@ -15,7 +15,10 @@ use browser::{
     browser_status,
 };
 mod app_agents;
+mod databricks_provider;
 mod deep_links;
+mod goose_databricks;
+pub use databricks_provider::run_token_helper;
 mod dock;
 #[cfg(test)]
 #[path = "enterprise_adapter_url.rs"]
@@ -467,6 +470,7 @@ fn commands<R: tauri::Runtime>() -> impl Fn(tauri::ipc::Invoke<R>) -> bool + Sen
         oauth_callback_begin,
         oauth_callback_wait,
         oauth_callback_cancel,
+        databricks_provider::databricks_provider,
         app_agents::app_agent_list,
         app_agents::app_agent_create,
         app_agents::app_agent_portable,

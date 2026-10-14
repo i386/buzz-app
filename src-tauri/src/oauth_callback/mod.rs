@@ -27,6 +27,7 @@ struct OAuthRequest {
     authorization_url: String,
     callback_path: String,
     use_state: Option<bool>,
+    callback_host: Option<String>,
 }
 type CallbackResult = Result<OAuthCallback, String>;
 struct Attempt {
@@ -75,7 +76,20 @@ impl OAuthCallbackHost {
         {
             return Err("Invalid authorization parameters".into());
         }
-        let path = request.callback_path;
+        // Some registered clients accept only `localhost` with an ephemeral
+        // port. The listener still binds IPv4 loopback either way.
+        let host = match request.callback_host.as_deref() {
+            None | Some("127.0.0.1") => "127.0.0.1",
+            Some("localhost") => "localhost",
+            Some(_) => return Err("Invalid callback host".into()),
+        };
+        // An empty path redirects to the bare origin, which the browser requests as `/`.
+        let suffix = request.callback_path;
+        let path = if suffix.is_empty() {
+            "/".to_owned()
+        } else {
+            suffix.clone()
+        };
         let redirect = url::Url::parse(&format!("http://127.0.0.1{path}"))
             .map_err(|_| "Invalid callback path")?;
         if !path.starts_with('/')
@@ -100,13 +114,14 @@ impl OAuthCallbackHost {
         listener
             .set_nonblocking(true)
             .map_err(|_| "Could not start the sign-in listener")?;
-        let authority = listener
+        let port = listener
             .local_addr()
             .map_err(|_| "Could not start the sign-in listener")?
-            .to_string();
+            .port();
+        let authority = format!("{host}:{port}");
         let listener =
             TcpListener::from_std(listener).map_err(|_| "Could not start the sign-in listener")?;
-        let callback = format!("http://{authority}{path}");
+        let callback = format!("http://{authority}{suffix}");
         authorization
             .query_pairs_mut()
             .append_pair("redirect_uri", &callback);
@@ -180,6 +195,7 @@ pub(crate) fn oauth_callback_begin<R: tauri::Runtime>(
     authorization_url: String,
     callback_path: String,
     use_state: Option<bool>,
+    callback_host: Option<String>,
 ) -> Result<OAuthAttempt, String> {
     // Register and launch inline so reload cleanup cannot overtake a queued begin.
     // Enter the runtime for the Tokio listener; startup does not await anything.
@@ -189,6 +205,7 @@ pub(crate) fn oauth_callback_begin<R: tauri::Runtime>(
                 authorization_url,
                 callback_path,
                 use_state,
+                callback_host,
             },
             |url| {
                 app.opener()

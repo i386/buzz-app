@@ -5,6 +5,9 @@
 import type { ModelChoice } from "../../features/agents/ModelPicker";
 import { GooseProcess, type Spawn } from "./goose";
 import { absolute } from "./sessions";
+import type { SharedProvider } from "../../features/providers/shared";
+import { DATABRICKS_ID } from "../../features/providers/shared";
+import { sharedProviderEnv } from "./shared-provider";
 
 export type ConfigKey = Readonly<{
   name: string;
@@ -25,6 +28,7 @@ export type Provider = Readonly<{
   signsIn: boolean;
   steps: readonly string[];
   models: readonly ModelChoice[];
+  shared?: true;
 }>;
 
 export type Providers = Readonly<{
@@ -59,10 +63,17 @@ export class GooseSetup {
   private listing: Promise<Providers> | undefined;
   private readonly live = new Map<string, Promise<readonly ModelChoice[]>>();
 
-  constructor(private readonly spawn: Spawn | undefined) {}
+  constructor(
+    private readonly spawn: Spawn | undefined,
+    readonly shared?: SharedProvider,
+  ) {}
+  refresh() {
+    this.listing = undefined;
+    this.live.clear();
+  }
 
   /** goose's providers, read once until something is saved. */
-  providers(): Promise<Providers> {
+  async providers(): Promise<Providers> {
     this.listing ??= this.with(async (goose) => {
       const [{ entries }, defaults] = (await Promise.all([
         goose.request("_goose/unstable/providers/list", { providerIds: [] }),
@@ -75,7 +86,11 @@ export class GooseSetup {
         // Providers that are other agents (`claude-acp`, …) are not offered.
         providers: entries
           .filter(
-            (entry) => entry.visibleInSetup && !entry.deprecated && !entry.acp,
+            (entry) =>
+              entry.visibleInSetup &&
+              !entry.deprecated &&
+              !entry.acp &&
+              entry.providerId !== "buzz_databricks",
           )
           .map(provider)
           .sort((a, b) => a.name.localeCompare(b.name)),
@@ -88,11 +103,37 @@ export class GooseSetup {
     this.listing.catch(() => {
       this.listing = undefined;
     });
-    return this.listing;
+    const listed = await this.listing;
+    if (!this.shared) return listed;
+    const configured = await this.shared.connected().catch(() => false);
+    return {
+      ...listed,
+      providers: [
+        {
+          id: this.shared.id,
+          name: this.shared.name,
+          description: "Shared connection managed by Buzz",
+          defaultModel: "",
+          configured,
+          keys: [],
+          signsIn: false,
+          steps: [],
+          models: [],
+          shared: true,
+        },
+        ...listed.providers,
+      ],
+    };
   }
 
   /** A provider's models: goose's catalog, or else what its API lists. */
   async models(id: string): Promise<readonly ModelChoice[]> {
+    if (id === this.shared?.id)
+      return (await this.shared.connected())
+        ? (await this.shared.models()).filter(
+            (model) => id !== DATABRICKS_ID || model.family === "gpt",
+          )
+        : [];
     const listed = (await this.providers()).providers.find(
       (item) => item.id === id,
     );
@@ -146,36 +187,53 @@ export class GooseSetup {
       ...(choice.provider ? { GOOSE_PROVIDER: choice.provider } : {}),
       ...(choice.model ? { GOOSE_MODEL: choice.model } : {}),
     };
-    return this.with(async (goose, cwd) => {
-      const session = await goose.open({ cwd, systemPrompt: "", bare: true });
-      try {
-        const settled = await Promise.race([
-          session.send(TEST_PROMPT),
-          new Promise<never>((_, reject) =>
-            setTimeout(
-              () => reject(new Error("The provider did not answer in time")),
-              TEST_TIMEOUT_MS,
-            ),
-          ),
-        ]);
-        const reply = settled.text?.trim() ?? "";
-        if (/^\W*ok\W*$/i.test(reply))
-          return { ok: true, message: "Connected" };
-        return {
-          ok: false,
-          message: reply || settled.error || "The provider sent no reply",
-        };
-      } finally {
-        await goose.close(session);
-        // goose keeps every session; this one is not worth keeping.
-        await goose
-          .request("session/delete", { sessionId: session.id })
-          .catch(() => undefined);
-      }
-    }, env).catch((error: unknown) => ({
-      ok: false,
-      message: error instanceof Error ? error.message : String(error),
-    }));
+    const run = (launch: Readonly<Record<string, string | null>>) =>
+      briefly(
+        this.spawn,
+        async (goose, cwd) => {
+          const session = await goose.open({
+            cwd,
+            systemPrompt: "",
+            bare: true,
+          });
+          try {
+            const settled = await Promise.race([
+              session.send(TEST_PROMPT),
+              new Promise<never>((_, reject) =>
+                setTimeout(
+                  () =>
+                    reject(new Error("The provider did not answer in time")),
+                  TEST_TIMEOUT_MS,
+                ),
+              ),
+            ]);
+            const reply = settled.text?.trim() ?? "";
+            if (/^\W*ok\W*$/i.test(reply))
+              return { ok: true, message: "Connected" };
+            return {
+              ok: false,
+              message: reply || settled.error || "The provider sent no reply",
+            };
+          } finally {
+            await goose.close(session);
+            // goose keeps every session; this one is not worth keeping.
+            await goose
+              .request("session/delete", { sessionId: session.id })
+              .catch(() => undefined);
+          }
+        },
+        launch,
+      );
+    return sharedProviderEnv(
+      choice.provider,
+      choice.model,
+      Boolean(this.shared),
+    )
+      .then((shared) => run({ ...env, ...shared }))
+      .catch((error: unknown) => ({
+        ok: false,
+        message: error instanceof Error ? error.message : String(error),
+      }));
   }
 
   private with<T>(
@@ -191,7 +249,7 @@ export class GooseSetup {
 export async function briefly<T>(
   spawn: Spawn | undefined,
   run: (goose: GooseProcess, cwd: string) => Promise<T>,
-  env: Readonly<Record<string, string>> = {},
+  env: Readonly<Record<string, string | null>> = {},
 ): Promise<T> {
   if (!spawn) throw new Error("goose runs only in the desktop app");
   const cwd = await absolute(spawn, "~");

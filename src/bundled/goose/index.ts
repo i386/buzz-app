@@ -9,23 +9,31 @@ import { type Config, config, DEFAULT_CONFIG, GooseRuntime } from "./runtime";
 import { GooseSetup } from "./setup";
 import { createTabs } from "./tabs";
 import { GooseHistory } from "./transcript";
+import { sharedProviderEnv } from "./shared-provider";
 
 export const TYPE_ID = "goose";
 /** A turn's run returns once goose has it, so this bounds only the hand-over. */
 const HANDOVER_MS = 2 * 60_000;
 
-export const inject = ["agents", "host"];
+export const inject = {
+  agents: { required: true },
+  host: { required: true },
+  databricks: { required: false },
+};
 export const apply: PluginModule["apply"] = (ctx) => {
   // Only the desktop app can start `goose-acp`, and file uploads run `base64`,
   // which stock Windows lacks; no unusable type elsewhere.
   if (!isTauri() || !/Mac|Linux/i.test(navigator.platform)) return;
   const { agents, host } = ctx;
   const typeKey = `${ctx.pluginOwner?.id ?? "buzz.goose"}/${TYPE_ID}`;
-  const runtime = new GooseRuntime(host, agents.relay);
+  const shared = ctx.databricks?.shared;
+  const runtime = new GooseRuntime(host, agents.relay, (config) =>
+    sharedProviderEnv(config.provider, config.model, Boolean(shared)),
+  );
   const spawn = host.spawn?.bind(host);
   const { Create, CreateModelMenu, createModelLabel, SettingsTab } = createTabs(
     {
-      setup: new GooseSetup(spawn),
+      setup: new GooseSetup(spawn, shared),
       runtime,
       history: new GooseHistory(spawn),
     },

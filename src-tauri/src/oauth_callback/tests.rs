@@ -6,6 +6,7 @@ fn options(path: &str) -> OAuthRequest {
             .into(),
         callback_path: path.into(),
         use_state: None,
+        callback_host: None,
     }
 }
 
@@ -74,8 +75,8 @@ fn response(parameters: &[(&str, &str)]) -> OAuthCallback {
 #[test]
 fn selected_path_must_be_a_canonical_absolute_path_without_query_or_fragment() {
     let state = OAuthCallbackHost::default();
+    // An empty path is the explicit bare-origin form.
     for path in [
-        "",
         "callback",
         "//evil.example/callback",
         "/callback?x=y",
@@ -269,7 +270,7 @@ async fn main_document_reload_cancels_wait_and_allows_new_sign_in() {
     use tauri::webview::PageLoadEvent::{Finished, Started};
 
     // Async Tauri commands queue startup, allowing reload cleanup to overtake it.
-    let _: fn(_, _, _, _, _) -> Result<OAuthAttempt, String> =
+    let _: fn(_, _, _, _, _, _) -> Result<OAuthAttempt, String> =
         oauth_callback_begin::<tauri::test::MockRuntime>;
     let state = OAuthCallbackHost::default();
     let first = start(&state, options("/callback/old")).unwrap().id;
@@ -476,4 +477,54 @@ async fn launch_failure_cleans_up_but_cannot_cancel_a_replacement_after_reload()
     let next = next.unwrap();
     assert_eq!(host.0.lock().unwrap().as_ref().unwrap().id, next.id);
     host.cancel(&next.id).unwrap();
+}
+
+#[tokio::test]
+async fn localhost_bare_origin_redirect_receives_root_callbacks() {
+    let state = OAuthCallbackHost::default();
+    let attempt = start(
+        &state,
+        OAuthRequest {
+            callback_host: Some("localhost".into()),
+            ..options("")
+        },
+    )
+    .unwrap();
+    let port = url::Url::parse(&attempt.callback_url)
+        .unwrap()
+        .port()
+        .unwrap();
+    assert_eq!(attempt.callback_url, format!("http://localhost:{port}"));
+    let expected = attempt
+        .authorization
+        .query_pairs()
+        .find(|(name, _)| name == "state")
+        .unwrap()
+        .1
+        .into_owned();
+    let wait = state.wait(&attempt.id);
+    let browser = async {
+        let mut stream = TcpStream::connect(("127.0.0.1", port)).await.unwrap();
+        stream
+            .write_all(&request(
+                &format!("localhost:{port}"),
+                &format!("/?code=c&state={expected}"),
+                "",
+            ))
+            .await
+            .unwrap();
+        let mut response = String::new();
+        stream.read_to_string(&mut response).await.unwrap();
+        assert!(response.starts_with("HTTP/1.1 200"));
+    };
+    let (result, ()) = tokio::join!(wait, browser);
+    assert_eq!(result, Ok(response(&[("code", "c"), ("state", &expected)])));
+    assert!(start(
+        &state,
+        OAuthRequest {
+            callback_host: Some("example.com".into()),
+            ..options("/callback")
+        },
+    )
+    .is_err());
 }
