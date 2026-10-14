@@ -246,8 +246,8 @@ fn chat_models(data: &Value) -> Vec<Value> {
         let id = ep["name"].as_str()?;
         if ep["state"]["ready"] != "READY" || ep["task"] != "llm/v1/chat" || ep["capabilities"]["function_calling"] != true { return None; }
         let foundation = ep["config"]["served_entities"].as_array()?.iter().find_map(|e| e.get("foundation_model"))?;
-        if foundation["ai_gateway_v2_supported"] != true || !foundation["api_types"].as_array()?.iter().any(|a| a == "mlflow/v1/chat/completions") { return None; }
-        Some(json!({"id":id, "label":foundation["display_name"].as_str().unwrap_or(id), "api":"openai-completions", "family":foundation["model_class"].as_str().unwrap_or("")}))
+        if foundation["ai_gateway_v2_supported"] != true || !foundation["api_types"].as_array()?.iter().any(|a| a == "mlflow/v1/responses") { return None; }
+        Some(json!({"id":id, "label":foundation["display_name"].as_str().unwrap_or(id), "api":"openai-responses", "family":foundation["model_class"].as_str().unwrap_or("")}))
     }).collect()
 }
 async fn models(client: &reqwest::Client, dir: &Path) -> Result<Vec<Value>> {
@@ -520,7 +520,7 @@ mod tests {
 
     #[test]
     fn discovery_keeps_exact_ids_and_requires_ready_tool_support_and_route_facts() {
-        let ready = json!({"name":"served-model", "task":"llm/v1/chat", "state":{"ready":"READY"}, "capabilities":{"function_calling":true}, "config":{"served_entities":[{"foundation_model":{"display_name":"GPT", "model_class":"gpt", "ai_gateway_v2_supported":true, "api_types":["mlflow/v1/chat/completions"]}}]}});
+        let ready = json!({"name":"served-model", "task":"llm/v1/chat", "state":{"ready":"READY"}, "capabilities":{"function_calling":true}, "config":{"served_entities":[{"foundation_model":{"display_name":"GPT", "model_class":"gpt", "ai_gateway_v2_supported":true, "api_types":["mlflow/v1/responses"]}}]}});
         let mut no_tools = ready.clone();
         no_tools["capabilities"]["function_calling"] = json!(false);
         let mut not_ready = ready.clone();
@@ -531,7 +531,7 @@ mod tests {
         assert_eq!(
             chat_models(&json!({"endpoints":[ready,no_tools,not_ready,other_route]})),
             vec![
-                json!({"id":"served-model", "label":"GPT", "api":"openai-completions", "family":"gpt"})
+                json!({"id":"served-model", "label":"GPT", "api":"openai-responses", "family":"gpt"})
             ]
         );
         assert!(endpoint(

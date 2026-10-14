@@ -1,6 +1,7 @@
 // @vitest-environment node
 // Optional interoperability check against the installed Goose binary. A local
-// gateway records its real tool payload, auth retry, replay, and history.
+// gateway records its real tool payload, auth retry, replay, and history. It
+// speaks Chat Completions; the Responses route Buzz writes is checked live.
 import { spawn as spawnChild } from "node:child_process";
 import { mkdtemp, rm, writeFile, mkdir } from "node:fs/promises";
 import { createServer } from "node:http";

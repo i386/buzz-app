@@ -38,7 +38,7 @@ Add one shared connection to Block’s Databricks workspace, with browser login,
 
 Goose’s native Databricks adapter does not accept an external credential callback. For this slice, the Goose integration generates a custom OpenAI adapter configuration with command auth. A small Buzz native helper supplies current access tokens; refresh tokens stay in the provider’s private local storage. File locking serializes refresh across Goose processes. Request formatting and streaming remain in Goose.
 
-Only ready, tool-capable GPT endpoints with a gateway Chat Completions route are offered to Goose. Other model families, aliases, workspace configuration, and thinking controls are deferred. In particular, Claude’s Chat route rejects a tool-schema field Goose emits; supporting it needs a compatible harness adapter.
+Goose uses the gateway’s Responses route. Its Chat route rejects reasoning effort alongside tools for GPT-6 models, and GPT-6.1 Sol always requires reasoning effort. Goose offers a short list of ready, tool-capable endpoints that were verified with its tools: GPT-6 and 6.1, Claude Opus, Sonnet, and Haiku 5.5, GLM 5.3, and Grok 4.7. Gemini rejects Goose’s streaming options, and Gemma rejects a tool-schema keyword. Other models, aliases, workspace configuration, and per-agent thinking controls are deferred; Goose’s own thinking-effort setting applies.
 
 The generated Goose configuration contains no tokens and uses its usual history store. Cancellation applies while waiting for the browser. Once the callback has been accepted, the UI shows “Completing sign-in…” while native code saves the connection.
 

@@ -4,11 +4,10 @@ use serde_json::{json, Value};
 use std::path::PathBuf;
 
 type Result<T> = std::result::Result<T, String>;
+const ROUTE: &str = "ai-gateway/mlflow/v1/responses";
 
-// The gateway's Chat route rejects reasoning_effort alongside tools (GPT-6),
-// so a user's goose-wide thinking effort must not reach it.
 fn env(model: &str) -> Value {
-    json!({"GOOSE_PROVIDER":"buzz_databricks", "GOOSE_MODEL":model, "GOOSE_THINKING_EFFORT":"none"})
+    json!({"GOOSE_PROVIDER":"buzz_databricks", "GOOSE_MODEL":model})
 }
 fn definition() -> Result<PathBuf> {
     Ok(goose_config_directory()?.join("custom_providers/buzz_databricks.json"))
@@ -25,22 +24,22 @@ pub(crate) fn reuse(model: &str) -> Option<Value> {
         .as_array()?
         .iter()
         .any(|m| m["name"] == model);
-    let current = saved["auth"]["command"].as_str()? == helper().ok()?.to_str()?;
+    let current = saved["auth"]["command"].as_str()? == helper().ok()?.to_str()?
+        && saved["base_path"] == ROUTE;
     (listed && current).then(|| env(model))
 }
 
 pub(crate) fn prepare(host: &str, models: &[Value], model: &str) -> Result<Value> {
-    // Other Chat routes (notably Claude) reject fields Goose adds to tool
-    // schemas. Expose GPT only until their native adapters can use shared auth.
-    let catalog: Vec<_> = models.iter().filter(|m| m["family"] == "gpt").collect();
-    if !catalog.iter().any(|m| m["id"] == model) {
-        return Err("This Databricks model is unavailable or has no Goose-supported GPT Chat Completions route".into());
+    if !models.iter().any(|m| m["id"] == model) {
+        return Err("This Databricks model is unavailable or has no Responses route".into());
     }
+    // Goose sends a Responses request when base_path names that route. The
+    // gateway's Chat route rejects reasoning effort alongside tools (GPT-6).
     // Allow the 15s storage-lock wait plus two 10s OAuth requests.
     let config = json!({
         "name":"buzz_databricks", "engine":"openai", "display_name":"Databricks in Buzz",
-        "base_url":format!("{host}/ai-gateway/mlflow/v1/chat/completions"),
-        "models":catalog.iter().map(|m| json!({"name":m["id"]})).collect::<Vec<_>>(),
+        "base_url":host, "base_path":ROUTE,
+        "models":models.iter().map(|m| json!({"name":m["id"]})).collect::<Vec<_>>(),
         "supports_streaming":true, "dynamic_models":false,
         "auth":{"command":helper()?,"args":["--databricks-provider-token"],"refresh_interval":30,"timeout_seconds":45}
     });
@@ -78,11 +77,19 @@ mod tests {
         std::env::set_var("GOOSE_PATH_ROOT", root.path());
         assert_eq!(reuse("served-gpt"), None);
         let catalog = [json!({"id":"served-gpt", "family":"gpt"})];
+        assert!(prepare("https://workspace.example", &catalog, "other-model").is_err());
         prepare("https://workspace.example", &catalog, "served-gpt").unwrap();
         assert_eq!(reuse("served-gpt"), Some(env("served-gpt")));
         assert_eq!(reuse("other-model"), None);
         let path = definition().unwrap();
         let mut saved: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        assert_eq!(saved["base_url"], "https://workspace.example");
+        assert_eq!(saved["base_path"], ROUTE);
+        // A file from an earlier route is rewritten rather than reused.
+        saved["base_path"] = json!("ai-gateway/mlflow/v1/chat/completions");
+        std::fs::write(&path, saved.to_string()).unwrap();
+        assert_eq!(reuse("served-gpt"), None);
+        saved["base_path"] = json!(ROUTE);
         saved["auth"]["command"] = json!("/deleted/worktree/buzz");
         std::fs::write(&path, saved.to_string()).unwrap();
         assert_eq!(reuse("served-gpt"), None);

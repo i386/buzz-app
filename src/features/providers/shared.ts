@@ -6,7 +6,7 @@ export const DATABRICKS_ID = "buzz.databricks";
 export type ProviderModel = Readonly<{
   id: string;
   label: string;
-  api: "openai-completions";
+  api: "openai-responses";
   /** A discovery fact; each harness decides which families it can use. */
   family: string;
 }>;

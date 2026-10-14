@@ -18,16 +18,16 @@ it("uses the shared catalog and launch credentials without saving them in goose"
     connected: async () => connected,
     models: async () => [
       {
-        id: "team-model",
+        id: "databricks-gpt-6-sol",
         label: "Team model",
-        api: "openai-completions",
+        api: "openai-responses",
         family: "gpt",
       },
       {
-        id: "claude",
-        label: "Claude",
-        api: "openai-completions",
-        family: "claude",
+        id: "databricks-gemini-3-5-flash",
+        label: "Gemini",
+        api: "openai-responses",
+        family: "gemini",
       },
     ],
     Connection: () => null,
@@ -56,22 +56,25 @@ it("uses the shared catalog and launch credentials without saving them in goose"
     "openrouter",
   ]);
   expect(await setup.models(DATABRICKS_ID)).toMatchObject([
-    { id: "team-model", label: "Team model" },
+    { id: "databricks-gpt-6-sol", label: "Team model" },
   ]);
   invoke.mockResolvedValue({
     GOOSE_PROVIDER: "buzz_databricks",
-    GOOSE_MODEL: "team-model",
+    GOOSE_MODEL: "databricks-gpt-6-sol",
   });
   expect(
-    await setup.test({ provider: DATABRICKS_ID, model: "team-model" }),
+    await setup.test({
+      provider: DATABRICKS_ID,
+      model: "databricks-gpt-6-sol",
+    }),
   ).toMatchObject({ ok: true });
   expect(invoke).toHaveBeenCalledWith("databricks_provider", {
     operation: "goose",
-    input: { model: "team-model" },
+    input: { model: "databricks-gpt-6-sol" },
   });
   expect(fake.geese.at(-1)?.env).toMatchObject({
     GOOSE_PROVIDER: "buzz_databricks",
-    GOOSE_MODEL: "team-model",
+    GOOSE_MODEL: "databricks-gpt-6-sol",
     DATABRICKS_TOKEN: null,
   });
   expect(
@@ -80,7 +83,7 @@ it("uses the shared catalog and launch credentials without saving them in goose"
       .some((r) => r.method === "_goose/unstable/providers/config/save"),
   ).toBe(false);
   await expect(
-    sharedProviderEnv(DATABRICKS_ID, "team-model", false),
+    sharedProviderEnv(DATABRICKS_ID, "databricks-gpt-6-sol", false),
   ).rejects.toThrow("Enable the Databricks provider plugin");
 });
 

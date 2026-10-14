@@ -341,16 +341,16 @@ it("loads a shared connection's catalog after login and saves its exact model ro
     connected: async () => connected,
     models: async () => [
       {
-        id: "served-gpt",
+        id: "databricks-gpt-6-sol",
         label: "Team GPT",
-        api: "openai-completions",
+        api: "openai-responses",
         family: "gpt",
       },
       {
-        id: "served-claude",
-        label: "Claude",
-        api: "openai-completions",
-        family: "claude",
+        id: "databricks-gemini-3-5-flash",
+        label: "Gemini",
+        api: "openai-responses",
+        family: "gemini",
       },
     ],
     Connection: ({ onChange }) => (
@@ -387,12 +387,12 @@ it("loads a shared connection's catalog after login and saves its exact model ro
   await user.click(within(dialog).getByRole("combobox", { name: "Model" }));
   const model = await screen.findByRole("option", { name: "Team GPT" });
   expect(screen.queryByRole("option", { name: "Custom model" })).toBeNull();
-  expect(screen.queryByRole("option", { name: "Claude" })).toBeNull();
+  expect(screen.queryByRole("option", { name: "Gemini" })).toBeNull();
   await user.click(model);
   await user.click(within(dialog).getByRole("button", { name: "Use" }));
   expect(changes.at(-1)).toMatchObject({
     provider: DATABRICKS_ID,
-    model: "served-gpt",
+    model: "databricks-gpt-6-sol",
   });
   expect(
     fake.geese
@@ -408,9 +408,9 @@ it("does not save a shared connection in settings until a model is chosen", asyn
     connected: async () => true,
     models: async () => [
       {
-        id: "served-gpt",
+        id: "databricks-gpt-6-sol",
         label: "Team GPT",
-        api: "openai-completions",
+        api: "openai-responses",
         family: "gpt",
       },
     ],
@@ -452,6 +452,9 @@ it("does not save a shared connection in settings until a model is chosen", asyn
   expect(button).toHaveAttribute("aria-disabled", "false");
   await user.click(button);
   expect(save).toHaveBeenCalledWith(
-    expect.objectContaining({ provider: DATABRICKS_ID, model: "served-gpt" }),
+    expect.objectContaining({
+      provider: DATABRICKS_ID,
+      model: "databricks-gpt-6-sol",
+    }),
   );
 });

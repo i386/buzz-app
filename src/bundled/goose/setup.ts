@@ -7,7 +7,7 @@ import { GooseProcess, type Spawn } from "./goose";
 import { absolute } from "./sessions";
 import type { SharedProvider } from "../../features/providers/shared";
 import { DATABRICKS_ID } from "../../features/providers/shared";
-import { sharedProviderEnv } from "./shared-provider";
+import { gooseModels, sharedProviderEnv } from "./shared-provider";
 
 export type ConfigKey = Readonly<{
   name: string;
@@ -130,9 +130,9 @@ export class GooseSetup {
   async models(id: string): Promise<readonly ModelChoice[]> {
     if (id === this.shared?.id)
       return (await this.shared.connected())
-        ? (await this.shared.models()).filter(
-            (model) => id !== DATABRICKS_ID || model.family === "gpt",
-          )
+        ? id === DATABRICKS_ID
+          ? gooseModels(await this.shared.models())
+          : await this.shared.models()
         : [];
     const listed = (await this.providers()).providers.find(
       (item) => item.id === id,
