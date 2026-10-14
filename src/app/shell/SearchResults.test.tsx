@@ -1837,6 +1837,104 @@ it.each([
   },
 );
 
+// A full first page can hide an exact namesake past the cap.
+const alexSession = (
+  exact: ReturnType<typeof keypair>,
+  page: readonly ReturnType<typeof profile>[],
+) => {
+  const relay = keypair(),
+    viewer = keypair();
+  const reads: Filter[][] = [];
+  const owner = createRelaySession({
+    ...scriptedTransport(viewer.pubkey, relay.pubkey).transport,
+    query(filters) {
+      if (filters.some((filter) => filter.kinds?.includes(0)))
+        return Promise.resolve([
+          profile(exact, { display_name: "Alex" }),
+          ...page,
+        ]);
+      if (filters.some((filter) => filter.kinds?.includes(9)))
+        reads.push(filters as Filter[]);
+      return Promise.resolve([]);
+    },
+  });
+  return { owner, reads };
+};
+const alexandras = (count: number) =>
+  Array.from({ length: count }, (_, index) =>
+    profile(keypair(), { display_name: `Alexandra ${index}` }),
+  );
+
+it.each([
+  ["a full prefix page", () => alexandras(39), 12],
+  ["exact namesakes", () => [profile(keypair(), { display_name: "Alex" })], 2],
+])(
+  "asks which author a completed from: name means with %s",
+  async (_, page, shown) => {
+    const exact = keypair();
+    const { owner, reads } = alexSession(exact, page());
+    const change = vi.fn();
+    const props = {
+      session: owner.session,
+      onQueryChange: change,
+      input: createRef<HTMLInputElement>(),
+      pages: [],
+      openConversation: () => {},
+    };
+    try {
+      const mounted = render(<SearchResults {...props} query="from:Alex " />);
+      const people = within(
+        await screen.findByRole("group", { name: "People" }),
+      );
+      expect(await people.findAllByRole("option")).toHaveLength(shown);
+      // The picker follows the resolver's completed lookup.
+      expect(reads).toEqual([]);
+      fireEvent.click(
+        people.getByRole("option", {
+          name: new RegExp(exact.pubkey.slice(0, 12)),
+        }),
+      );
+      expect(change).toHaveBeenCalledWith(`from:${exact.pubkey} `);
+      mounted.rerender(
+        <SearchResults {...props} query={`from:${exact.pubkey} `} />,
+      );
+      await waitFor(() =>
+        expect(reads.at(-1)).toEqual([
+          expect.objectContaining({ authors: [exact.pubkey] }),
+        ]),
+      );
+    } finally {
+      cleanup();
+      owner.dispose();
+    }
+  },
+);
+
+it("resolves one exact from: name in a partial prefix page", async () => {
+  const exact = keypair();
+  const { owner, reads } = alexSession(exact, alexandras(38));
+  try {
+    render(
+      <SearchResults
+        session={owner.session}
+        query="from:Alex "
+        onQueryChange={() => {}}
+        input={createRef()}
+        pages={[]}
+        openConversation={() => {}}
+      />,
+    );
+    await waitFor(() =>
+      expect(reads.at(-1)).toEqual([
+        expect.objectContaining({ authors: [exact.pubkey] }),
+      ]),
+    );
+  } finally {
+    cleanup();
+    owner.dispose();
+  }
+});
+
 it.each([
   ["resolves it", false],
   ["reports a profile namesake as ambiguous", true],

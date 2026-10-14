@@ -137,15 +137,17 @@ export function useSearchMessages(
               author = found.author;
             } else {
               // The signed kind-0 index is prefix-based and limited. A match
-              // outside its first page is unknown; duplicate names are ambiguous.
+              // outside its first page is unknown, so a full page is as
+              // ambiguous as duplicate names.
               // The relay does not fold accents, so it gets the typed text.
+              const limit = 40;
               const candidates = await session.read(
                 [
                   {
                     kinds: [0],
                     search: typed.toLowerCase(),
                     search_mode: "prefix",
-                    limit: 40,
+                    limit,
                   },
                 ],
                 {
@@ -161,7 +163,8 @@ export function useSearchMessages(
                 )
                 .map(([pubkey]) => pubkey);
               const found = resolve([...matches, ...agentMatches]);
-              if (found.ambiguous) return { events: [], ambiguousAuthor: true };
+              if (found.ambiguous || candidates.length >= limit)
+                return { events: [], ambiguousAuthor: true };
               author = found.author;
             }
             if (!author) return { events: [] };
