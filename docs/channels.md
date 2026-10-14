@@ -280,8 +280,10 @@ globally alphabetical directory: the relay pages by profile update time. Complet
 pages and recent searches stay in memory for this account/community session, so
 returning or clearing a search resumes the same results. Typing immediately filters
 loaded names without replacing local matches with a loading placeholder. Once the
-browse directory is complete, searches stay local; while it is incomplete, remote
-matches can append in the background. A failed background read
+browse directory is complete, searches stay local until New message closes; a
+reopened picker keeps the loaded list but searches the relay again, so people added
+since can be found. While the directory is incomplete, remote matches can append in
+the background. A failed background read
 keeps existing people visible and offers retry. Mentions retain their conversation-specific
 eligibility. Before a DM exists, a composer-local `DraftMentionRoster` supplies
 only the selected recipient identities and names to both mention tools. Removing

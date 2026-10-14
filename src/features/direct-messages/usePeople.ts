@@ -14,6 +14,8 @@ type PeopleState = {
   hasMore: boolean;
   loading: boolean;
   error: string;
+  /** The picker visit whose reads produced this entry. */
+  visit?: object;
 };
 // Account/community lifetime only. Keep a bounded set of completed searches,
 // not drafts or an additional persistent profile store.
@@ -45,22 +47,28 @@ export function usePeople(session: RelaySession, query: string) {
     directories.set(session, created);
     return created;
   }, [session]);
+  const [visit] = useState(() => ({}));
   const initial = useMemo(() => {
     const cached = cache.get(query);
     if (!query.trim()) return cached ?? empty(session, query);
-    const complete = cache.get("")?.hasMore === false;
+    // A completed read proves absence only during the visit that made it, so
+    // a reopened picker searches again for people added since.
+    const exhausted = (entry?: PeopleState) =>
+      entry?.hasMore === false && entry.visit === visit;
+    const complete = exhausted(cache.get(""));
+    const resumed = cached?.hasMore || exhausted(cached) ? cached : undefined;
     const known = new Map(
       [...cache.values()]
         .flatMap((entry) => entry.people)
         .map((person) => [person.pubkey, person]),
     );
     return {
-      ...(cached ?? empty(session, query)),
+      ...(resumed ?? empty(session, query)),
       people: matching([...known.values()], query).sort(peopleOrder(query)),
-      loading: !complete && (cached?.loading ?? true),
-      hasMore: !complete && (cached?.hasMore ?? true),
+      loading: !complete && (resumed?.loading ?? true),
+      hasMore: !complete && (resumed?.hasMore ?? true),
     };
-  }, [cache, session, query]);
+  }, [cache, session, query, visit]);
   const [state, setState] = useState(initial);
   const request = useRef<
     | {
@@ -92,6 +100,7 @@ export function usePeople(session: RelaySession, query: string) {
           hasMore: result.hasMore,
           loading: false,
           error: "",
+          visit,
           people: [
             ...new Map(
               [
@@ -130,7 +139,7 @@ export function usePeople(session: RelaySession, query: string) {
         owned.loading = false;
       }
     },
-    [session, query, cache],
+    [session, query, cache, visit],
   );
   useEffect(() => {
     const owned: NonNullable<typeof request.current> = {
