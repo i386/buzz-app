@@ -1362,10 +1362,14 @@ button.mediaPreview {
   white-space: pre;
   overflow-wrap: normal;
 }
+/* Keep every line end reachable beside the pinned action. */
+.text pre:has(> .codeCopy) code {
+  padding-inline-end: calc(var(--size-control-sm) + var(--space-3));
+}
 .codeCopy {
   position: absolute;
   top: var(--space-1h);
-  right: var(--space-1h);
+  inset-inline-end: var(--space-1h);
   border-radius: var(--radius-icon-button);
   background: var(--surface-panel);
   user-select: none;
