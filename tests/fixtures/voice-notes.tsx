@@ -97,8 +97,7 @@ const owner = createRelaySession(
         if (signal.aborted) abort();
       });
       if (report.failUpload) throw new Error("Fixture upload failed");
-      // Only recordings come back as voice notes; other files keep their type,
-      // so attaching them does not start voice-note media loads.
+      // Only recordings upload as voice notes; other files keep their type.
       const result: UploadedAttachment = {
         ...(file.type.startsWith("audio/")
           ? attachment
